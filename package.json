@@ -1,0 +1,14 @@
+{
+  "name": "claude-codex-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Claude Code から Codex CLI を、CODEX_HOME で認証を分離した用途別サブエージェント(レビュー用 / 実装補助用)として呼び出すための定義と手順。このパッケージはレビュー/同期ツールの実行基盤。",
+  "scripts": {
+    "review:codex": "node tools/cross-review.js codex",
+    "review:codex:fix": "node tools/cross-review.js codex --fix",
+    "review:claude": "node tools/cross-review.js claude",
+    "sync:cross-review": "node tools/cross-review.sync.js",
+    "sync:cross-review:dry": "node tools/cross-review.sync.js --dry-run",
+    "sync:cross-review:check": "node tools/cross-review.sync.js --check"
+  }
+}

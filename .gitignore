@@ -1,0 +1,17 @@
+# CodeGraph (local index, not committed)
+.codegraph/
+
+# Node (cross-review tooling)
+node_modules/
+
+# Claude Code local state
+.claude/worktrees/
+.claude/settings.local.json
+
+# Credentials must never be committed
+auth.json
+*.credentials.json
+
+# Scratch
+*.log
+*.tmp
