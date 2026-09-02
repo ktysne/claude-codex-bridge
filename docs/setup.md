@@ -65,6 +65,8 @@ bash tools/codex-agent.sh codex-review --effort low <<< "Reply with exactly: PON
 監査行に `model=gpt-5.6-sol`、`sandbox=read-only`、使用中の段階のホームを示す `codex_home=...`(現段階は `~/.codex`、2 アカウント段階はレビュー用が `~/.codex-review`)が出ることを確認する。
 続いて `PONG-REVIEW` と `codex-agent: result=ok` が出れば、レビュー用の定義が動いている。
 `codex-subagent` は `sandbox=workspace-write` になる点を除き、同じ方法で確認する。
+この確認は応答を返すだけでファイルを書き換えないため、`-C` は省略してよい。
+実際の依頼では、`codex-subagent` の Claude 側定義が別 worktree の `-C` を必須にしている。
 
 Claude Code を再起動した後、`Agent` ツールで `subagent_type: codex-review` を指定し、`Reply with exactly: PONG-REVIEW` を送る。
 `PONG-REVIEW` が返り、その `CODEX_HOME` の `sessions/` にログが増えることを確認する。
