@@ -10,6 +10,8 @@
 3. 利用先プロジェクトにエージェント定義をコピーし、Claude Code を再起動して `subagent_type` での直接呼び出しを確認する。
 4. `codex-subagent` の書き込み先を worktree で分離する運用を、利用先プロジェクトの `CLAUDE.md` に書く。
 5. 実運用で Codex CLI を更新したとき、`CODEX_HOME` の扱いが変わっていないかを `codex exec --help` の `--ephemeral` の説明で再確認する。
+6. `impl-light` の Codex ラッパーを実運用で検証したのち、`codex-subagent` と `codex-review` も `tools/codex-agent.sh` 経由に統一するかを判断する。
+7. ユーザ定義の `%USERPROFILE%\.claude\agents\impl-light.md` を、このリポジトリの定義に置き換える。あわせて `tools/codex-agent.sh` を `%USERPROFILE%\.claude\tools\` にコピーする。
 
 ## 開発者の判断を要する事項
 
@@ -33,6 +35,16 @@
 現在の既定ホームは Codex プラグインと ai-cross-review が使っている。
 アカウント A をレビュー用に固定するなら、既定ホームとレビュー用ホームを同じアカウントにするか、既定ホームを第 3 の用途(対話用)と位置づけるかを決める。
 暫定では既定ホームを触らず、用途別ホームを追加する構成にしている。
+
+**`impl-light` の書き込み先。**
+暫定で Claude Code と同じ worktree に書かせている。
+`impl-light` に任せるのは小規模な変更であり、実行中にメインセッションが同じファイルを編集しない前提で運用する。
+書き込み範囲の大きい依頼は `codex-subagent` に回し、worktree を分ける。
+
+**`impl-light` が使う認証ホーム。**
+暫定で既定ホーム `~/.codex` を使っている。
+既定ホームにはフックや MCP サーバの設定が入っており、実行のたびにフックの出力が混じるため、`tools/codex-agent.sh` で `WARNING` と `hook:` の行を除いている。
+将来は `~/.codex-subagent` に移し、この除去を不要にする。
 
 **ai-cross-review 側の `CODEX_HOME` 対応。**
 ai-cross-review はレビューに `codex` を直接起動するため、環境変数 `CODEX_HOME` を設定してから `npm run review:codex` を実行すればレビュー用アカウントで動く見込みである。

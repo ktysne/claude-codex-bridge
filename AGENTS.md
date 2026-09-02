@@ -41,6 +41,7 @@ Claude Code から Codex CLI を、用途別のサブエージェントとして
 codex --version
 CODEX_HOME="$USERPROFILE/.codex-review" codex login status
 CODEX_HOME="$USERPROFILE/.codex-subagent" codex login status
+bash tools/codex-agent.sh impl-light <<< "Reply with exactly: PONG-LUNA"
 ```
 
 エージェント定義(`.claude/agents/*.md`)を変更した場合、Claude Code のセッションを再起動しないと反映されない。
