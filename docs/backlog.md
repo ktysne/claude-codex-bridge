@@ -15,7 +15,7 @@
 3. 2 アカウント段階に進むとき、利用先プロジェクトに 4 定義とスクリプトをコピーし、Claude Code を再起動して `subagent_type` での直接呼び出しを確認する。
 4. `codex-subagent` の書き込み先を worktree で分離する運用を、利用先プロジェクトの `CLAUDE.md` に書く。
 5. 実運用で Codex CLI を更新したとき、`CODEX_HOME` の扱いが変わっていないかを `codex exec --help` の `--ephemeral` の説明で再確認する。
-6. Claude Code を再起動した後、`Agent` ツールで `subagent_type: codex-review` と `codex-subagent` を呼び、現段階の既定ホームで応答することを確認する(`impl-light` は 2026-09-03 に確認済み)。
+6. Claude Code を再起動した後、`Agent` ツールで `subagent_type: codex-review` を呼び、監査行 `codex-agent:` を含む応答が返ることを確認する(`impl-light` と `codex-subagent` は 2026-09-03 に確認済み)。同日の確認では `codex-review` のラッパーが Bash を呼ばずに自分で応答したため、定義に「疎通確認でも必ず Bash を呼ぶ」規則を追加した。再確認では監査行の有無で判定する。
 7. このリポジトリの定義やスクリプトを変えたときは、`.claude/agents/` の 4 ファイル、`.claude/gpt-agents/` の 4 ファイル、`tools/codex-agent.sh` の計 9 ファイルをユーザ定義側にも反映する。クラウド環境ではユーザ定義側が読まれないため、利用先リポジトリにコミットする必要がある。
 
 ## 開発者の判断を要する事項
