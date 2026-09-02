@@ -10,15 +10,24 @@
 3. 利用先プロジェクトにエージェント定義をコピーし、Claude Code を再起動して `subagent_type` での直接呼び出しを確認する。
 4. `codex-subagent` の書き込み先を worktree で分離する運用を、利用先プロジェクトの `CLAUDE.md` に書く。
 5. 実運用で Codex CLI を更新したとき、`CODEX_HOME` の扱いが変わっていないかを `codex exec --help` の `--ephemeral` の説明で再確認する。
-6. `impl-light` の Codex ラッパーを実運用で検証したのち、`codex-subagent` と `codex-review` も `tools/codex-agent.sh` 経由に統一するかを判断する。
-7. ユーザ定義の `%USERPROFILE%\.claude\agents\impl-light.md` を、このリポジトリの定義に置き換える。あわせて `tools/codex-agent.sh` を `%USERPROFILE%\.claude\tools\` にコピーする。
+6. `impl-light` と `impl-standard` の GPT 側委譲を実運用で検証したのち、`codex-subagent` と `codex-review` も `tools/codex-agent.sh` 経由に統一するかを判断する。
+7. ユーザ定義の `%USERPROFILE%\.claude\agents\impl-light.md` と `impl-standard.md` を、このリポジトリの定義に置き換える。あわせて `.claude/gpt-agents/` を `%USERPROFILE%\.claude\gpt-agents\` に、`tools/codex-agent.sh` を `%USERPROFILE%\.claude\tools\` にコピーする。
 
 ## 開発者の判断を要する事項
 
-**サブエージェントの薄いラッパーに使うモデル。**
-暫定で `haiku` にしている。
-ラッパーは Bash を 1 回呼ぶだけで推論を要さないため、最も安価なモデルで足りるという判断である。
-依頼文の整形(重大度の付与を補う、など)をもう少し任せたいなら `sonnet` に上げる。
+**GPT 側の effort。**
+暫定で `impl-light` を `xhigh`、`impl-standard` を `max` にしている。
+既定ホームの `luna-xhigh-worker` と `luna-max-worker` の役割分担に合わせた値である。
+実運用での応答時間と品質を見て見直す。
+
+**フォールバックの条件。**
+暫定で、GPT 側のレートリミット(終了コード 75)とスクリプト未導入の 2 つに限っている。
+それ以外の失敗は Claude 側で実装し直さず、終了コードと出力の末尾を報告して止める。
+Codex 側の一時的な失敗まで自動でフォールバックすると、失敗の原因が報告に残らないためである。
+
+**Claude 側フォールバックに使うモデル。**
+`impl-light` は Sonnet 5、`impl-standard` は Opus 5 で、ユーザ定義の値をそのまま保っている。
+Claude 側は転送だけでなく実装も担うため、区分ごとの本来のモデルを下げていない。
 
 **エージェント定義の置き場所。**
 暫定でプロジェクト単位(`<project>/.claude/agents/`)にしている。
