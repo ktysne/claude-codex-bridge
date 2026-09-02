@@ -182,7 +182,7 @@ case "$codex_home" in
 esac
 codex_home="${codex_home//\$USERPROFILE/$home_dir}"
 codex_home="${codex_home//%USERPROFILE%/$home_dir}"
-codex_home="$(to_slash "$codex_home")"
+codex_home="$(to_windows_path "$codex_home")"
 
 [ -d "$codex_home" ] || die "codex_home が存在しない: $codex_home (docs/setup.md のログイン手順を参照)"
 
@@ -255,7 +255,10 @@ if [ "$codex_status" -ne 0 ]; then
   # レートリミットの通知は標準出力に出ることも標準エラーに出ることもあるため、両方を見る。
   # 標準エラー側はフックと警告を除いた後の内容だけを対象にする。
   # 429 は単語境界で照合する。ID や桁数の一致で誤検出しないためである。
-  if grep -qiE 'usage limit|rate limit|too many requests|\b429\b' "$out_file" "$err_filtered"; then
+  # 一致した行を残し、フォールバックの根拠を報告から追えるようにする。
+  matched="$(grep -hiE 'usage limit|rate limit|too many requests|\b429\b' "$out_file" "$err_filtered" | head -n 3)"
+  if [ -n "$matched" ]; then
+    printf 'codex-agent: rate-limit evidence: %s\n' "$matched"
     printf 'codex-agent: result=rate-limited\n'
     exit 75
   fi
