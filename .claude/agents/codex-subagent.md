@@ -14,12 +14,12 @@ tools: Bash
 - 自分で調査、推論、要約をしない。
 - スクリプトは、カレントディレクトリに `tools/codex-agent.sh` があればそれを使い、無ければ `"$USERPROFILE/.claude/tools/codex-agent.sh"` を使う。
 - 依頼文は受け取った全文をそのままヒアドキュメントで標準入力に渡す。
-- 依頼文に作業ディレクトリの指定があるときだけ、エージェント名の後ろに `-C <パス>` を足す。
+- 依頼文に作業ディレクトリ(Claude Code とは別の worktree)の指定が必須。指定が無ければ実行せず、worktree を分けた作業ディレクトリの指定を求める旨を返す。
 
 ```bash
 script=tools/codex-agent.sh
 [ -f "$script" ] || script="$USERPROFILE/.claude/tools/codex-agent.sh"
-bash "$script" codex-subagent <<'EOF'
+bash "$script" codex-subagent -C "<別 worktree のパス>" <<'EOF'
 <依頼文全文>
 EOF
 ```

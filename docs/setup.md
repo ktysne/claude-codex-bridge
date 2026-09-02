@@ -35,9 +35,8 @@ $env:CODEX_HOME="$env:USERPROFILE\.codex-subagent"; codex login status
 
 ## 2. 2 アカウント段階で各 CODEX_HOME の設定を置く
 
-新しい `CODEX_HOME` には `config.toml` が存在しない。
-各定義のモデルと reasoning effort は `.claude/gpt-agents/` 側で指定する。
-そのため、`CODEX_HOME` 側に `config.toml` が無くても動く。
+`CODEX_HOME` を分けると、既定ホーム `~/.codex` の `config.toml` は読まれない。
+モデルと effort は `.claude/gpt-agents/` 側で指定するため、`CODEX_HOME` 側の設定ファイルは無くても動く。
 追加設定が必要な場合だけ、各ホームに設定ファイルを置く。
 
 既定ホームの `config.toml` をそのままコピーするのは避ける。
@@ -47,7 +46,7 @@ $env:CODEX_HOME="$env:USERPROFILE\.codex-subagent"; codex login status
 
 このリポジトリの `.claude/agents/` にある 4 定義を、使いたいプロジェクトの `.claude/agents/` にコピーする。
 `.claude/gpt-agents/` にある 4 定義と `tools/codex-agent.sh` も、同じプロジェクトへコピーする。
-すべてのプロジェクトで使うなら `%USERPROFILE%\.claude\agents\` に置いてもよい。
+すべてのプロジェクトで使うなら、`agents/` の 4 定義、`gpt-agents/` の 4 定義、`tools/codex-agent.sh` の 3 箇所(`%USERPROFILE%\.claude\agents\`、`%USERPROFILE%\.claude\gpt-agents\`、`%USERPROFILE%\.claude\tools\`)をそろえて置く。
 
 ## 4. Claude Code を再起動する
 
@@ -63,9 +62,12 @@ Git Bash で `tools/codex-agent.sh` を直接呼び出し、次のコマンド�
 bash tools/codex-agent.sh codex-review --effort low <<< "Reply with exactly: PONG-REVIEW"
 ```
 
-監査行に `model=gpt-5.6-sol`、`sandbox=read-only`、`codex_home=.../.codex` が出ることを確認する。
+監査行に `model=gpt-5.6-sol`、`sandbox=read-only`、使用中の段階のホームを示す `codex_home=...`(現段階は `~/.codex`、2 アカウント段階はレビュー用が `~/.codex-review`)が出ることを確認する。
 続いて `PONG-REVIEW` と `codex-agent: result=ok` が出れば、レビュー用の定義が動いている。
 `codex-subagent` は `sandbox=workspace-write` になる点を除き、同じ方法で確認する。
+
+Claude Code を再起動した後、`Agent` ツールで `subagent_type: codex-review` を指定し、`Reply with exactly: PONG-REVIEW` を送る。
+`PONG-REVIEW` が返り、その `CODEX_HOME` の `sessions/` にログが増えることを確認する。
 
 ## 導入済み Codex プラグインとの関係
 

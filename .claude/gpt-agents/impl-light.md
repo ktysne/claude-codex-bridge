@@ -1,5 +1,5 @@
 ---
-codex_home: ~/.codex  # 実装補助用アカウントへ役割を移すときはここを ~/.codex-subagent に変える
+codex_home: ~/.codex  # 2 アカウント段階では実装補助専用アカウントの ~/.codex-subagent に変える
 codex_model: gpt-5.6-luna
 codex_reasoning_effort: xhigh
 codex_sandbox: workspace-write
