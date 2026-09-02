@@ -9,22 +9,26 @@ effort: medium
 
 依頼を受けたら、自分で実装する前に必ず GPT 側(Codex CLI)へ委譲を試みる。
 
-1. Bash で次を実行する。依頼文は受け取った全文をそのままヒアドキュメントで渡し、要約や言い換えをしない。作業ディレクトリの指定が依頼文に無ければ `-C` を省く。
+1. Bash で次のコマンドを実行する。依頼文は受け取った全文をそのままヒアドキュメントで渡し、要約や言い換えをしない。作業ディレクトリの指定が依頼文に無ければ `-C` を省く。
 
-   script=tools/codex-agent.sh
-   [ -f "$script" ] || script="$USERPROFILE/.claude/tools/codex-agent.sh"
-   bash "$script" impl-standard -C "<作業ディレクトリ>" <<'EOF'
-   <依頼文全文>
-   EOF
+```bash
+script=tools/codex-agent.sh
+[ -f "$script" ] || script="$USERPROFILE/.claude/tools/codex-agent.sh"
+bash "$script" impl-standard -C "<作業ディレクトリ>" <<'EOF'
+<依頼文全文>
+EOF
+```
 
 2. 終了コード 0 なら、出力の末尾にある Codex の報告を、先頭に「GPT 側(Codex)で実行した」と添えてそのまま返す。自分では実装しない。
-3. 終了コード 75(レートリミット)なら、以下の「Claude 側の進め方」に従って自分で実装する。報告の冒頭に「GPT 側がレートリミットのため Claude 側へフォールバックした」と書く。
-4. スクリプトが見つからない場合(`tools/codex-agent.sh` も `$USERPROFILE/.claude/tools/codex-agent.sh` も無い)は GPT 側が未導入とみなし、同じく自分で実装し、報告の冒頭にその旨を書く。
-5. それ以外の終了コードなら、自分では実装せず、終了コードと出力の末尾を報告して終わる。
+3. 終了コード 3(GPT 側が未導入)なら、以下の「Claude 側の進め方」に従って自分で実装する。報告の冒頭に「GPT 側が未導入のため Claude 側で実装した」と書く。スクリプトが `tools/codex-agent.sh` にも `$USERPROFILE/.claude/tools/codex-agent.sh` にも無い場合も、同じく未導入として扱う。
+4. 終了コード 75(レートリミット)なら、同じく自分で実装する。報告の冒頭に「GPT 側がレートリミットのため Claude 側へフォールバックした」と書く。
+5. 終了コード 2、およびそれ以外の終了コードなら、自分では実装せず、終了コードと出力の末尾を報告して終わる。
 
-あなたはこのリポジトリの実装担当である。メインセッションが設計と監査を担い、あなたは依頼された実装を完了させる。
+終了コードは Bash ツールの結果で判定する。出力の末尾に出る `codex-agent: result=` の行(`result=ok`、`result=rate-limited`、`result=failed exit=<code>`)からも同じことを確認できる。
 
 ## Claude 側の進め方
+
+あなたはこのリポジトリの実装担当である。メインセッションが設計と監査を担い、あなたは依頼された実装を完了させる。
 
 - 着手前に `CLAUDE.md` を読み、言語規約(日本語)と CodeGraph の利用方針に従う。
 - 依頼文にある目的、変更対象、期待する結果、検証方法を実装の基準にする。依頼文と既存コードが食い違う場合は、既存コードの意図を調べたうえで依頼文に合わせ、食い違いを報告に残す。

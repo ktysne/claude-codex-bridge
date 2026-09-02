@@ -8,6 +8,10 @@ GPT 側がレートリミットで使えないときだけ、サブエージェ�
 この段階では既定の認証ホーム(`~/.codex`)の 1 アカウントだけを使う。
 既定ホームは対話と実装補助の両方を兼ねており、用途別アカウントへの分離は次の段階で行う。
 
+委譲の対象は `impl-light` と `impl-standard` の 2 つに限る。
+`impl-hard` は GPT 側へ委譲せず、Claude(Opus 5 / high)が担う。
+設計判断を伴う変更や、正しさの検証が難しい変更は、メインセッションと同じ Claude 系に留めたほうが、監査で挙動の食い違いを追いやすいためである。
+
 ## 構成
 
 ```text
@@ -38,6 +42,10 @@ Claude Code はこれらを解釈しないし、`.claude/gpt-agents/` をサブ�
 GPT 側の定義では、フロントマター直後から末尾までが Codex へ渡る役割文になる。
 スクリプトはその役割文を先頭に置き、区切り線を挟んで `## 依頼` として依頼文を続けたプロンプトを組み立てる。
 
+定義の探索は、スクリプトを起動したカレントディレクトリを基準にする。
+`-C` で別のディレクトリを作業ディレクトリに指定しても、読む定義は切り替わらない。
+別のプロジェクトの定義を使いたい場合は、そのディレクトリへ移ってからスクリプトを起動する。
+
 ## フロントマターのキー
 
 GPT 側の定義(`.claude/gpt-agents/<name>.md`)で使うキーは次の 4 つである。
@@ -56,14 +64,22 @@ Claude 側の定義(`.claude/agents/<name>.md`)のフロントマターは、Cla
 サブエージェントはスクリプトの終了コードで動きを決める。
 
 - **0**：Codex が完了した。出力の末尾にある Codex の報告をそのまま返し、Claude 側では実装しない。
+- **2**：引数、定義ファイルの内容、環境の不備でスクリプトが起動しなかった。フロントマターのキー不足、effort やサンドボックスの不正値、`codex_home` の不在、作業ディレクトリの不在、端末からの起動、空の依頼文がこれにあたる。実装せず、終了コードと出力の末尾を報告して終わる。
+- **3**：GPT 側が未導入である。`codex` コマンドが PATH に無いか、`.claude/gpt-agents/<name>.md` が見つからない。サブエージェント自身が Claude として実装し、その旨を報告の冒頭に書く。
 - **75**：Codex がレートリミットで実行できなかった。サブエージェント自身が Claude として実装し、フォールバックした旨を報告の冒頭に書く。
-- **2**：引数、定義ファイル、環境の不備でスクリプトが起動しなかった。実装せず、終了コードと出力の末尾を報告して終わる。
 - **その他**：Codex の終了コードをそのまま返している。実装せず、同じく終了コードと出力の末尾を報告して終わる。
+
+Codex 自身が 75 で終了した場合だけは、レートリミットの 75 と区別できないため 1 に写像する。
+元の値は `codex-agent: result=failed exit=75` の行に残る。
 
 スクリプトは末尾に結果の 1 行を出す。
 成功なら `codex-agent: result=ok`、レートリミットなら `codex-agent: result=rate-limited`、それ以外の失敗なら `codex-agent: result=failed exit=<code>` である。
 
-レートリミットの判定は、`codex` が 0 以外で終了し、かつ標準エラーに `usage limit`、`rate limit`、`too many requests`、`429` のいずれかが大文字小文字を問わず含まれる場合に限る。
+レートリミットの判定は、`codex` が 0 以外で終了し、かつ `usage limit`、`rate limit`、`too many requests`、`429` のいずれかが大文字小文字を問わず含まれる場合に限る。
+判定の対象は標準出力と標準エラーの両方である。
+Codex の版によって通知の出力先が変わるためである。
+標準エラー側は、`WARNING` と `hook:` で始まる行を除いた後の内容だけを見る。
+`429` は単語境界で照合し、ID や桁数の一致で誤検出しないようにしている。
 
 スクリプト自体が見つからない場合も、GPT 側が未導入とみなしてフォールバックする。
 サブエージェントはカレントディレクトリの `tools/codex-agent.sh` を先に探し、無ければ `%USERPROFILE%\.claude\tools\codex-agent.sh` を使い、どちらも無ければ自分で実装する。
@@ -109,28 +125,29 @@ Codex は Claude Code と同じ worktree で動く。
 Codex の回答本文が流れる標準出力にはフィルタを掛けない。
 `codex_home` を専用ホームに移せば、この除去は不要になる。
 
-**プロジェクト定義がユーザ定義を上書きする。**
-このリポジトリの定義は、このリポジトリでのみ効く。
+**全プロジェクトに適用するには。**
+スクリプトもサブエージェントも、カレントディレクトリの定義を先に探し、無ければユーザ定義を使う。
+そのため、このリポジトリの定義は、このリポジトリでのみ効く。
 全プロジェクトに適用するなら、次の 3 つを置く。
 
 1. `.claude/agents/impl-light.md` と `.claude/agents/impl-standard.md` を `%USERPROFILE%\.claude\agents\` に置き換える。
 2. `.claude/gpt-agents/` を `%USERPROFILE%\.claude\gpt-agents\` にコピーする。
 3. `tools/codex-agent.sh` を `%USERPROFILE%\.claude\tools\` にコピーする。
 
-スクリプトもサブエージェントも、カレントディレクトリの定義を先に探し、無ければユーザ定義を使う。
-
 ## 動作確認
 
 GPT 側が動くことを確認する。
+この確認は実モデルを起動するため、利用枠を消費する。
+消費を抑えるため `--effort low` を付ける。
 
 ```bash
-bash tools/codex-agent.sh impl-light <<< "Reply with exactly: PONG-LUNA"
+bash tools/codex-agent.sh impl-light --effort low <<< "Reply with exactly: PONG-LUNA"
 ```
 
 先頭に監査用の 1 行が出る。
 
 ```text
-codex-agent: agent=impl-light model=gpt-5.6-luna effort=xhigh sandbox=workspace-write codex_home=... workdir=...
+codex-agent: agent=impl-light model=gpt-5.6-luna effort=low sandbox=workspace-write codex_home=... workdir=...
 ```
 
 続く Codex のヘッダで `model: gpt-5.6-luna` と `reasoning effort` を確認し、`PONG-LUNA` に続いて `codex-agent: result=ok` が出れば期待どおりである。
