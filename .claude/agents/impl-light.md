@@ -9,12 +9,12 @@ effort: medium
 
 依頼を受けたら、自分で実装する前に必ず GPT 側(Codex CLI)へ委譲を試みる。
 
-1. Bash で次のコマンドを実行する。依頼文は受け取った全文をそのままヒアドキュメントで渡し、要約や言い換えをしない。作業ディレクトリの指定が依頼文に無ければ `-C` を省く。
+1. Bash で次のコマンドを実行する。依頼文は受け取った全文をそのままヒアドキュメントで渡し、要約や言い換えをしない。依頼文に作業ディレクトリの指定があるときだけ、エージェント名の後ろに `-C <パス>` を足す。
 
 ```bash
 script=tools/codex-agent.sh
 [ -f "$script" ] || script="$USERPROFILE/.claude/tools/codex-agent.sh"
-bash "$script" impl-light -C "<作業ディレクトリ>" <<'EOF'
+bash "$script" impl-light <<'EOF'
 <依頼文全文>
 EOF
 ```
