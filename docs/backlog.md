@@ -5,13 +5,13 @@
 
 ## 残作業
 
-1. アカウント A、B でそれぞれ `codex login` を実行する(ブラウザ認証のため手作業)。手順は [setup.md](setup.md)。
-2. 各 `CODEX_HOME` に最小の `config.toml` を置く。
-3. 利用先プロジェクトにエージェント定義をコピーし、Claude Code を再起動して `subagent_type` での直接呼び出しを確認する。
+1. 2 アカウント段階に進むとき、アカウント A、B でそれぞれ `codex login` を実行する(ブラウザ認証のため手作業)。手順は [setup.md](setup.md)。
+2. 2 アカウント段階に進むとき、必要な設定を各 `CODEX_HOME` に置く。
+3. 2 アカウント段階に進むとき、利用先プロジェクトに 4 定義とスクリプトをコピーし、Claude Code を再起動して `subagent_type` での直接呼び出しを確認する。
 4. `codex-subagent` の書き込み先を worktree で分離する運用を、利用先プロジェクトの `CLAUDE.md` に書く。
 5. 実運用で Codex CLI を更新したとき、`CODEX_HOME` の扱いが変わっていないかを `codex exec --help` の `--ephemeral` の説明で再確認する。
-6. `impl-light` と `impl-standard` の GPT 側委譲を実運用で検証したのち、`codex-subagent` と `codex-review` も `tools/codex-agent.sh` 経由に統一するかを判断する。
-7. ユーザ定義の `%USERPROFILE%\.claude\agents\impl-light.md` と `impl-standard.md` を、このリポジトリの定義に置き換える。あわせて `.claude/gpt-agents/` を `%USERPROFILE%\.claude\gpt-agents\` に、`tools/codex-agent.sh` を `%USERPROFILE%\.claude\tools\` にコピーする。
+6. 完了(2026-09-03、4 定義とも `tools/codex-agent.sh` 経由に統一)。
+7. ユーザ定義側(`%USERPROFILE%\.claude\` 配下の `agents/`、`gpt-agents/`、`tools/`)への配置は 2026-09-03 に完了した。以後、このリポジトリの定義やスクリプトを変えたときは、`.claude/agents/` の 4 ファイル、`.claude/gpt-agents/` の 4 ファイル、`tools/codex-agent.sh` の計 9 ファイルをユーザ定義側にも反映する。クラウド環境ではユーザ定義側が読まれないため、利用先リポジトリにコミットする必要がある。
 
 ## 開発者の判断を要する事項
 
@@ -20,9 +20,14 @@
 既定ホームの `luna-xhigh-worker` と `luna-max-worker` の役割分担に合わせた値である。
 実運用での応答時間と品質を見て見直す。
 
+**`codex-review` と `codex-subagent` の GPT 側モデル。**
+暫定で既定の GPT-5.6 Sol / medium としている。
+実運用でのレビュー品質と応答時間を見て見直す。
+
 **フォールバックの条件。**
-暫定で、GPT 側のレートリミット(終了コード 75)と GPT 側の未導入(終了コード 3)の 2 系統に限っている。
+`impl-light` と `impl-standard` は、GPT 側のレートリミット(終了コード 75)と GPT 側の未導入(終了コード 3)の 2 系統に限って Claude 側へフォールバックする。
 未導入には、`codex` コマンドが PATH に無い場合、`.claude/gpt-agents/<name>.md` が見つからない場合、`tools/codex-agent.sh` 自体がどちらの置き場所にも無い場合が含まれる。
+`codex-review` と `codex-subagent` は、終了コードが 0 以外ならフォールバックせず、終了コードと出力の末尾を報告して停止する。
 それ以外の失敗は Claude 側で実装し直さず、終了コードと出力の末尾を報告して止める。
 Codex 側の一時的な失敗まで自動でフォールバックすると、失敗の原因が報告に残らないためである。
 

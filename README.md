@@ -3,16 +3,19 @@
 Claude Code から Codex CLI を、用途別のサブエージェントとして呼び出すための定義と手順をまとめたリポジトリである。
 レビュー用と実装補助用で ChatGPT Plus アカウントを分け、`CODEX_HOME` を分離して認証を切り替える。
 
-現在は 1 アカウント(既定ホーム `~/.codex`)で実装サブエージェントを GPT-5.6 Luna 化する段階にあり、2 アカウント運用は次の段階である。
+現在は 1 アカウント(既定ホーム `~/.codex`)を使い、4 定義を `tools/codex-agent.sh` 経由で動かす段階にある。
+2 アカウント運用は次の段階である。
 
 ## 構成
 
 ```text
 Claude Code(メインセッション)
 ├─ codex-review     .claude/agents/codex-review.md
-│   └─ CODEX_HOME=~/.codex-review    ChatGPT アカウント A(レビュー専用、read-only)
+│   └─ tools/codex-agent.sh          .claude/gpt-agents/codex-review.md を読む
+│       └─ CODEX_HOME=~/.codex       既定ホーム(暫定、gpt-5.6-sol、medium、read-only)
 ├─ codex-subagent   .claude/agents/codex-subagent.md
-│   └─ CODEX_HOME=~/.codex-subagent  ChatGPT アカウント B(実装補助専用、workspace-write)
+│   └─ tools/codex-agent.sh          .claude/gpt-agents/codex-subagent.md を読む
+│       └─ CODEX_HOME=~/.codex       既定ホーム(暫定、gpt-5.6-sol、medium、workspace-write)
 ├─ impl-light       .claude/agents/impl-light.md(Claude、Sonnet 5)
 │   └─ tools/codex-agent.sh          .claude/gpt-agents/impl-light.md を読む
 │       └─ CODEX_HOME=~/.codex       既定ホーム(暫定、gpt-5.6-luna、effort=xhigh)
@@ -21,8 +24,9 @@ Claude Code(メインセッション)
         └─ CODEX_HOME=~/.codex       既定ホーム(暫定、gpt-5.6-luna、effort=max)
 ```
 
-`codex-review` と `codex-subagent` は定義本文にコマンドを直書きする。
+4 定義とも `tools/codex-agent.sh` が `.claude/gpt-agents/` の定義を読み、`codex exec` を組み立てる。
 `impl-light` と `impl-standard` は既定で GPT 側に実装を委ね、GPT 側がレートリミットで使えないときだけ自身の Claude モデルで実装する。
+`codex-review` と `codex-subagent` は非 0 終了時にフォールバックせず、終了コードと出力末尾を返して停止する。
 Codex 側のモデル、effort、認証ホームは `.claude/gpt-agents/` の定義に集約し、`tools/codex-agent.sh` がそれを読んで `codex exec` を組み立てる([docs/gpt-agents.md](docs/gpt-agents.md))。
 
 Codex CLI は認証情報を `$CODEX_HOME/auth.json` に保存し、他の場所を参照しない。
@@ -33,13 +37,16 @@ Codex CLI は認証情報を `$CODEX_HOME/auth.json` に保存し、他の場所
 
 | パス | 役割 |
 |---|---|
-| `.claude/agents/codex-review.md` | レビュー用サブエージェントの定義 |
-| `.claude/agents/codex-subagent.md` | 実装補助用サブエージェントの定義 |
+| `.claude/agents/codex-review.md` | レビュー用サブエージェントの定義。`tools/codex-agent.sh` への転送を持つ |
+| `.claude/agents/codex-subagent.md` | 実装補助用サブエージェントの定義。`tools/codex-agent.sh` への転送を持つ |
 | `.claude/agents/impl-light.md` | 小規模実装用サブエージェントの Claude 側定義。GPT 側への委譲とフォールバックの手順を持つ |
 | `.claude/agents/impl-standard.md` | 一般実装用サブエージェントの Claude 側定義。同じくフォールバックの手順を持つ |
-| `.claude/gpt-agents/` | GPT 側の定義。Codex のモデル、effort、認証ホーム、サンドボックス、役割文を集約する |
+| `.claude/gpt-agents/codex-review.md` | レビュー用 GPT 側定義。Codex のモデル、effort、認証ホーム、サンドボックス、役割文を持つ |
+| `.claude/gpt-agents/codex-subagent.md` | 実装補助用 GPT 側定義。Codex のモデル、effort、認証ホーム、サンドボックス、役割文を持つ |
+| `.claude/gpt-agents/impl-light.md` | 小規模実装用 GPT 側定義。Codex のモデル、effort、認証ホーム、サンドボックス、役割文を持つ |
+| `.claude/gpt-agents/impl-standard.md` | 一般実装用 GPT 側定義。Codex のモデル、effort、認証ホーム、サンドボックス、役割文を持つ |
 | `tools/codex-agent.sh` | GPT 側の定義を読んで `codex exec` を組み立てるスクリプト |
-| `docs/gpt-agents.md` | 実装サブエージェントを GPT 側で動かす構成と、フォールバックの条件 |
+| `docs/gpt-agents.md` | GPT 系サブエージェントの構成と、フォールバックの条件 |
 | `docs/setup.md` | アカウントのログインからサブエージェント有効化までの手順 |
 | `docs/verification-2026-09-02.md` | ChatGPT 回答の妥当性検証と、定義、呼び出しの動作確認の記録 |
 | `docs/backlog.md` | 残作業と、開発者の判断を要する事項 |
@@ -49,11 +56,13 @@ Codex CLI は認証情報を `$CODEX_HOME/auth.json` に保存し、他の場所
 ## 使い始めるまで
 
 [docs/setup.md](docs/setup.md) の手順に従う。
-要点は次の三つである。
+現段階では既定ホーム `~/.codex` で `codex login` を済ませればよい。
+2 アカウント段階に進むときは、[docs/setup.md](docs/setup.md) の手順 1〜2 で用途別ホームを準備する。
+その後、定義を配置して Claude Code を再起動する。
 
-1. 用途ごとの `CODEX_HOME` でブラウザログインする(アカウント A、B それぞれ)。
-2. このリポジトリのエージェント定義を、使いたいプロジェクトの `.claude/agents/` にコピーする。
-3. Claude Code を再起動し、`Agent` ツールの `subagent_type` に `codex-review` または `codex-subagent` を指定して呼ぶ。
+1. このリポジトリの 4 つの Claude 側定義と GPT 側定義を、使いたいプロジェクトへ配置する。
+2. `tools/codex-agent.sh` を配置する。
+3. Claude Code を再起動し、`Agent` ツールの `subagent_type` に 4 つの定義のいずれかを指定して呼ぶ。
 
 ## 守るべき前提
 
