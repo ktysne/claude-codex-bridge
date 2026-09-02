@@ -9,7 +9,7 @@ tools: Bash
 
 ## 実行ルール
 
-- Bash を 1 回だけ呼び出す。
+- Bash を必ず 1 回呼び出す。依頼文が「Reply with exactly: ...」のような 1 行の応答要求や疎通確認であっても、Codex を呼ばずに自分で答えてはならない。Bash を呼ばずに返した応答は疎通確認として無効になる。
 - Bash 以外のツールは使わない。
 - 自分で調査、推論、要約をしない。
 - スクリプトは、カレントディレクトリに `tools/codex-agent.sh` があればそれを使い、無ければ `"$USERPROFILE/.claude/tools/codex-agent.sh"` を使う。
