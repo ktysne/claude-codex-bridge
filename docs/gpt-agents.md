@@ -6,7 +6,7 @@ Claude Code のサブエージェント `impl-light`、`impl-standard`、`codex-
 ## 目的
 
 この段階では既定の認証ホーム(`~/.codex`)の 1 アカウントだけを使う。
-既定ホームは対話と実装補助の両方を兼ねており、用途別アカウントへの分離は次の段階で行う。
+既定ホームは対話と 4 定義(レビューを含む)のすべてを兼ねており、用途別アカウントへの分離は次の段階で行う。
 
 委譲の対象は `impl-light`、`impl-standard`、`codex-review`、`codex-subagent` の 4 つである。
 `impl-hard` は GPT 側へ委譲せず、Claude(Opus 5 / high)が担う。
@@ -64,7 +64,7 @@ GPT 側の定義(`.claude/gpt-agents/<name>.md`)で使うキーは次の 4 つ�
 - **codex_home**：`CODEX_HOME` に渡すディレクトリ。必須。`~`、`$USERPROFILE`、`%USERPROFILE%` を実パスへ展開する。存在しなければ実行せずに終了コード 2 で止まる。
 - **codex_model**：`codex exec -m` に渡すモデル名。必須。
 - **codex_reasoning_effort**：`-c model_reasoning_effort=` に渡す値。省略時は `medium`。`low`、`medium`、`high`、`xhigh`、`max` のみを受け付ける。
-- **codex_sandbox**：`--sandbox` に渡す値。省略時は `workspace-write`。`read-only` と `workspace-write` のみを受け付ける。
+- **codex_sandbox**：`--sandbox` に渡す値。省略時は `read-only`。`read-only` と `workspace-write` のみを受け付ける。
 
 `--dangerously-bypass-approvals-and-sandbox` はスクリプトに存在せず、フロントマターからも指定できない。
 
@@ -137,9 +137,15 @@ EOF
 
 **書き込み可能な呼び出しは worktree を分ける。**
 `codex-review` は `read-only` で動くため、ファイルを書き換えない。
-`codex-subagent` は `workspace-write` で動くため、呼び出し側が Claude Code と別の worktree を用意する。
+`codex-subagent` は `workspace-write` で動くため、呼び出し側が Claude Code と別の worktree を用意し、`-C` で別 worktree を必ず指定する。
 `impl-light` と `impl-standard` は同じ worktree で動くが、実行中はメインセッションが同じファイルを編集しない。
 書き込み範囲の大きい依頼は `codex-subagent` に回し、worktree を分ける。
+
+**スクリプト自身の書き換えを Codex に任せると、実行中の bash が壊れ得る。**
+bash はスクリプトを読みながら実行する。
+`tools/codex-agent.sh` を書き換える依頼を Codex に渡すと、Codex がファイルを書き換えた時点で、待機中だった bash が続きを書き換え後の内容から読み、構文エラーで終了コード 2 になる(2026-09-03 に実際に起きた)。
+対策として本体を `main` 関数に包み、末尾の呼び出し行までを読み終えてから実行するようにした。
+それでも、このスクリプト自身の変更は Claude 側で行い、Codex には任せないほうが安全である。
 
 **既定ホームのフック出力が混じる。**
 既定ホーム `~/.codex` には Codex プラグインと ai-cross-review の設定が入っており、実行のたびにフックの出力が標準エラーへ流れる。

@@ -22,6 +22,12 @@
 set -u
 set -o pipefail
 
+# 本体を main 関数に包み、末尾で 1 回だけ呼ぶ。
+# bash はスクリプトを読みながら実行するため、Codex がこのファイル自身を書き換える依頼を
+# 処理すると、実行中の bash が書き換え後の内容を途中から読んで構文エラーになる。
+# 関数に包むと呼び出し前に全体を読み終えるので、実行中の書き換えに影響されない。
+main() {
+
 usage() {
   cat <<'USAGE'
 用法: bash tools/codex-agent.sh <agent-name> [-C <workdir>] [--effort <level>] < prompt.txt
@@ -164,7 +170,8 @@ codex_sandbox="$(fm_get codex_sandbox)"
 [ -n "$codex_home" ] || die "フロントマターに codex_home が無い: $def_file"
 [ -n "$codex_model" ] || die "フロントマターに codex_model が無い: $def_file"
 [ -n "$codex_effort" ] || codex_effort="medium"
-[ -n "$codex_sandbox" ] || codex_sandbox="workspace-write"
+# 既定は安全側の read-only。書き込みが必要な定義だけが明示する。
+[ -n "$codex_sandbox" ] || codex_sandbox="read-only"
 
 validate_effort "$codex_effort"
 
@@ -272,3 +279,7 @@ if [ "$codex_status" -ne 0 ]; then
 fi
 
 printf 'codex-agent: result=ok\n'
+}
+
+# main の後ろにコードを置かない。この行までを読み終えてから実行が始まる。
+main "$@"; exit $?
