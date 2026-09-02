@@ -3,7 +3,7 @@
 Claude Code から Codex CLI を、用途別のサブエージェントとして呼び出すための定義と手順をまとめたリポジトリである。
 レビュー用と実装補助用で ChatGPT Plus アカウントを分け、`CODEX_HOME` を分離して認証を切り替える。
 
-現在は 1 アカウント(既定ホーム `~/.codex`)で `impl-light` を GPT-5.6 Luna 化する段階にあり、2 アカウント運用は次の段階である。
+現在は 1 アカウント(既定ホーム `~/.codex`)で実装サブエージェントを GPT-5.6 Luna 化する段階にあり、2 アカウント運用は次の段階である。
 
 ## 構成
 
@@ -13,13 +13,17 @@ Claude Code(メインセッション)
 │   └─ CODEX_HOME=~/.codex-review    ChatGPT アカウント A(レビュー専用、read-only)
 ├─ codex-subagent   .claude/agents/codex-subagent.md
 │   └─ CODEX_HOME=~/.codex-subagent  ChatGPT アカウント B(実装補助専用、workspace-write)
-└─ impl-light       .claude/agents/impl-light.md
-    └─ tools/codex-agent.sh          定義ファイルを読んで codex exec を組み立てる
-        └─ CODEX_HOME=~/.codex       既定ホーム(暫定、gpt-5.6-luna、workspace-write)
+├─ impl-light       .claude/agents/impl-light.md(Claude、Sonnet 5)
+│   └─ tools/codex-agent.sh          .claude/gpt-agents/impl-light.md を読む
+│       └─ CODEX_HOME=~/.codex       既定ホーム(暫定、gpt-5.6-luna、effort=xhigh)
+└─ impl-standard    .claude/agents/impl-standard.md(Claude、Opus 5)
+    └─ tools/codex-agent.sh          .claude/gpt-agents/impl-standard.md を読む
+        └─ CODEX_HOME=~/.codex       既定ホーム(暫定、gpt-5.6-luna、effort=max)
 ```
 
 `codex-review` と `codex-subagent` は定義本文にコマンドを直書きする。
-`impl-light` はコマンドの組み立てを `tools/codex-agent.sh` に寄せ、モデル、effort、認証ホームを定義ファイルのフロントマターに集約している([docs/impl-light-luna.md](docs/impl-light-luna.md))。
+`impl-light` と `impl-standard` は既定で GPT 側に実装を委ね、GPT 側がレートリミットで使えないときだけ自身の Claude モデルで実装する。
+Codex 側のモデル、effort、認証ホームは `.claude/gpt-agents/` の定義に集約し、`tools/codex-agent.sh` がそれを読んで `codex exec` を組み立てる([docs/gpt-agents.md](docs/gpt-agents.md))。
 
 Codex CLI は認証情報を `$CODEX_HOME/auth.json` に保存し、他の場所を参照しない。
 そのため `CODEX_HOME` を分けるだけで、アカウントごとの認証、設定、セッションログが完全に分離される。
@@ -31,9 +35,11 @@ Codex CLI は認証情報を `$CODEX_HOME/auth.json` に保存し、他の場所
 |---|---|
 | `.claude/agents/codex-review.md` | レビュー用サブエージェントの定義 |
 | `.claude/agents/codex-subagent.md` | 実装補助用サブエージェントの定義 |
-| `.claude/agents/impl-light.md` | 小規模実装用サブエージェントの定義。Codex 側の設定もここに集約する |
-| `tools/codex-agent.sh` | エージェント定義を読んで `codex exec` を組み立てるスクリプト |
-| `docs/impl-light-luna.md` | `impl-light` を GPT-5.6 Luna で動かす構成と、切り替え手順 |
+| `.claude/agents/impl-light.md` | 小規模実装用サブエージェントの Claude 側定義。GPT 側への委譲とフォールバックの手順を持つ |
+| `.claude/agents/impl-standard.md` | 一般実装用サブエージェントの Claude 側定義。同じくフォールバックの手順を持つ |
+| `.claude/gpt-agents/` | GPT 側の定義。Codex のモデル、effort、認証ホーム、サンドボックス、役割文を集約する |
+| `tools/codex-agent.sh` | GPT 側の定義を読んで `codex exec` を組み立てるスクリプト |
+| `docs/gpt-agents.md` | 実装サブエージェントを GPT 側で動かす構成と、フォールバックの条件 |
 | `docs/setup.md` | アカウントのログインからサブエージェント有効化までの手順 |
 | `docs/verification-2026-09-02.md` | ChatGPT 回答の妥当性検証と、定義、呼び出しの動作確認の記録 |
 | `docs/backlog.md` | 残作業と、開発者の判断を要する事項 |
