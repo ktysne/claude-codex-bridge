@@ -5,8 +5,8 @@
 
 ## 完了した作業
 
-- 4 定義の統一(2026-09-03)
-- ユーザ定義側への配置(2026-09-03)
+- `codex-review`、`codex-subagent`、`impl-light`、`impl-standard` の 4 定義を、`.claude/gpt-agents/` の定義と `tools/codex-agent.sh` で `codex exec` を組み立てる方式に統一した(2026-09-03)。
+- 4 定義、GPT 側の 4 定義、スクリプトの計 9 ファイルをユーザ定義側(`%USERPROFILE%\.claude\` 配下)に配置した(2026-09-03)。
 
 ## 残作業
 
@@ -15,7 +15,8 @@
 3. 2 アカウント段階に進むとき、利用先プロジェクトに 4 定義とスクリプトをコピーし、Claude Code を再起動して `subagent_type` での直接呼び出しを確認する。
 4. `codex-subagent` の書き込み先を worktree で分離する運用を、利用先プロジェクトの `CLAUDE.md` に書く。
 5. 実運用で Codex CLI を更新したとき、`CODEX_HOME` の扱いが変わっていないかを `codex exec --help` の `--ephemeral` の説明で再確認する。
-6. このリポジトリの定義やスクリプトを変えたときは、`.claude/agents/` の 4 ファイル、`.claude/gpt-agents/` の 4 ファイル、`tools/codex-agent.sh` の計 9 ファイルをユーザ定義側にも反映する。クラウド環境ではユーザ定義側が読まれないため、利用先リポジトリにコミットする必要がある。
+6. Claude Code を再起動した後、`Agent` ツールで `subagent_type: codex-review` と `codex-subagent` を呼び、現段階の既定ホームで応答することを確認する(`impl-light` は 2026-09-03 に確認済み)。
+7. このリポジトリの定義やスクリプトを変えたときは、`.claude/agents/` の 4 ファイル、`.claude/gpt-agents/` の 4 ファイル、`tools/codex-agent.sh` の計 9 ファイルをユーザ定義側にも反映する。クラウド環境ではユーザ定義側が読まれないため、利用先リポジトリにコミットする必要がある。
 
 ## 開発者の判断を要する事項
 
@@ -45,11 +46,11 @@ GPT 側へ委譲するのは `impl-light` と `impl-standard` に限り、`impl-
 Claude 側は転送だけでなく実装も担うため、区分ごとの本来のモデルを下げていない。
 
 **エージェント定義の置き場所。**
-暫定でプロジェクト単位(`<project>/.claude/agents/`)にしている。
-全プロジェクトで使うなら `%USERPROFILE%\.claude\agents\` に置く。
-既存の `impl-*` 定義と並ぶため、名前の衝突はない。
+このリポジトリ(`.claude/`)とユーザ定義側(`%USERPROFILE%\.claude\`)の両方に同じ内容を置いている。
+プロジェクト側の定義がユーザ定義側より優先されるため、利用先プロジェクトで定義を変えたい場合はプロジェクト側に置く。
+クラウド環境ではユーザ定義側が読まれないため、利用先リポジトリにコミットする。
 
-**`codex-subagent` の既定サンドボックス。**
+**`codex-subagent` のサンドボックス。**
 暫定で `workspace-write` にしている。
 承認を自動化する `--approve-for-me` は付けていない。
 実装タスクで承認待ちが頻発するようなら付けるかを判断する。
