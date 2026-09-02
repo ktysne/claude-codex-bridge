@@ -11,9 +11,13 @@
 #
 # 終了コード:
 #   0   Codex が正常に終了した
-#   2   引数、定義ファイル、環境の不備でスクリプトが起動しなかった
+#   2   引数、定義ファイルの内容、環境の不備でスクリプトが起動しなかった
+#   3   GPT 側が未導入である(codex コマンドが無い、または定義ファイルが無い)
+#       呼び出し側は Claude へフォールバックする
 #   75  Codex がレートリミットで実行できなかった(呼び出し側は Claude へフォールバックする)
 #   他  Codex の終了コードをそのまま返す
+#       ただし Codex 自身が 75 で終了した場合は 75 の意味と衝突するため 1 に写像し、
+#       元の値は codex-agent: result=failed exit=75 の行に残す
 
 set -u
 set -o pipefail
@@ -28,12 +32,25 @@ usage() {
                     (low|medium|high|xhigh|max)
 
 依頼文は標準入力から読む。
+
+終了コード:
+  0   Codex が正常に終了した
+  2   引数、定義ファイルの内容、環境の不備でスクリプトが起動しなかった
+  3   GPT 側が未導入である(codex コマンドが無い、または定義ファイルが無い)
+  75  Codex がレートリミットで実行できなかった
+  他  Codex の終了コードをそのまま返す(Codex 自身の 75 は 1 に写像する)
 USAGE
 }
 
 die() {
   printf 'codex-agent: %s\n' "$1" >&2
   exit 2
+}
+
+# GPT 側が未導入であることを示す。呼び出し側はこの終了コードで Claude へフォールバックする。
+die_missing() {
+  printf 'codex-agent: %s\n' "$1" >&2
+  exit 3
 }
 
 # effort は Codex が受け付ける値だけを通す。誤った値を渡すと codex 側で失敗するためである。
@@ -92,6 +109,19 @@ to_slash() {
   printf '%s' "${p//\\//}"
 }
 
+# Codex へ渡す作業ディレクトリを Windows 形式(D:/...)へ揃える。
+# Git Bash の /d/... 形式のままだと Codex 側が解決できないためである。
+# cygpath が無い環境では区切り文字の変換だけを行う。
+to_windows_path() {
+  local p
+  p="$(to_slash "$1")"
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -m "$p" 2>/dev/null || printf '%s' "$p"
+  else
+    printf '%s' "$p"
+  fi
+}
+
 # 定義ファイルを探す。プロジェクト定義がユーザ定義を上書きする。
 def_file=""
 for candidate in "$PWD/.claude/gpt-agents/$agent_name.md" "$(to_slash "$home_dir")/.claude/gpt-agents/$agent_name.md"; do
@@ -100,7 +130,10 @@ for candidate in "$PWD/.claude/gpt-agents/$agent_name.md" "$(to_slash "$home_dir
     break
   fi
 done
-[ -n "$def_file" ] || die "エージェント定義が見つからない: $agent_name (.claude/gpt-agents/$agent_name.md)"
+[ -n "$def_file" ] || die_missing "エージェント定義が見つからない: $agent_name (.claude/gpt-agents/$agent_name.md)"
+
+# codex 本体の有無も、定義の有無と同じ「GPT 側が未導入」として扱う。
+command -v codex >/dev/null 2>&1 || die_missing "codex コマンドが PATH に無い (docs/setup.md の導入手順を参照)"
 
 # フロントマター(先頭の --- から次の --- まで)を取り出す。
 front_matter="$(sed 's/\r$//' "$def_file" | awk '
@@ -154,7 +187,7 @@ codex_home="$(to_slash "$codex_home")"
 [ -d "$codex_home" ] || die "codex_home が存在しない: $codex_home (docs/setup.md のログイン手順を参照)"
 
 [ -n "$workdir" ] || workdir="$PWD"
-workdir="$(to_slash "$workdir")"
+workdir="$(to_windows_path "$workdir")"
 [ -d "$workdir" ] || die "作業ディレクトリが存在しない: $workdir"
 
 # フロントマター直後から末尾までを役割文として渡す。先頭の空行は落とす。
@@ -167,6 +200,12 @@ role_body="$(sed 's/\r$//' "$def_file" | awk '
 # 依頼文は標準入力から読む。端末から起動されたときは待ち続けてしまうので先に止める。
 [ -t 0 ] && die "依頼文が標準入力から渡されていない"
 request="$(cat)"
+
+# 空白だけの依頼文は Codex を起動しても意味がないので、ここで止める。
+case "$request" in
+  *[![:space:]]*) ;;
+  *) die "依頼文が空である" ;;
+esac
 
 if [ -n "$role_body" ]; then
   prompt="$role_body
@@ -192,7 +231,8 @@ fi
 
 out_file="$(mktemp)"
 err_file="$(mktemp)"
-trap 'rm -f "$out_file" "$err_file"' EXIT
+err_filtered="$(mktemp)"
+trap 'rm -f "$out_file" "$err_file" "$err_filtered"' EXIT
 
 # 認証ホームは常に明示する。既定の ~/.codex への暗黙依存を作らない。
 # --dangerously-bypass-approvals-and-sandbox は付けない。
@@ -207,15 +247,24 @@ codex_status=$?
 
 # 標準エラーからはフックと警告の行だけを除く。
 # 標準出力は Codex の回答本文なので、フィルタを掛けずにそのまま出す。
-grep -v -e '^WARNING' -e '^hook:' "$err_file"
+grep -v -e '^WARNING' -e '^hook:' "$err_file" >"$err_filtered"
+cat "$err_filtered"
 cat "$out_file"
 
 if [ "$codex_status" -ne 0 ]; then
-  if grep -qiE 'usage limit|rate limit|too many requests|429' "$err_file"; then
+  # レートリミットの通知は標準出力に出ることも標準エラーに出ることもあるため、両方を見る。
+  # 標準エラー側はフックと警告を除いた後の内容だけを対象にする。
+  # 429 は単語境界で照合する。ID や桁数の一致で誤検出しないためである。
+  if grep -qiE 'usage limit|rate limit|too many requests|\b429\b' "$out_file" "$err_filtered"; then
     printf 'codex-agent: result=rate-limited\n'
     exit 75
   fi
   printf 'codex-agent: result=failed exit=%s\n' "$codex_status"
+  # Codex 自身の 75 はレートリミットの 75 と区別できないため 1 に写像する。
+  # 元の値は直前の result 行に残している。
+  if [ "$codex_status" -eq 75 ]; then
+    exit 1
+  fi
   exit "$codex_status"
 fi
 

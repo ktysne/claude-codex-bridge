@@ -25,7 +25,7 @@ Claude Code から Codex CLI を、用途別のサブエージェントとして
 
 ## 守るべき設計原則
 
-- 用途固定の原則: アカウント A はレビュー専用、アカウント B は実装補助専用とする。利用上限の回避を目的にアカウントを切り替える構成(枠が尽きたら別アカウントへ回す、など)は導入しない。OpenAI の利用規約が禁じる rate limit の回避と解釈される余地があるためである。
+- 用途固定の原則: アカウント A はレビュー専用、アカウント B は実装補助専用とする。利用上限の回避を目的にアカウントを切り替える構成(枠が尽きたら別アカウントへ回す、など)は導入しない。OpenAI の利用規約が禁じる rate limit の回避と解釈される余地があるためである。現在は 1 アカウント段階であり、既定ホーム(`~/.codex`)を対話と `impl-light`、`impl-standard` の実装補助の両方に使う。用途別アカウントに分けた時点で、実装補助は `~/.codex-subagent` へ移す。
 - 認証の分離: `codex` を呼ぶときは必ず `CODEX_HOME` を明示する。既定の `~/.codex` に暗黙に依存する呼び出しを書かない。
 - 権限の固定: レビュー用は `--sandbox read-only` を外さない。実装補助用でも `--dangerously-bypass-approvals-and-sandbox` は使わない。
 - 認証情報の非コミット: `auth.json`、トークン、アカウント ID をリポジトリに入れない。ドキュメントの例には実値を書かない。
@@ -41,7 +41,7 @@ Claude Code から Codex CLI を、用途別のサブエージェントとして
 codex --version
 CODEX_HOME="$USERPROFILE/.codex-review" codex login status
 CODEX_HOME="$USERPROFILE/.codex-subagent" codex login status
-bash tools/codex-agent.sh impl-light <<< "Reply with exactly: PONG-LUNA"
+bash tools/codex-agent.sh impl-light --effort low <<< "Reply with exactly: PONG-LUNA"  # 実モデルを起動し利用枠を消費する
 ```
 
 エージェント定義(`.claude/agents/*.md`)を変更した場合、Claude Code のセッションを再起動しないと反映されない。
