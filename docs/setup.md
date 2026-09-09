@@ -130,7 +130,7 @@ Claude Code はサブエージェント定義を呼び出せるものとして�
 ### 使う定義
 
 1 アカウントで実装のサブエージェント委譲だけを使う。
-`codex_home` は、次のうち 2 つの GPT 側定義で `~/.codex` のままにする。
+リポジトリの GPT 側定義は 2 アカウント運用の値で書かれているため、次のうち 2 つの GPT 側定義の `codex_home` を `~/.codex` に書き換える。
 
 - `.claude/agents/impl-hard.md`
 - `.claude/agents/impl-light.md`
@@ -158,7 +158,7 @@ Claude Code の `Agent` ツールからも `subagent_type: impl-light` と `suba
 ### 使う定義
 
 1 アカウントで実装の委譲、レビュー、実装補助をすべて使う。
-`codex_home` は、次のうち 4 つの GPT 側定義で `~/.codex` のままにする。
+リポジトリの GPT 側定義は 2 アカウント運用の値で書かれているため、次のうち 4 つの GPT 側定義の `codex_home` を `~/.codex` に書き換える(`codex-review` は既に `~/.codex` である)。
 
 - `.claude/agents/impl-hard.md`
 - `.claude/agents/impl-light.md`
@@ -272,16 +272,18 @@ Claude Code の `Agent` ツールからも、4 つの `subagent_type` をそれ�
 モデルと effort は `.claude/gpt-agents/` 側で指定するため、read-only で動く `codex-review` のホームは設定ファイルがなくても動く。
 既定ホームの `config.toml` をそのままコピーすると、フック、MCP サーバ、通知などの設定まで持ち込まれるため避ける。
 
-Windows では、書き込みを行う定義(`impl-light`、`impl-standard`、`codex-subagent`)が使うホームに、Windows サンドボックスの設定が要る。
-この設定が無いと、Codex は `--sandbox workspace-write` を read-only に落として起動し、ファイルの書き込みを拒否する。
-起動時の見出しの `sandbox:` 行が `read-only` になっていたら、この設定の不足を疑う。
+Windows のサンドボックスは `CODEX_HOME` ごとに設定される。
+書き込みを行う定義(`impl-light`、`impl-standard`、`codex-subagent`)が使うホームでは、この設定が既定ホームから引き継がれない。
+Codex v0.153.4 では、`[windows]` の `sandbox` 設定が無いホームで `--sandbox workspace-write` を指定すると、起動時の見出しに `sandbox: read-only` と出て書き込みが拒否されることを確認している。
+見出しの `sandbox:` 行が `read-only` になっていたら、この設定の不足を疑う。
 既定ホームの `config.toml` から `[windows]` の `sandbox` の値を写し、作業ディレクトリの信頼設定と合わせて、そのホームの `config.toml` に最小限だけ書く。
+信頼設定のパスは、Codex を動かすプロジェクト(または worktree)の絶対パスを小文字で書く。既定ホームの `config.toml` にある `[projects.'...']` の書き方に合わせる。
 
 ```toml
 [windows]
 sandbox = "elevated"  # 既定ホームの config.toml と同じ値にする
 
-[projects.'d:\desktop\develop']
+[projects.'<プロジェクトの絶対パス>']  # 例: 'd:\projects\my-repo'
 trust_level = "trusted"
 ```
 
