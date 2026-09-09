@@ -679,6 +679,44 @@ namespace CodexBridgeConsole.Tests
             }
         }
 
+        [Theory]
+        [InlineData("null")]
+        [InlineData("true")]
+        [InlineData("False")]
+        [InlineData("123")]
+        [InlineData("1.5")]
+        public void Validate_RejectsValuesYamlWouldNotReadAsText(string model)
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+
+                settings.ImplHard.ClaudeModel = model;
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.False(result.Succeeded);
+                Assert.Contains(result.ValidationErrors, e => e.Contains(ClaudeHardPath) && e.Contains("model"));
+            }
+        }
+
+        [Theory]
+        [InlineData("claude-opus-5")]
+        [InlineData("gpt-5.6-luna")]
+        [InlineData("claude-haiku-4-5-20251001")]
+        public void Validate_AcceptsRealModelNames(string model)
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+
+                settings.ImplHard.ClaudeModel = model;
+
+                Assert.Empty(settings.Validate());
+            }
+        }
+
         private static void WriteMismatchedDefinitions(TemporaryDirectory directory)
         {
             WriteDefinitions(directory);

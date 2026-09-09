@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.IO;
 
 namespace CodexBridgeConsole
@@ -382,6 +383,13 @@ namespace CodexBridgeConsole
                 return false;
             }
 
+            // 引用符を付けずに書くため、YAML が文字列以外として読む値は通さない。
+            // model: true や model: 123 は真偽値や数値になり、文字列を期待する定義を壊す。
+            if (IsYamlKeyword(value) || IsNumber(value))
+            {
+                return false;
+            }
+
             for (int i = 0; i < value.Length; i++)
             {
                 char c = value[i];
@@ -535,6 +543,30 @@ namespace CodexBridgeConsole
             }
 
             return null;
+        }
+
+        private static bool IsYamlKeyword(string value)
+        {
+            string[] keywords = { "null", "true", "false", "yes", "no", "on", "off" };
+            for (int i = 0; i < keywords.Length; i++)
+            {
+                if (string.Equals(value, keywords[i], StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsNumber(string value)
+        {
+            double parsed;
+            return double.TryParse(
+                value,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out parsed);
         }
 
         private bool IsCodexEnabledInvalid(DefinitionKind kind)
