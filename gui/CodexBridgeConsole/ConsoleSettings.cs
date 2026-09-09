@@ -603,6 +603,35 @@ namespace CodexBridgeConsole
             return Path.Combine(GetUserProfile(), ".claude");
         }
 
+        // tools/codex-agent.sh は cygpath で /d/... を D:/... へ直す。
+        // 同じ値を同じパスとして扱わないと、存在確認と CODEX_HOME がスクリプトとずれる。
+        private static string ConvertMsysPath(string value)
+        {
+            if (value.Length < 2 || value[0] != '/')
+            {
+                return value;
+            }
+
+            char drive = value[1];
+            bool isDriveLetter = (drive >= 'A' && drive <= 'Z') || (drive >= 'a' && drive <= 'z');
+            if (!isDriveLetter)
+            {
+                return value;
+            }
+
+            if (value.Length == 2)
+            {
+                return char.ToUpperInvariant(drive) + ":\\";
+            }
+
+            if (value[2] != '/')
+            {
+                return value;
+            }
+
+            return char.ToUpperInvariant(drive) + ":\\" + value.Substring(3).Replace('/', '\\');
+        }
+
         private static string GetUserProfile()
         {
             string userProfile = Environment.GetEnvironmentVariable("USERPROFILE");
@@ -640,6 +669,7 @@ namespace CodexBridgeConsole
 
             expanded = expanded.Replace("$USERPROFILE", userProfile);
             expanded = expanded.Replace("%USERPROFILE%", userProfile);
+            expanded = ConvertMsysPath(expanded);
 
             try
             {
