@@ -94,21 +94,254 @@ namespace CodexBridgeConsole
             get { return MissingFiles.Count == 0 && UnreadableFiles.Count == 0; }
         }
 
+        // codex_enabled の不正値は、利用者が何も変えなくても保存で修復する。
+        // 修復待ちは未保存の変更ではないが、保存する意味がある状態として区別する。
+        public bool HasPendingRepairs
+        {
+            get { return CodexEnabledInvalidFiles.Count > 0; }
+        }
+
+        // 保存ボタンを押す意味があるかどうか。未保存の変更か、修復待ちのどちらかがあるときに真になる。
+        public bool NeedsSave
+        {
+            get { return HasChanges || HasPendingRepairs; }
+        }
+
         public bool HasChanges
         {
             get
             {
-                // 保存が途中で止まると、ディスクの内容と読み込み時の値が食い違う。
-                // 入力を戻しても変更なしとは言えないため、再読込か保存の成功まで変更ありとして扱う。
-                // トグルを操作すると、表示上の値が読み込み時と同じでも保存結果が変わる。
-                // 未保存の変更として扱わないと、確認なしに操作が失われる。
-                return _saveInterrupted
-                    || CodexEnabledExplicit
-                    || CodexEnabled != _loadedCodexEnabled
-                    || !ImplHard.HasSameValues(_loadedImplHard)
-                    || !ImplStandard.HasSameValues(_loadedImplStandard)
-                    || !ImplLight.HasSameValues(_loadedImplLight);
+                return DescribeChanges().Count > 0;
             }
+        }
+
+        // 読み込み時の値と現在値の差を 1 行ずつ返す。HasChanges はこの結果で決まるため、
+        // 「変更あり」なのに列挙が空になることはない。
+        // 保存が途中で止まると、ディスクの内容と読み込み時の値が食い違う。
+        // 入力を戻しても変更なしとは言えないため、再読込か保存の成功まで変更ありとして扱う。
+        // トグルを操作すると、表示上の値が読み込み時と同じでも保存結果が変わる。
+        // 未保存の変更として扱わないと、確認なしに操作が失われる。
+        public IReadOnlyList<string> DescribeChanges()
+        {
+            var changes = new List<string>();
+            if (_saveInterrupted)
+            {
+                changes.Add("前回の保存が中断されたため、ディスクと画面の内容が食い違っている");
+            }
+
+            AddClaudeChanges(
+                changes,
+                _loadedImplHard,
+                ImplHard,
+                GetRelativePath(DefinitionKind.ClaudeHard));
+            AddClaudeChanges(
+                changes,
+                _loadedImplStandard,
+                ImplStandard,
+                GetRelativePath(DefinitionKind.ClaudeStandard));
+            AddClaudeChanges(
+                changes,
+                _loadedImplLight,
+                ImplLight,
+                GetRelativePath(DefinitionKind.ClaudeLight));
+            AddGptChanges(
+                changes,
+                _loadedImplStandard,
+                ImplStandard,
+                GetRelativePath(DefinitionKind.GptStandard));
+            AddGptChanges(
+                changes,
+                _loadedImplLight,
+                ImplLight,
+                GetRelativePath(DefinitionKind.GptLight));
+
+            if (CodexEnabled != _loadedCodexEnabled)
+            {
+                changes.Add(
+                    "codex_enabled: "
+                    + FormatCodexEnabled(_loadedCodexEnabled)
+                    + " → "
+                    + FormatCodexEnabled(CodexEnabled));
+            }
+            else if (CodexEnabledExplicit)
+            {
+                changes.Add(
+                    "codex_enabled: 両定義へ「"
+                    + FormatCodexEnabled(CodexEnabled)
+                    + "」を書き戻す");
+            }
+
+            return ReadOnly(changes);
+        }
+
+        private static void AddClaudeChanges(
+            List<string> changes,
+            AgentSettings loaded,
+            AgentSettings current,
+            string relativePath)
+        {
+            AddValueChange(changes, relativePath, "model", loaded.ClaudeModel, current.ClaudeModel);
+            AddValueChange(changes, relativePath, "effort", loaded.ClaudeEffort, current.ClaudeEffort);
+        }
+
+        private static void AddGptChanges(
+            List<string> changes,
+            AgentSettings loaded,
+            AgentSettings current,
+            string relativePath)
+        {
+            AddValueChange(changes, relativePath, "codex_model", loaded.CodexModel, current.CodexModel);
+            AddValueChange(
+                changes,
+                relativePath,
+                "codex_reasoning_effort",
+                loaded.CodexReasoningEffort,
+                current.CodexReasoningEffort);
+        }
+
+        private static void AddValueChange(
+            List<string> changes,
+            string relativePath,
+            string key,
+            string loadedValue,
+            string currentValue)
+        {
+            if (string.Equals(loadedValue, currentValue, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            changes.Add(
+                relativePath
+                + " の "
+                + key
+                + ": "
+                + FormatValue(loadedValue)
+                + " → "
+                + FormatValue(currentValue));
+        }
+
+        private static string FormatValue(string value)
+        {
+            return string.IsNullOrEmpty(value) ? "(空)" : value;
+        }
+
+        private static string FormatCodexEnabled(bool value)
+        {
+            return value ? "有効" : "無効";
+        }
+
+        // 入力中の値を保持したまま読み直す。編集した項目だけを残し、編集していない項目は読み直した値にする。
+        // 全項目を戻すと、外部で変えられた未編集の項目まで次の保存で旧値に戻してしまう。
+        // 編集した項目が外部でも変えられていた場合は入力中の値を優先し、その項目を戻り値で知らせる。
+        public IReadOnlyList<string> ReloadPreservingEdits()
+        {
+            AgentSettings editedHard = ImplHard.Clone();
+            AgentSettings editedStandard = ImplStandard.Clone();
+            AgentSettings editedLight = ImplLight.Clone();
+            AgentSettings previousHard = _loadedImplHard.Clone();
+            AgentSettings previousStandard = _loadedImplStandard.Clone();
+            AgentSettings previousLight = _loadedImplLight.Clone();
+            bool editedCodexEnabled = CodexEnabled;
+            bool codexEnabledEdited = CodexEnabledExplicit || CodexEnabled != _loadedCodexEnabled;
+
+            // codex_enabled は 2 定義の集約値を画面に出すが、外部変更の検出は定義ごとに行う。
+            // 集約値だけを比べると、片方だけが外部で変わった場合を見逃す。
+            bool? previousStandardEnabled = ReadFileCodexEnabled(DefinitionKind.GptStandard);
+            bool? previousLightEnabled = ReadFileCodexEnabled(DefinitionKind.GptLight);
+
+            Reload();
+
+            var conflicts = new List<string>();
+            RestoreClaudeEdits(ImplHard, editedHard, previousHard, GetRelativePath(DefinitionKind.ClaudeHard), conflicts);
+            RestoreClaudeEdits(ImplStandard, editedStandard, previousStandard, GetRelativePath(DefinitionKind.ClaudeStandard), conflicts);
+            RestoreClaudeEdits(ImplLight, editedLight, previousLight, GetRelativePath(DefinitionKind.ClaudeLight), conflicts);
+            RestoreGptEdits(ImplStandard, editedStandard, previousStandard, GetRelativePath(DefinitionKind.GptStandard), conflicts);
+            RestoreGptEdits(ImplLight, editedLight, previousLight, GetRelativePath(DefinitionKind.GptLight), conflicts);
+
+            if (codexEnabledEdited)
+            {
+                AddCodexEnabledConflict(
+                    conflicts, DefinitionKind.GptStandard, previousStandardEnabled, editedCodexEnabled);
+                AddCodexEnabledConflict(
+                    conflicts, DefinitionKind.GptLight, previousLightEnabled, editedCodexEnabled);
+                CodexEnabled = editedCodexEnabled;
+                CodexEnabledExplicit = true;
+            }
+
+            return ReadOnly(conflicts);
+        }
+
+        // 定義の codex_enabled が外部で変わり、入力中の値とも違うときだけ競合として知らせる。
+        private void AddCodexEnabledConflict(
+            List<string> conflicts,
+            DefinitionKind kind,
+            bool? previous,
+            bool edited)
+        {
+            bool? reloaded = ReadFileCodexEnabled(kind);
+            if (previous.HasValue && reloaded.HasValue && reloaded != previous && reloaded != edited)
+            {
+                conflicts.Add(
+                    GetRelativePath(kind) + " の codex_enabled: 外部で " + FormatCodexEnabled(reloaded.Value)
+                    + " に変わったが、入力中の " + FormatCodexEnabled(edited) + " を優先する");
+            }
+        }
+
+        private static void RestoreClaudeEdits(
+            AgentSettings target,
+            AgentSettings edited,
+            AgentSettings previous,
+            string relativePath,
+            List<string> conflicts)
+        {
+            target.ClaudeModel = RestoreEdit(
+                target.ClaudeModel, edited.ClaudeModel, previous.ClaudeModel, relativePath, "model", conflicts);
+            target.ClaudeEffort = RestoreEdit(
+                target.ClaudeEffort, edited.ClaudeEffort, previous.ClaudeEffort, relativePath, "effort", conflicts);
+        }
+
+        private static void RestoreGptEdits(
+            AgentSettings target,
+            AgentSettings edited,
+            AgentSettings previous,
+            string relativePath,
+            List<string> conflicts)
+        {
+            target.CodexModel = RestoreEdit(
+                target.CodexModel, edited.CodexModel, previous.CodexModel, relativePath, "codex_model", conflicts);
+            target.CodexReasoningEffort = RestoreEdit(
+                target.CodexReasoningEffort,
+                edited.CodexReasoningEffort,
+                previous.CodexReasoningEffort,
+                relativePath,
+                "codex_reasoning_effort",
+                conflicts);
+        }
+
+        // 編集されていない項目は読み直した値を返す。編集された項目は入力中の値を返す。
+        private static string RestoreEdit(
+            string reloaded,
+            string edited,
+            string previous,
+            string relativePath,
+            string key,
+            List<string> conflicts)
+        {
+            if (string.Equals(edited, previous, StringComparison.Ordinal))
+            {
+                return reloaded;
+            }
+
+            if (!string.Equals(reloaded, previous, StringComparison.Ordinal)
+                && !string.Equals(reloaded, edited, StringComparison.Ordinal))
+            {
+                conflicts.Add(
+                    relativePath + " の " + key + ": 外部で " + FormatValue(reloaded)
+                    + " に変わったが、入力中の " + FormatValue(edited) + " を優先する");
+            }
+
+            return edited;
         }
 
         public void Reload()
@@ -282,6 +515,11 @@ namespace CodexBridgeConsole
                     if (_files.TryGetValue(definition.RelativePath, out file) && file.Save())
                     {
                         changedFiles.Add(definition.RelativePath);
+
+                        // 書き込めたファイルの分だけ基準値をディスクに合わせる。
+                        // 後続で中断しても、書き込み済みの値を「読み込み時のまま」と誤認しないためである。
+                        // 誤認すると、書き込み前の値へ戻す編集が未編集と判定され、入力を保持する再読込で失われる。
+                        MarkSaved(definition.Kind);
                     }
                 }
             }
@@ -582,6 +820,52 @@ namespace CodexBridgeConsole
             return false;
         }
 
+        private void MarkSaved(DefinitionKind kind)
+        {
+            switch (kind)
+            {
+                case DefinitionKind.ClaudeHard:
+                    CopyClaudeValues(ImplHard, _loadedImplHard);
+                    break;
+                case DefinitionKind.ClaudeStandard:
+                    CopyClaudeValues(ImplStandard, _loadedImplStandard);
+                    break;
+                case DefinitionKind.ClaudeLight:
+                    CopyClaudeValues(ImplLight, _loadedImplLight);
+                    break;
+                case DefinitionKind.GptStandard:
+                    CopyGptValues(ImplStandard, _loadedImplStandard);
+                    break;
+                case DefinitionKind.GptLight:
+                    CopyGptValues(ImplLight, _loadedImplLight);
+                    break;
+            }
+        }
+
+        private static void CopyClaudeValues(AgentSettings source, AgentSettings target)
+        {
+            target.ClaudeModel = source.ClaudeModel;
+            target.ClaudeEffort = source.ClaudeEffort;
+        }
+
+        private static void CopyGptValues(AgentSettings source, AgentSettings target)
+        {
+            target.CodexModel = source.CodexModel;
+            target.CodexReasoningEffort = source.CodexReasoningEffort;
+        }
+
+        // 定義ごとの codex_enabled の実効値。ファイルが無いときは null を返す。
+        private bool? ReadFileCodexEnabled(DefinitionKind kind)
+        {
+            FrontMatterFile file;
+            if (_files.TryGetValue(GetRelativePath(kind), out file))
+            {
+                return ReadEffectiveCodexEnabled(file);
+            }
+
+            return null;
+        }
+
         private void SaveLoadedValues()
         {
             _loadedImplHard = ImplHard.Clone();
@@ -743,14 +1027,6 @@ namespace CodexBridgeConsole
             };
         }
 
-        internal bool HasSameValues(AgentSettings other)
-        {
-            return other != null
-                && string.Equals(ClaudeModel, other.ClaudeModel, StringComparison.Ordinal)
-                && string.Equals(ClaudeEffort, other.ClaudeEffort, StringComparison.Ordinal)
-                && string.Equals(CodexModel, other.CodexModel, StringComparison.Ordinal)
-                && string.Equals(CodexReasoningEffort, other.CodexReasoningEffort, StringComparison.Ordinal);
-        }
     }
 
     public sealed class ConsoleSettingsSaveResult

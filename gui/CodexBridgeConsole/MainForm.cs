@@ -33,10 +33,13 @@ namespace CodexBridgeConsole
 
         private static string _baseFontFamily;
 
+        private static readonly IReadOnlyList<string> EmptyList = new string[0];
+
         private readonly ConsoleSettings _settings;
         private readonly Choices _choices;
         private Label _codexHomeLabel;
         private Label _codexVersionLabel;
+        private Label _codexCatalogLabel;
         private CheckBox _codexEnabledCheckBox;
         private ComboBox _hardModelComboBox;
         private ComboBox _hardEffortComboBox;
@@ -53,6 +56,7 @@ namespace CodexBridgeConsole
         private Button _closeButton;
         private Label _missingFilesLabel;
         private Label _saveStatusLabel;
+        private Color _saveStatusDefaultForeColor;
         private bool _loadingControls;
         private bool _codexVersionStarted;
 
@@ -60,6 +64,9 @@ namespace CodexBridgeConsole
         private CodexModelCatalog _codexModelCatalog;
 
         private string _codexVersionText = "確認中...";
+
+        // codex debug models の取得結果に応じた文言。GPT モデル一覧が目録由来か既定値かを利用者に示す。
+        private string _codexCatalogText = "取得中...";
 
         private Control _layout;
         private TableLayoutPanel _definitionsTable;
@@ -87,6 +94,7 @@ namespace CodexBridgeConsole
 
             BuildControls();
             LoadControlsFromSettings();
+            SetSaveStatus(IdleStatusText(), false);
 
             Load += MainForm_Load;
             FormClosing += MainForm_FormClosing;
@@ -157,6 +165,7 @@ namespace CodexBridgeConsole
                 TextAlign = ContentAlignment.MiddleLeft,
                 Margin = new Padding(3, 3, 3, 3)
             };
+            _saveStatusDefaultForeColor = _saveStatusLabel.ForeColor;
             layout.Controls.Add(_saveStatusLabel);
             layout.Controls.Add(BuildButtonPanel(contentWidth));
 
@@ -294,14 +303,15 @@ namespace CodexBridgeConsole
             var panel = new TableLayoutPanel
             {
                 ColumnCount = 1,
-                RowCount = 2,
+                RowCount = 3,
                 Width = width,
-                Height = SingleLineHeight() * 2 + 12,
+                Height = SingleLineHeight() * 3 + 12,
                 Margin = new Padding(3, 6, 3, 6),
                 Padding = new Padding(0)
             };
-            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
-            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 33.33F));
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 33.33F));
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 33.33F));
 
             _codexHomeLabel = new Label
             {
@@ -317,8 +327,16 @@ namespace CodexBridgeConsole
                 TextAlign = ContentAlignment.MiddleLeft,
                 Margin = new Padding(3, 0, 3, 0)
             };
+            _codexCatalogLabel = new Label
+            {
+                AutoSize = false,
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Margin = new Padding(3, 0, 3, 0)
+            };
             panel.Controls.Add(_codexHomeLabel, 0, 0);
             panel.Controls.Add(_codexVersionLabel, 0, 1);
+            panel.Controls.Add(_codexCatalogLabel, 0, 2);
             return panel;
         }
 
@@ -581,21 +599,26 @@ namespace CodexBridgeConsole
                 + (_settings.CodexSandbox ?? "(未設定)");
             // バージョンの取得は起動時の 1 回だけなので、再読込では取得済みの結果を出し直す。
             _codexVersionLabel.Text = "codex --version: " + _codexVersionText;
+            // 目録の取得も起動時の 1 回だけなので、再読込では取得済みの結果を出し直す。
+            _codexCatalogLabel.Text = "GPT モデル一覧: " + _codexCatalogText;
 
-            if (_settings.MissingFiles.Count > 0 || _settings.UnreadableFiles.Count > 0)
+            if (_settings.MissingFiles.Count > 0)
             {
-                var reasons = new List<string>();
-                if (_settings.MissingFiles.Count > 0)
-                {
-                    reasons.Add("見つからない: " + string.Join(", ", _settings.MissingFiles));
-                }
-
+                // ラベルは 2 行固定で末尾が省略記号になる。ファイル一覧は長くなりやすく、
+                // 後ろに置くと配置手順の案内ごと切れてしまうため、案内を一覧より前に置く。
+                var text = new StringBuilder("保存できない。定義の配置は docs/setup.md の手順に従う。");
+                text.Append("見つからない: ").Append(string.Join(", ", _settings.MissingFiles)).Append('。');
                 if (_settings.UnreadableFiles.Count > 0)
                 {
-                    reasons.Add("読めない: " + string.Join(" / ", _settings.UnreadableFiles));
+                    text.Append("読めない: ").Append(string.Join(" / ", _settings.UnreadableFiles));
                 }
 
-                _missingFilesLabel.Text = "保存できない。" + string.Join("  ", reasons);
+                _missingFilesLabel.Text = text.ToString();
+            }
+            else if (_settings.UnreadableFiles.Count > 0)
+            {
+                // 読めないだけの場合、置き場所は分かっていて中身が壊れているだけなので配置手順は無関係である。
+                _missingFilesLabel.Text = "保存できない。読めない: " + string.Join(" / ", _settings.UnreadableFiles);
             }
             else if (_settings.CodexEnabledInvalidFiles.Count > 0)
             {
@@ -618,9 +641,26 @@ namespace CodexBridgeConsole
             AdjustWindowSize();
         }
 
+        // 未保存の変更が無いときの状態行。修復待ちがあるときは、ボタンが押せる理由を示す。
+        private string IdleStatusText()
+        {
+            return _settings.HasPendingRepairs
+                ? "保存すると codex_enabled の不正値を直します。"
+                : "変更はありません。";
+        }
+
+        // 状態行の文字色は失敗のときだけ警告色にする。成功と未保存は通常色で区別しない。
+        private void SetSaveStatus(string text, bool isError)
+        {
+            _saveStatusLabel.Text = text;
+            _saveStatusLabel.ForeColor = isError
+                ? _missingFilesLabel.ForeColor
+                : _saveStatusDefaultForeColor;
+        }
+
         private void UpdateControlState()
         {
-            _saveButton.Enabled = _settings.CanSave;
+            _saveButton.Enabled = _settings.CanSave && _settings.NeedsSave;
             UpdateGptControlState();
         }
 
@@ -670,28 +710,54 @@ namespace CodexBridgeConsole
 
             SyncSettingsFromControls();
             UpdateControlState();
+            SetSaveStatus(_settings.HasChanges ? "未保存の変更があります。" : IdleStatusText(), false);
         }
 
         private void ReloadButton_Click(object sender, EventArgs e)
         {
             SyncSettingsFromControls();
+            bool preserveInput = false;
             if (_settings.HasChanges)
             {
+                string message = "未保存の変更があります。定義ファイルを読み直しますか。"
+                    + Environment.NewLine
+                    + Environment.NewLine
+                    + string.Join(Environment.NewLine, _settings.DescribeChanges())
+                    + Environment.NewLine
+                    + Environment.NewLine
+                    + "「はい」: 上の項目は入力中の値を残し、それ以外は定義ファイルの値に読み直します。"
+                    + Environment.NewLine
+                    + "「いいえ」: 入力を捨てて読み直します。"
+                    + Environment.NewLine
+                    + "「キャンセル」: 何もしません。";
+
+                // 既定はキャンセルにする。Enter の連打で入力が消えないようにするためである。
                 DialogResult result = MessageBox.Show(
                     this,
-                    "未保存の変更を破棄して再読込しますか。",
+                    message,
                     "再読込の確認",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Warning);
-                if (result != DialogResult.Yes)
+                    MessageBoxButtons.YesNoCancel,
+                    MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button3);
+                if (result == DialogResult.Cancel)
                 {
                     return;
                 }
+
+                preserveInput = result == DialogResult.Yes;
             }
 
+            IReadOnlyList<string> conflicts = EmptyList;
             try
             {
-                _settings.Reload();
+                if (preserveInput)
+                {
+                    conflicts = _settings.ReloadPreservingEdits();
+                }
+                else
+                {
+                    _settings.Reload();
+                }
             }
             catch (Exception exception) when (
                 exception is IOException
@@ -706,12 +772,31 @@ namespace CodexBridgeConsole
                     "再読込に失敗",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
-                _saveStatusLabel.Text = "再読込に失敗しました。表示は読み込み前のままです。";
+                SetSaveStatus("再読込に失敗しました。表示は読み込み前のままです。", true);
                 return;
             }
 
             LoadControlsFromSettings();
-            _saveStatusLabel.Text = "再読込しました。未保存の変更は破棄されています。";
+            SetSaveStatus(
+                preserveInput
+                    ? "再読込しました。編集した項目は入力中の値を保持しています。"
+                    : "再読込しました。未保存の変更は破棄されています。",
+                false);
+
+            // 編集した項目が外部でも変わっていたときは、どちらを採ったかを見せる。
+            // 黙って入力中の値を残すと、外部の変更に気づかないまま上書き保存してしまう。
+            if (conflicts.Count > 0)
+            {
+                MessageBox.Show(
+                    this,
+                    "編集した項目が定義ファイル側でも変わっていました。入力中の値を残しています。"
+                        + Environment.NewLine
+                        + Environment.NewLine
+                        + string.Join(Environment.NewLine, conflicts),
+                    "外部の変更と重なった項目",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
         }
 
         private void SaveButton_Click(object sender, EventArgs e)
@@ -736,17 +821,19 @@ namespace CodexBridgeConsole
             {
                 // 書き込みは 1 ファイルずつ行うため、中断までに保存されたファイルが残る。どれが残ったかを示す。
                 string savedFiles = string.Join(", ", _settings.LastChangedFiles);
-                string message = "読み込み後に定義ファイルが外部で変更されたため保存できません。再読込してから、もう一度保存してください。";
+                string message = "読み込み後に定義ファイルが外部で変更されたため保存できません。再読込で「はい」(入力を保持)を選んでから、もう一度保存してください。";
                 if (_settings.LastChangedFiles.Count > 0)
                 {
                     message += Environment.NewLine
                         + Environment.NewLine
                         + "中断までに保存されたファイル: " + savedFiles;
-                    _saveStatusLabel.Text = "保存を中断しました。中断までに保存されたファイル: " + savedFiles;
+                    SetSaveStatus(
+                        "保存を中断しました。中断までに保存されたファイル: " + savedFiles,
+                        true);
                 }
                 else
                 {
-                    _saveStatusLabel.Text = "保存を中断しました。書き換えられたファイルはありません。";
+                    SetSaveStatus("保存を中断しました。書き換えられたファイルはありません。", true);
                 }
 
                 MessageBox.Show(
@@ -770,10 +857,12 @@ namespace CodexBridgeConsole
                 }
 
                 // ダイアログを閉じた後に前回の成功表示が残らないよう、状態行も更新する。
-                _saveStatusLabel.Text = _settings.LastChangedFiles.Count > 0
-                    ? "保存に失敗しました。中断までに保存されたファイル: "
-                        + string.Join(", ", _settings.LastChangedFiles)
-                    : "保存に失敗しました。書き換えられたファイルはありません。";
+                SetSaveStatus(
+                    _settings.LastChangedFiles.Count > 0
+                        ? "保存に失敗しました。中断までに保存されたファイル: "
+                            + string.Join(", ", _settings.LastChangedFiles)
+                        : "保存に失敗しました。書き換えられたファイルはありません。",
+                    true);
 
                 MessageBox.Show(
                     this,
@@ -792,18 +881,21 @@ namespace CodexBridgeConsole
                     "入力を確認",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
+                SetSaveStatus("入力に不備があるため保存していません。", true);
                 UpdateControlState();
                 return false;
             }
 
             if (result.ChangedFiles.Count == 0)
             {
-                _saveStatusLabel.Text = "変更されたファイルはありません。";
+                SetSaveStatus("保存しました。変更はありません。", false);
             }
             else
             {
-                _saveStatusLabel.Text = "書き換えたファイル: "
-                    + string.Join(", ", result.ChangedFiles);
+                SetSaveStatus(
+                    "保存しました。書き換えたファイル: "
+                        + string.Join(", ", result.ChangedFiles),
+                    false);
             }
 
             UpdateStatusDisplay();
@@ -834,14 +926,35 @@ namespace CodexBridgeConsole
         {
             // CODEX_HOME は必ず明示する。既定の ~/.codex への暗黙依存を作らないためである。
             string codexHome = _settings.ExpandedCodexHome;
+            if (string.IsNullOrEmpty(codexHome))
+            {
+                // codexHome が空だと CodexModelCatalog.Load は必ず null を返すため、起動もしない。
+                SetCodexCatalogText("認証ホーム未設定のため取得しない。既定値を使用");
+                return;
+            }
+
             CodexModelCatalog catalog = await Task.Run(() => CodexModelCatalog.Load(codexHome));
-            if (IsDisposed || Disposing || catalog == null)
+            if (IsDisposed || Disposing)
             {
                 return;
             }
 
+            if (catalog == null)
+            {
+                SetCodexCatalogText("取得できないため既定値を使用");
+                return;
+            }
+
+            SetCodexCatalogText("codex debug models から取得");
             _codexModelCatalog = catalog;
             ApplyCodexModelCatalog();
+        }
+
+        // 取得結果は保持し、再読込では UpdateStatusDisplay が同じ文言を出し直す。
+        private void SetCodexCatalogText(string text)
+        {
+            _codexCatalogText = text;
+            _codexCatalogLabel.Text = "GPT モデル一覧: " + text;
         }
 
         private void ApplyCodexModelCatalog()
@@ -1179,7 +1292,10 @@ namespace CodexBridgeConsole
 
             DialogResult result = MessageBox.Show(
                 this,
-                "未保存の変更があります。保存して閉じますか。",
+                "未保存の変更があります。保存して閉じますか。"
+                    + Environment.NewLine
+                    + Environment.NewLine
+                    + string.Join(Environment.NewLine, _settings.DescribeChanges()),
                 "終了の確認",
                 MessageBoxButtons.YesNoCancel,
                 MessageBoxIcon.Warning);
