@@ -408,7 +408,7 @@ namespace CodexBridgeConsole.Tests
         }
 
         [Fact]
-        public void Reload_KeepsPreviousStateWhenDefinitionIsBroken()
+        public void Reload_ReportsUnreadableDefinitionInsteadOfThrowing()
         {
             using (var directory = new TemporaryDirectory())
             {
@@ -417,13 +417,31 @@ namespace CodexBridgeConsole.Tests
 
                 // 閉じの --- が無いフロントマターは読み込みに失敗する。
                 WriteDefinition(directory, GptLightPath, "---\ncodex_model: broken\n本文\n");
+                settings.Reload();
 
-                Assert.Throws<InvalidDataException>(() => settings.Reload());
-
-                // 読み込み前の値と、保存できる状態が保たれている。
-                Assert.Equal("codex-light-model", settings.ImplLight.CodexModel);
-                Assert.True(settings.CanSave);
+                Assert.Single(settings.UnreadableFiles);
+                Assert.Contains(GptLightPath, settings.UnreadableFiles[0]);
+                Assert.False(settings.CanSave);
                 Assert.Empty(settings.MissingFiles);
+            }
+        }
+
+        [Fact]
+        public void Validate_RejectsValuesThatWouldBreakYaml()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+
+                settings.ImplHard.ClaudeModel = "foo: bar";
+                settings.ImplLight.CodexModel = "[";
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.False(result.Succeeded);
+                Assert.Contains(result.ValidationErrors, e => e.Contains(ClaudeHardPath) && e.Contains("model"));
+                Assert.Contains(result.ValidationErrors, e => e.Contains(GptLightPath) && e.Contains("codex_model"));
+                Assert.Contains("claude-hard-model", ReadDefinition(directory, ClaudeHardPath));
             }
         }
 

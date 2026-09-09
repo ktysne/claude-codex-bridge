@@ -8,6 +8,8 @@ namespace CodexBridgeConsole
     public sealed class ConsoleSettings
     {
         private const string CodexEnabledKey = "codex_enabled";
+
+        private const string ScalarRuleText = " (使えるのは英数字と . _ - / だけである)";
         private const string CodexHomeKey = "codex_home";
         private const string CodexSandboxKey = "codex_sandbox";
 
@@ -78,9 +80,11 @@ namespace CodexBridgeConsole
 
         public IReadOnlyList<string> LastValidationErrors { get; private set; }
 
+        public IReadOnlyList<string> UnreadableFiles { get; private set; }
+
         public bool CanSave
         {
-            get { return MissingFiles.Count == 0; }
+            get { return MissingFiles.Count == 0 && UnreadableFiles.Count == 0; }
         }
 
         public bool HasChanges
@@ -100,6 +104,7 @@ namespace CodexBridgeConsole
         public void Reload()
         {
             var missingFiles = new List<string>();
+            var unreadableFiles = new List<string>();
 
             // すべて読み終えてから差し替える。
             // 途中で失敗したときに、ファイル一覧と画面の値が食い違った状態を残さないためである。
@@ -114,7 +119,19 @@ namespace CodexBridgeConsole
                     continue;
                 }
 
-                loadedFiles.Add(definition.RelativePath, FrontMatterFile.Load(path));
+                try
+                {
+                    loadedFiles.Add(definition.RelativePath, FrontMatterFile.Load(path));
+                }
+                catch (Exception exception) when (
+                    exception is InvalidDataException
+                    || exception is IOException
+                    || exception is UnauthorizedAccessException)
+                {
+                    // 読めない定義があっても画面は開く。定義を直すための道具が、
+                    // 定義が壊れているときに起動できないと使えないためである。
+                    unreadableFiles.Add(definition.RelativePath + ": " + exception.Message);
+                }
             }
 
             _files.Clear();
@@ -158,6 +175,7 @@ namespace CodexBridgeConsole
             ReadGptSettings(ImplLight, DefinitionKind.GptLight);
 
             MissingFiles = ReadOnly(missingFiles);
+            UnreadableFiles = ReadOnly(unreadableFiles);
             LastChangedFiles = ReadOnly(new List<string>());
             LastValidationErrors = ReadOnly(new List<string>());
             SaveLoadedValues();
@@ -272,11 +290,42 @@ namespace CodexBridgeConsole
             {
                 errors.Add(relativePath + " の model が空である");
             }
+            else if (!IsSafeScalar(settings.ClaudeModel))
+            {
+                errors.Add(relativePath + " の model に使えない文字がある: " + settings.ClaudeModel + ScalarRuleText);
+            }
 
             if (string.IsNullOrWhiteSpace(settings.ClaudeEffort))
             {
                 errors.Add(relativePath + " の effort が空である");
             }
+            else if (!IsSafeScalar(settings.ClaudeEffort))
+            {
+                errors.Add(relativePath + " の effort に使えない文字がある: " + settings.ClaudeEffort + ScalarRuleText);
+            }
+        }
+
+        // フロントマターへ引用符なしで書くため、YAML の意味を変える文字を通さない。
+        // Claude 側の定義は Claude Code が YAML として読むため、model: foo: bar のような値で壊れる。
+        private static bool IsSafeScalar(string value)
+        {
+            for (int i = 0; i < value.Length; i++)
+            {
+                char c = value[i];
+                bool allowed = (c >= 'A' && c <= 'Z')
+                    || (c >= 'a' && c <= 'z')
+                    || (c >= '0' && c <= '9')
+                    || c == '.'
+                    || c == '_'
+                    || c == '-'
+                    || c == '/';
+                if (!allowed)
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private void ValidateGpt(
@@ -287,6 +336,10 @@ namespace CodexBridgeConsole
             if (CodexEnabled && string.IsNullOrWhiteSpace(settings.CodexModel))
             {
                 errors.Add(relativePath + " の codex_model が空である");
+            }
+            else if (!string.IsNullOrWhiteSpace(settings.CodexModel) && !IsSafeScalar(settings.CodexModel))
+            {
+                errors.Add(relativePath + " の codex_model に使えない文字がある: " + settings.CodexModel + ScalarRuleText);
             }
 
             if (!IsValidGptEffort(settings.CodexReasoningEffort))
