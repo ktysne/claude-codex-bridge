@@ -445,6 +445,76 @@ namespace CodexBridgeConsole.Tests
             }
         }
 
+        [Fact]
+        public void HasChanges_StaysTrueAfterInterruptedSave()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+                string blockedPath = GetPath(directory, GptLightPath);
+                File.SetAttributes(blockedPath, FileAttributes.ReadOnly);
+                try
+                {
+                    settings.ImplHard.ClaudeModel = "claude-hard-model-updated";
+                    settings.ImplLight.CodexModel = "codex-light-model-updated";
+                    Assert.ThrowsAny<Exception>(() => settings.Save());
+
+                    // 入力を読み込み時の値へ戻しても、ディスクには保存済みの値が残る。
+                    settings.ImplHard.ClaudeModel = "claude-hard-model";
+                    settings.ImplLight.CodexModel = "codex-light-model";
+
+                    Assert.True(settings.HasChanges);
+                }
+                finally
+                {
+                    File.SetAttributes(blockedPath, FileAttributes.Normal);
+                }
+
+                settings.Reload();
+                Assert.False(settings.HasChanges);
+            }
+        }
+
+        [Fact]
+        public void Save_FailsValidationWhenDefinitionIsUnreadable()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+                WriteDefinition(directory, ClaudeHardPath, "---\nmodel: broken\n本文\n");
+                settings.Reload();
+
+                settings.ImplStandard.ClaudeModel = "claude-standard-model-updated";
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.False(result.Succeeded);
+                Assert.Contains(result.ValidationErrors, e => e.Contains(ClaudeHardPath));
+                Assert.Empty(result.ChangedFiles);
+            }
+        }
+
+        [Theory]
+        [InlineData("-")]
+        [InlineData("--")]
+        [InlineData("-model")]
+        [InlineData(".")]
+        public void Validate_RejectsScalarsThatAreNotPlainValues(string model)
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+
+                settings.ImplHard.ClaudeModel = model;
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.False(result.Succeeded);
+                Assert.Contains(result.ValidationErrors, e => e.Contains(ClaudeHardPath) && e.Contains("model"));
+            }
+        }
+
         private static void WriteMismatchedDefinitions(TemporaryDirectory directory)
         {
             WriteDefinitions(directory);
