@@ -157,7 +157,7 @@ Claude Code が受け付ける値の一覧をこの文書で断定しないた�
 
 ## `tools/codex-agent.sh` の変更
 
-フロントマターを読んだ後、`codex_sandbox` の検証と同じ位置で `codex_enabled` を読む。
+フロントマターを読んだ後、他のキーの検証より前に `codex_enabled` を読む。
 
 ```bash
 codex_enabled="$(fm_get codex_enabled)"
@@ -170,8 +170,13 @@ esac
 ```
 
 `die_missing` は既存の終了コード 3 の経路である。
-`codex_home` の存在確認より前に置く。
-無効化されているときは認証ホームが無くても止まらないようにするためである。
+他のキーの検証より前に置く。
+無効化されているときは、認証ホームが無くても、`codex_model` などが未設定でも止まらないようにするためである。
+設定コンソールはトグルが無効のとき `codex_model` を検査しないため、その状態でも終了コード 3 で Claude 側へ渡す必要がある。
+
+あわせて `die_missing` に `codex-agent: result=failed exit=3` の出力を足す。
+[gpt-agents.md](gpt-agents.md) は「スクリプトは末尾に結果の 1 行を出す」と定めているが、この経路だけが出していなかったためである。
+既存の 2 経路(定義ファイルが無い、`codex` コマンドが PATH に無い)にもこの行が出るようになる。
 
 あわせて次の文書と定義を直す。
 
