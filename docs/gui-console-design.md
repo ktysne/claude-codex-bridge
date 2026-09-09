@@ -253,5 +253,6 @@ bash tools/codex-agent.sh impl-light --effort low <<< "Reply with exactly: PONG-
 ## 既知の制約
 
 - 設定コンソールは Claude Code の起動中のセッションには影響しない。反映には再起動が要る。
+- 保存時の外部変更の検出には、ごく短い競合の余地が残る。照合を終えてから `File.Replace` で置き換えるまでの間に別のプロセスがそのファイルを保存すると、その変更を検出できない。照合から置換までを排他制御で囲むと、一時ファイルを経由した原子的な置き換えと両立しない。単一の利用者が 5 つのファイルを編集するこの用途では、この競合を許容する。
 - ユーザ定義側だけを対象にするため、利用先プロジェクトの `.claude/` に同名の定義があると、そちらが優先されて設定コンソールの変更が効かない。優先順位は [gpt-agents.md](gpt-agents.md) の「定義の探索」を参照。
 - `codex_enabled: false` は `impl-light` と `impl-standard` を Claude 側の実装に切り替えるだけであり、`codex-review` と `codex-subagent` には影響しない。これらは明示的に Codex へ依頼する定義であり、Claude 側が代行すると依頼の意味が変わるためである。
