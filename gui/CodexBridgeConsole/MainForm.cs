@@ -599,20 +599,23 @@ namespace CodexBridgeConsole
             // 目録の取得も起動時の 1 回だけなので、再読込では取得済みの結果を出し直す。
             _codexCatalogLabel.Text = "GPT モデル一覧: " + _codexCatalogText;
 
-            if (_settings.MissingFiles.Count > 0 || _settings.UnreadableFiles.Count > 0)
+            if (_settings.MissingFiles.Count > 0)
             {
-                var reasons = new List<string>();
-                if (_settings.MissingFiles.Count > 0)
-                {
-                    reasons.Add("見つからない: " + string.Join(", ", _settings.MissingFiles));
-                }
-
+                // ラベルは 2 行固定で末尾が省略記号になる。ファイル一覧は長くなりやすく、
+                // 後ろに置くと配置手順の案内ごと切れてしまうため、案内を一覧より前に置く。
+                var text = new StringBuilder("保存できない。定義の配置は docs/setup.md の手順に従う。");
+                text.Append("見つからない: ").Append(string.Join(", ", _settings.MissingFiles)).Append('。');
                 if (_settings.UnreadableFiles.Count > 0)
                 {
-                    reasons.Add("読めない: " + string.Join(" / ", _settings.UnreadableFiles));
+                    text.Append("読めない: ").Append(string.Join(" / ", _settings.UnreadableFiles));
                 }
 
-                _missingFilesLabel.Text = "保存できない。" + string.Join("  ", reasons);
+                _missingFilesLabel.Text = text.ToString();
+            }
+            else if (_settings.UnreadableFiles.Count > 0)
+            {
+                // 読めないだけの場合、置き場所は分かっていて中身が壊れているだけなので配置手順は無関係である。
+                _missingFilesLabel.Text = "保存できない。読めない: " + string.Join(" / ", _settings.UnreadableFiles);
             }
             else if (_settings.CodexEnabledInvalidFiles.Count > 0)
             {
