@@ -169,7 +169,9 @@ codex_effort="$(fm_get codex_reasoning_effort)"
 codex_sandbox="$(fm_get codex_sandbox)"
 codex_enabled="$(fm_get codex_enabled)"
 
-[ -n "$codex_enabled" ] || codex_enabled="true"
+# キーが無いときだけ true を補う。値を書きかけた指定は不正として止める。
+# 他のキーと違い、既定が Codex を起動する側に倒れるためである。
+grep -q '^codex_enabled:' <<<"$front_matter" || codex_enabled="true"
 case "$codex_enabled" in
   true) ;;
   false) die_missing "GPT 側が無効化されている (codex_enabled: false): $def_file" ;;

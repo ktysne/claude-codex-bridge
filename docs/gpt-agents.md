@@ -66,7 +66,7 @@ GPT 側の定義(`.claude/gpt-agents/<name>.md`)で使うキーは次の 5 つ�
 - **codex_model**：`codex exec -m` に渡すモデル名。必須。
 - **codex_reasoning_effort**：`-c model_reasoning_effort=` に渡す値。省略時は `medium`。`low`、`medium`、`high`、`xhigh`、`max` のみを受け付ける。
 - **codex_sandbox**：`--sandbox` に渡す値。省略時は `read-only`。`read-only` と `workspace-write` のみを受け付ける。
-- **codex_enabled**：`true` または `false` のみを受け付ける。省略時は `true`。`false` のときは Codex を起動せず終了コード 3 で止まる。それ以外の値は終了コード 2 で止まる。省略時を `true` とするのは、既存の定義ファイルを書き換えずに動かし続けるためである。
+- **codex_enabled**：`true` または `false` のみを受け付ける。省略時は `true`。`false` のときは Codex を起動せず終了コード 3 で止まる。それ以外の値は終了コード 2 で止まる。キーを書いて値を空にした場合は省略とみなさず、終了コード 2 で止まる。省略時を `true` とするのは、既存の定義ファイルを書き換えずに動かし続けるためである。
 
 `--dangerously-bypass-approvals-and-sandbox` はスクリプトに存在せず、フロントマターからも指定できない。
 
