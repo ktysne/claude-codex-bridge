@@ -350,6 +350,63 @@ namespace CodexBridgeConsole.Tests
             }
         }
 
+        [Fact]
+        public void HasChanges_IsTrueWhenToggleIsOperatedOnMismatch()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteMismatchedDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+
+                Assert.False(settings.HasChanges);
+                settings.CodexEnabledExplicit = true;
+
+                Assert.True(settings.HasChanges);
+            }
+        }
+
+        [Fact]
+        public void Save_ClearsMismatchAfterNormalizing()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteMismatchedDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+                settings.CodexEnabledExplicit = true;
+
+                Assert.True(settings.Save().Succeeded);
+
+                Assert.False(settings.CodexEnabledMismatch);
+                Assert.False(settings.HasChanges);
+            }
+        }
+
+        [Fact]
+        public void Save_ReportsAlreadySavedFilesWhenWriteFails()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+                string blockedPath = GetPath(directory, GptLightPath);
+                File.SetAttributes(blockedPath, FileAttributes.ReadOnly);
+                try
+                {
+                    settings.ImplHard.ClaudeModel = "claude-hard-model-updated";
+                    settings.ImplLight.CodexModel = "codex-light-model-updated";
+
+                    Assert.ThrowsAny<Exception>(() => settings.Save());
+
+                    Assert.Equal(new[] { ClaudeHardPath }, settings.LastChangedFiles);
+                    Assert.Contains("claude-hard-model-updated", ReadDefinition(directory, ClaudeHardPath));
+                }
+                finally
+                {
+                    File.SetAttributes(blockedPath, FileAttributes.Normal);
+                }
+            }
+        }
+
         private static void WriteMismatchedDefinitions(TemporaryDirectory directory)
         {
             WriteDefinitions(directory);
