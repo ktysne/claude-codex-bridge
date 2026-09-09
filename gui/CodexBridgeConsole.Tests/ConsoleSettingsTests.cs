@@ -407,6 +407,26 @@ namespace CodexBridgeConsole.Tests
             }
         }
 
+        [Fact]
+        public void Reload_KeepsPreviousStateWhenDefinitionIsBroken()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+
+                // 閉じの --- が無いフロントマターは読み込みに失敗する。
+                WriteDefinition(directory, GptLightPath, "---\ncodex_model: broken\n本文\n");
+
+                Assert.Throws<InvalidDataException>(() => settings.Reload());
+
+                // 読み込み前の値と、保存できる状態が保たれている。
+                Assert.Equal("codex-light-model", settings.ImplLight.CodexModel);
+                Assert.True(settings.CanSave);
+                Assert.Empty(settings.MissingFiles);
+            }
+        }
+
         private static void WriteMismatchedDefinitions(TemporaryDirectory directory)
         {
             WriteDefinitions(directory);

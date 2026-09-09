@@ -100,8 +100,10 @@ namespace CodexBridgeConsole
         public void Reload()
         {
             var missingFiles = new List<string>();
-            _files.Clear();
 
+            // すべて読み終えてから差し替える。
+            // 途中で失敗したときに、ファイル一覧と画面の値が食い違った状態を残さないためである。
+            var loadedFiles = new Dictionary<string, FrontMatterFile>(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < DefinitionPaths.Length; i++)
             {
                 DefinitionPath definition = DefinitionPaths[i];
@@ -112,7 +114,13 @@ namespace CodexBridgeConsole
                     continue;
                 }
 
-                _files.Add(definition.RelativePath, FrontMatterFile.Load(path));
+                loadedFiles.Add(definition.RelativePath, FrontMatterFile.Load(path));
+            }
+
+            _files.Clear();
+            foreach (KeyValuePair<string, FrontMatterFile> entry in loadedFiles)
+            {
+                _files.Add(entry.Key, entry.Value);
             }
 
             ImplHard = ReadClaudeSettings(DefinitionKind.ClaudeHard);
