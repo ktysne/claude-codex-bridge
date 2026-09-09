@@ -574,6 +574,63 @@ namespace CodexBridgeConsole.Tests
             }
         }
 
+        [Fact]
+        public void Load_FillsOmittedGptEffortWithScriptDefault()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                WriteDefinition(
+                    directory,
+                    GptLightPath,
+                    "---\ncodex_home: ~/.codex\ncodex_model: codex-light-model\ncodex_sandbox: workspace-write\n---\n本文\n");
+                var settings = new ConsoleSettings(directory.Path);
+
+                Assert.Equal("medium", settings.ImplLight.CodexReasoningEffort);
+                Assert.Empty(settings.Validate());
+            }
+        }
+
+        [Fact]
+        public void Save_DoesNotAddOmittedGptEffortWhenUnchanged()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                WriteDefinition(
+                    directory,
+                    GptLightPath,
+                    "---\ncodex_home: ~/.codex\ncodex_model: codex-light-model\ncodex_sandbox: workspace-write\n---\n本文\n");
+                var settings = new ConsoleSettings(directory.Path);
+
+                settings.ImplHard.ClaudeModel = "claude-hard-model-updated";
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.True(result.Succeeded);
+                Assert.Equal(new[] { ClaudeHardPath }, result.ChangedFiles);
+                Assert.DoesNotContain("codex_reasoning_effort", ReadDefinition(directory, GptLightPath));
+            }
+        }
+
+        [Fact]
+        public void Save_AddsGptEffortWhenChangedFromDefault()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                WriteDefinition(
+                    directory,
+                    GptLightPath,
+                    "---\ncodex_home: ~/.codex\ncodex_model: codex-light-model\ncodex_sandbox: workspace-write\n---\n本文\n");
+                var settings = new ConsoleSettings(directory.Path);
+
+                settings.ImplLight.CodexReasoningEffort = "xhigh";
+                Assert.True(settings.Save().Succeeded);
+
+                Assert.Contains("codex_reasoning_effort: xhigh", ReadDefinition(directory, GptLightPath));
+            }
+        }
+
         private static void WriteMismatchedDefinitions(TemporaryDirectory directory)
         {
             WriteDefinitions(directory);

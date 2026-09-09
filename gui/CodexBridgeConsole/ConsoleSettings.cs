@@ -10,6 +10,8 @@ namespace CodexBridgeConsole
         private const string CodexEnabledKey = "codex_enabled";
 
         private const string ScalarRuleText = " (使えるのは英数字と . _ - / だけである)";
+
+        private const string DefaultGptEffort = "medium";
         private const string CodexHomeKey = "codex_home";
         private const string CodexSandboxKey = "codex_sandbox";
 
@@ -321,7 +323,13 @@ namespace CodexBridgeConsole
             }
 
             settings.CodexModel = file.GetValue("codex_model");
-            settings.CodexReasoningEffort = file.GetValue("codex_reasoning_effort");
+
+            // tools/codex-agent.sh は codex_reasoning_effort の省略と空値を medium として扱う。
+            // 画面でも同じ既定値を補う。補わないと、正常に動く定義を開いただけで保存できなくなる。
+            string effort = file.GetValue("codex_reasoning_effort");
+            settings.CodexReasoningEffort = string.IsNullOrWhiteSpace(effort)
+                ? DefaultGptEffort
+                : effort;
         }
 
         private void ValidateClaude(
@@ -439,7 +447,19 @@ namespace CodexBridgeConsole
                 SetCodexEnabled(file, CodexEnabled);
             }
             file.SetValue("codex_model", settings.CodexModel);
-            file.SetValue("codex_reasoning_effort", settings.CodexReasoningEffort);
+
+            // 省略された codex_reasoning_effort は medium として読む。
+            // 画面で変えていないのにキーを足すと、値が変わっていないファイルを書き換えることになる。
+            string currentEffort;
+            bool hasEffort = file.TryGetValue("codex_reasoning_effort", out currentEffort);
+            bool effortIsDefault = string.Equals(
+                settings.CodexReasoningEffort,
+                DefaultGptEffort,
+                StringComparison.Ordinal);
+            if (hasEffort || !effortIsDefault)
+            {
+                file.SetValue("codex_reasoning_effort", settings.CodexReasoningEffort);
+            }
         }
 
         private static void SetCodexEnabled(FrontMatterFile file, bool enabled)
