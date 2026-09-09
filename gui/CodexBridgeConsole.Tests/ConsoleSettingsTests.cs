@@ -376,6 +376,69 @@ namespace CodexBridgeConsole.Tests
         }
 
         [Fact]
+        public void ReloadPreservingEdits_KeepsRevertAfterInterruptedSave()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+
+                // 先頭のファイルだけ保存され、最後のファイルで中断する状態を作る。
+                WriteDefinition(
+                    directory,
+                    GptLightPath,
+                    GptDefinition("codex-light-model-external", "high", null));
+                settings.ImplHard.ClaudeModel = "claude-hard-model-updated";
+                settings.ImplLight.CodexModel = "codex-light-model-updated";
+                Assert.Throws<FrontMatterFileChangedException>(() => settings.Save());
+
+                // 書き込み済みの値を元に戻す編集は、未編集ではなく差分として扱われる。
+                settings.ImplHard.ClaudeModel = "claude-hard-model";
+                Assert.Contains(
+                    ClaudeHardPath + " の model: claude-hard-model-updated → claude-hard-model",
+                    settings.DescribeChanges());
+
+                IReadOnlyList<string> conflicts = settings.ReloadPreservingEdits();
+
+                // 戻した値が保持され、外部と重なった light の codex_model だけが競合として報告される。
+                Assert.Equal(
+                    new[]
+                    {
+                        GptLightPath
+                            + " の codex_model: 外部で codex-light-model-external に変わったが、入力中の codex-light-model-updated を優先する"
+                    },
+                    conflicts);
+                Assert.Equal("claude-hard-model", settings.ImplHard.ClaudeModel);
+                Assert.Equal("codex-light-model-updated", settings.ImplLight.CodexModel);
+                Assert.True(settings.HasChanges);
+            }
+        }
+
+        [Fact]
+        public void ReloadPreservingEdits_ReportsCodexEnabledConflictPerDefinition()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                // standard=false / light=true の食い違いから始め、画面で有効にする。
+                WriteMismatchedDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+                settings.CodexEnabled = true;
+                settings.CodexEnabledExplicit = true;
+
+                // 外部が light だけを無効にする。集約値は無効のまま変わらない。
+                WriteDefinition(directory, GptLightPath, GptDefinition("codex-light-model", "high", false));
+
+                IReadOnlyList<string> conflicts = settings.ReloadPreservingEdits();
+
+                Assert.Equal(
+                    new[] { GptLightPath + " の codex_enabled: 外部で 無効 に変わったが、入力中の 有効 を優先する" },
+                    conflicts);
+                Assert.True(settings.CodexEnabled);
+                Assert.True(settings.CodexEnabledExplicit);
+            }
+        }
+
+        [Fact]
         public void Save_ReportsAlreadySavedFilesWhenInterrupted()
         {
             using (var directory = new TemporaryDirectory())

@@ -243,8 +243,12 @@ namespace CodexBridgeConsole
             AgentSettings previousStandard = _loadedImplStandard.Clone();
             AgentSettings previousLight = _loadedImplLight.Clone();
             bool editedCodexEnabled = CodexEnabled;
-            bool previousCodexEnabled = _loadedCodexEnabled;
             bool codexEnabledEdited = CodexEnabledExplicit || CodexEnabled != _loadedCodexEnabled;
+
+            // codex_enabled は 2 定義の集約値を画面に出すが、外部変更の検出は定義ごとに行う。
+            // 集約値だけを比べると、片方だけが外部で変わった場合を見逃す。
+            bool? previousStandardEnabled = ReadFileCodexEnabled(DefinitionKind.GptStandard);
+            bool? previousLightEnabled = ReadFileCodexEnabled(DefinitionKind.GptLight);
 
             Reload();
 
@@ -257,18 +261,31 @@ namespace CodexBridgeConsole
 
             if (codexEnabledEdited)
             {
-                if (_loadedCodexEnabled != previousCodexEnabled && _loadedCodexEnabled != editedCodexEnabled)
-                {
-                    conflicts.Add(
-                        "codex_enabled: 外部で " + FormatCodexEnabled(_loadedCodexEnabled)
-                        + " に変わったが、入力中の " + FormatCodexEnabled(editedCodexEnabled) + " を優先する");
-                }
-
+                AddCodexEnabledConflict(
+                    conflicts, DefinitionKind.GptStandard, previousStandardEnabled, editedCodexEnabled);
+                AddCodexEnabledConflict(
+                    conflicts, DefinitionKind.GptLight, previousLightEnabled, editedCodexEnabled);
                 CodexEnabled = editedCodexEnabled;
                 CodexEnabledExplicit = true;
             }
 
             return ReadOnly(conflicts);
+        }
+
+        // 定義の codex_enabled が外部で変わり、入力中の値とも違うときだけ競合として知らせる。
+        private void AddCodexEnabledConflict(
+            List<string> conflicts,
+            DefinitionKind kind,
+            bool? previous,
+            bool edited)
+        {
+            bool? reloaded = ReadFileCodexEnabled(kind);
+            if (previous.HasValue && reloaded.HasValue && reloaded != previous && reloaded != edited)
+            {
+                conflicts.Add(
+                    GetRelativePath(kind) + " の codex_enabled: 外部で " + FormatCodexEnabled(reloaded.Value)
+                    + " に変わったが、入力中の " + FormatCodexEnabled(edited) + " を優先する");
+            }
         }
 
         private static void RestoreClaudeEdits(
@@ -498,6 +515,11 @@ namespace CodexBridgeConsole
                     if (_files.TryGetValue(definition.RelativePath, out file) && file.Save())
                     {
                         changedFiles.Add(definition.RelativePath);
+
+                        // 書き込めたファイルの分だけ基準値をディスクに合わせる。
+                        // 後続で中断しても、書き込み済みの値を「読み込み時のまま」と誤認しないためである。
+                        // 誤認すると、書き込み前の値へ戻す編集が未編集と判定され、入力を保持する再読込で失われる。
+                        MarkSaved(definition.Kind);
                     }
                 }
             }
@@ -796,6 +818,52 @@ namespace CodexBridgeConsole
             }
 
             return false;
+        }
+
+        private void MarkSaved(DefinitionKind kind)
+        {
+            switch (kind)
+            {
+                case DefinitionKind.ClaudeHard:
+                    CopyClaudeValues(ImplHard, _loadedImplHard);
+                    break;
+                case DefinitionKind.ClaudeStandard:
+                    CopyClaudeValues(ImplStandard, _loadedImplStandard);
+                    break;
+                case DefinitionKind.ClaudeLight:
+                    CopyClaudeValues(ImplLight, _loadedImplLight);
+                    break;
+                case DefinitionKind.GptStandard:
+                    CopyGptValues(ImplStandard, _loadedImplStandard);
+                    break;
+                case DefinitionKind.GptLight:
+                    CopyGptValues(ImplLight, _loadedImplLight);
+                    break;
+            }
+        }
+
+        private static void CopyClaudeValues(AgentSettings source, AgentSettings target)
+        {
+            target.ClaudeModel = source.ClaudeModel;
+            target.ClaudeEffort = source.ClaudeEffort;
+        }
+
+        private static void CopyGptValues(AgentSettings source, AgentSettings target)
+        {
+            target.CodexModel = source.CodexModel;
+            target.CodexReasoningEffort = source.CodexReasoningEffort;
+        }
+
+        // 定義ごとの codex_enabled の実効値。ファイルが無いときは null を返す。
+        private bool? ReadFileCodexEnabled(DefinitionKind kind)
+        {
+            FrontMatterFile file;
+            if (_files.TryGetValue(GetRelativePath(kind), out file))
+            {
+                return ReadEffectiveCodexEnabled(file);
+            }
+
+            return null;
         }
 
         private void SaveLoadedValues()
