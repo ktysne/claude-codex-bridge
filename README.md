@@ -54,6 +54,8 @@ Codex CLI は認証情報を `$CODEX_HOME/auth.json` に保存し、他の場所
 | `.claude/gpt-agents/impl-standard.md` | 一般実装用 GPT 側定義。Codex のモデル、effort、認証ホーム、サンドボックス、役割文を持つ |
 | `tools/codex-agent.sh` | GPT 側の定義を読んで `codex exec` を組み立てるスクリプト |
 | `gui/` | 定義ファイルを GUI から書き換える設定コンソール(Windows、.NET Framework 4.8)の一式 |
+| `gui/build.bat` | 設定コンソールをビルドし、`gui/dist/CodexBridgeConsole.exe` を作る。ダブルクリックで実行できる |
+| `gui/start.bat` | 設定コンソールを起動する。exe が無ければ先にビルドする |
 | `docs/gpt-agents.md` | GPT 系サブエージェントの構成と、フォールバックの条件 |
 | `docs/setup.md` | アカウントのログインからサブエージェント有効化までの手順 |
 | `docs/gui.md` | 設定コンソールの使い方 |
@@ -66,6 +68,7 @@ Codex CLI は認証情報を `$CODEX_HOME/auth.json` に保存し、他の場所
 選んだパターンに必要な Claude 側定義、GPT 側定義、`tools/codex-agent.sh` を配置する。
 利用先の `CLAUDE.md` に、難易度で `impl-hard`、`impl-standard`、`impl-light` を選ぶ役割分担の節を追加する。
 Claude Code を再起動し、配置した定義だけを `Agent` ツールの `subagent_type` に指定して呼ぶ。
+定義のモデル、effort、GPT 経路の有効状態を GUI から変えるなら、`gui\build.bat` で設定コンソールを作る([docs/gui.md](docs/gui.md))。
 
 ## 守るべき前提
 
