@@ -440,9 +440,10 @@ namespace CodexBridgeConsole
             // 2 定義の値が食い違っている場合に、片方を黙って書き換えないためである。
             // 不正値が書かれている定義は、保存のたびに正しい値へ直す。
             // 直さないとスクリプトが終了コード 2 で止まり続けるためである。
+            // 直す対象は不正値を持つ定義だけとする。正常なもう片方を巻き添えにしないためである。
             if (CodexEnabled != _loadedCodexEnabled
                 || CodexEnabledExplicit
-                || CodexEnabledInvalidFiles.Count > 0)
+                || IsCodexEnabledInvalid(kind))
             {
                 SetCodexEnabled(file, CodexEnabled);
             }
@@ -534,6 +535,20 @@ namespace CodexBridgeConsole
             }
 
             return null;
+        }
+
+        private bool IsCodexEnabledInvalid(DefinitionKind kind)
+        {
+            string relativePath = GetRelativePath(kind);
+            for (int i = 0; i < CodexEnabledInvalidFiles.Count; i++)
+            {
+                if (string.Equals(CodexEnabledInvalidFiles[i], relativePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private bool IsMissing(string relativePath)

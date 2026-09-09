@@ -631,6 +631,33 @@ namespace CodexBridgeConsole.Tests
             }
         }
 
+        [Fact]
+        public void Save_RepairsOnlyTheDefinitionWithInvalidCodexEnabled()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                WriteDefinition(
+                    directory,
+                    GptStandardPath,
+                    GptDefinition("codex-standard-model", "xhigh", true));
+                WriteDefinition(
+                    directory,
+                    GptLightPath,
+                    GptDefinition("codex-light-model", "high", null).Replace(
+                        "codex_sandbox: workspace-write\n",
+                        "codex_sandbox: workspace-write\ncodex_enabled: typo\n"));
+                var settings = new ConsoleSettings(directory.Path);
+
+                settings.ImplHard.ClaudeModel = "claude-hard-model-updated";
+                Assert.True(settings.Save().Succeeded);
+
+                // 不正値を持つ light だけを直し、正常な standard は触らない。
+                Assert.Contains("codex_enabled: false", ReadDefinition(directory, GptLightPath));
+                Assert.Contains("codex_enabled: true", ReadDefinition(directory, GptStandardPath));
+            }
+        }
+
         private static void WriteMismatchedDefinitions(TemporaryDirectory directory)
         {
             WriteDefinitions(directory);
