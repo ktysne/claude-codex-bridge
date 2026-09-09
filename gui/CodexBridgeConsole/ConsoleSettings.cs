@@ -458,7 +458,14 @@ namespace CodexBridgeConsole
             {
                 SetCodexEnabled(file, CodexEnabled);
             }
-            file.SetValue("codex_model", settings.CodexModel);
+            // codex_model が無い定義は、GPT 経路が無効のときだけ保存を通る(スクリプトは無効判定を先に行う)。
+            // 値が空でキーも無いなら書かない。空のキーを足しても定義は有効にならず、変えていないファイルを書き換えるだけになる。
+            string codexModel = settings.CodexModel ?? string.Empty;
+            string existingCodexModel;
+            if (codexModel.Length > 0 || file.TryGetValue("codex_model", out existingCodexModel))
+            {
+                file.SetValue("codex_model", codexModel);
+            }
 
             // 省略された codex_reasoning_effort は medium として読む。
             // 画面で変えていないのにキーを足すと、値が変わっていないファイルを書き換えることになる。
