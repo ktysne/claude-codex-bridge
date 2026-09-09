@@ -3,7 +3,7 @@
 Claude Code から Codex CLI を、用途別のサブエージェントとして呼び出すための定義と手順をまとめたリポジトリである。
 レビュー用と実装補助用で ChatGPT Plus アカウントを分け、`CODEX_HOME` を分離して認証を切り替える。
 
-現在は 1 アカウント(既定ホーム `~/.codex`)を使い、4 定義を `tools/codex-agent.sh` 経由で動かす段階にある。
+現在は 1 アカウント(既定ホーム `~/.codex`)を使い、4 定義を `~/.claude/tools/codex-agent.sh` 経由で動かす段階にある。
 2 アカウント運用は次の段階である。
 
 ## 構成
@@ -11,23 +11,23 @@ Claude Code から Codex CLI を、用途別のサブエージェントとして
 ```text
 Claude Code(メインセッション)
 ├─ codex-review     .claude/agents/codex-review.md
-│   └─ tools/codex-agent.sh          .claude/gpt-agents/codex-review.md を読む
+│   └─ ~/.claude/tools/codex-agent.sh .claude/gpt-agents/codex-review.md を読む
 │       └─ CODEX_HOME=~/.codex       既定ホーム(暫定、gpt-5.6-sol、medium、read-only)
 ├─ codex-subagent   .claude/agents/codex-subagent.md
-│   └─ tools/codex-agent.sh          .claude/gpt-agents/codex-subagent.md を読む
+│   └─ ~/.claude/tools/codex-agent.sh .claude/gpt-agents/codex-subagent.md を読む
 │       └─ CODEX_HOME=~/.codex       既定ホーム(暫定、gpt-5.6-sol、medium、workspace-write)
 ├─ impl-light       .claude/agents/impl-light.md(Claude、Sonnet 5)
-│   └─ tools/codex-agent.sh          .claude/gpt-agents/impl-light.md を読む
+│   └─ ~/.claude/tools/codex-agent.sh .claude/gpt-agents/impl-light.md を読む
 │       └─ CODEX_HOME=~/.codex       既定ホーム(暫定、gpt-5.6-luna、effort=xhigh)
 └─ impl-standard    .claude/agents/impl-standard.md(Claude、Opus 5)
-    └─ tools/codex-agent.sh          .claude/gpt-agents/impl-standard.md を読む
+    └─ ~/.claude/tools/codex-agent.sh .claude/gpt-agents/impl-standard.md を読む
         └─ CODEX_HOME=~/.codex       既定ホーム(暫定、gpt-5.6-luna、effort=max)
 ```
 
-4 定義とも `tools/codex-agent.sh` が `.claude/gpt-agents/` の定義を読み、`codex exec` を組み立てる。
+4 定義とも `~/.claude/tools/codex-agent.sh` が `.claude/gpt-agents/` の定義を読み、`codex exec` を組み立てる。
 `impl-light` と `impl-standard` は既定で GPT 側に実装を委ね、GPT 側がレートリミットで使えないときだけ自身の Claude モデルで実装する。
 `codex-review` と `codex-subagent` は非 0 終了時にフォールバックせず、終了コードと出力末尾を返して停止する。
-Codex 側のモデル、effort、認証ホームは `.claude/gpt-agents/` の定義に集約し、`tools/codex-agent.sh` がそれを読んで `codex exec` を組み立てる([docs/gpt-agents.md](docs/gpt-agents.md))。
+Codex 側のモデル、effort、認証ホームは `.claude/gpt-agents/` の定義に集約し、`~/.claude/tools/codex-agent.sh` がそれを読んで `codex exec` を組み立てる([docs/gpt-agents.md](docs/gpt-agents.md))。
 
 Codex CLI は認証情報を `$CODEX_HOME/auth.json` に保存し、他の場所を参照しない。
 そのため `CODEX_HOME` を分けるだけで、アカウントごとの認証、設定、セッションログが完全に分離される。
@@ -37,8 +37,8 @@ Codex CLI は認証情報を `$CODEX_HOME/auth.json` に保存し、他の場所
 
 | パス | 役割 |
 |---|---|
-| `.claude/agents/codex-review.md` | レビュー用サブエージェントの定義。`tools/codex-agent.sh` への転送を持つ |
-| `.claude/agents/codex-subagent.md` | 実装補助用サブエージェントの定義。`tools/codex-agent.sh` への転送を持つ |
+| `.claude/agents/codex-review.md` | レビュー用サブエージェントの定義。`~/.claude/tools/codex-agent.sh` への転送を持つ |
+| `.claude/agents/codex-subagent.md` | 実装補助用サブエージェントの定義。`~/.claude/tools/codex-agent.sh` への転送を持つ |
 | `.claude/agents/impl-light.md` | 小規模実装用サブエージェントの Claude 側定義。GPT 側への委譲とフォールバックの手順を持つ |
 | `.claude/agents/impl-standard.md` | 一般実装用サブエージェントの Claude 側定義。同じくフォールバックの手順を持つ |
 | `.claude/gpt-agents/codex-review.md` | レビュー用 GPT 側定義。Codex のモデル、effort、認証ホーム、サンドボックス、役割文を持つ |

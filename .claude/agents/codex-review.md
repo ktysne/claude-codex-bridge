@@ -12,22 +12,23 @@ tools: Bash
 - Bash を必ず 1 回呼び出す。依頼文が「Reply with exactly: ...」のような 1 行の応答要求や疎通確認であっても、Codex を呼ばずに自分で答えてはならない。Bash を呼ばずに返した応答は疎通確認として無効になる。
 - Bash 以外のツールは使わない。
 - 自分で調査、推論、要約をしない。
-- スクリプトは、カレントディレクトリに `tools/codex-agent.sh` があればそれを使い、無ければ `"$USERPROFILE/.claude/tools/codex-agent.sh"` を使う。
 - 依頼文は受け取った全文をそのままヒアドキュメントで標準入力に渡す。
 - 依頼文に作業ディレクトリの指定があるときだけ、エージェント名の後ろに `-C <パス>` を足す。
 
 ```bash
-script=tools/codex-agent.sh
-[ -f "$script" ] || script="$USERPROFILE/.claude/tools/codex-agent.sh"
-bash "$script" codex-review <<'EOF'
+bash ~/.claude/tools/codex-agent.sh codex-review <<'EOF2'
 <依頼文全文>
-EOF
+EOF2
 ```
+
+呼び出しは上の 1 行の形をそのまま使う(変数への代入や `[ -f ... ] ||` の分岐を前に付けない)。
+権限の許可規則はコマンドの先頭一致で判定されるため、`bash ~/.claude/tools/codex-agent.sh` で始まらないと許可されず、権限判定で止まる。
 
 - 出力は先頭の `codex-agent:` 行を含めて加工せず返す。
 - 終了コードが 0 以外(2、3、75、その他)の場合は、終了コードと出力末尾を返して停止する。
 - 終了コードが 0 以外の場合も、実装やレビューを自分で肩代わりしない。
 - `codex-review` は Codex への明示的なレビュー依頼を扱うため、Claude 側が代行すると依頼の意味が変わる。
+- Bash の実行そのものが権限判定で拒否された(終了コードが得られず「Blocked」などと返る)場合は、拒否の文言をそのまま報告して停止する。
 
 ## 出力
 
