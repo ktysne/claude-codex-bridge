@@ -27,7 +27,7 @@ namespace CodexBridgeConsole.Tests
 
                 Assert.Equal(
                     "---\n" +
-                    "codex_home: ~/.codex-subagent  # 説明\n" +
+                    "codex_home: \"~/.codex-subagent\"  # 説明\n" +
                     "---\n" +
                     "本文\n",
                     directory.ReadText(path));
@@ -51,7 +51,7 @@ namespace CodexBridgeConsole.Tests
 
                 Assert.Equal(
                     "---\n" +
-                    "key: 値\n" +
+                    "key: \"値\"\n" +
                     "---\n",
                     directory.ReadText(path));
             }
@@ -74,7 +74,7 @@ namespace CodexBridgeConsole.Tests
 
                 Assert.Equal(
                     "---\n" +
-                    "key: 値  # 説明\n" +
+                    "key: \"値\"  # 説明\n" +
                     "---\n",
                     directory.ReadText(path));
             }
@@ -97,7 +97,7 @@ namespace CodexBridgeConsole.Tests
 
                 Assert.Equal(
                     "---\n" +
-                    "key:   値\n" +
+                    "key:   \"値\"\n" +
                     "---\n",
                     directory.ReadText(path));
             }
@@ -217,7 +217,7 @@ namespace CodexBridgeConsole.Tests
                 Assert.Equal(
                     "---\n" +
                     "existing: yes\n" +
-                    "codex_enabled: false\n" +
+                    "codex_enabled: \"false\"\n" +
                     "---\n" +
                     "body-key: no\n" +
                     "本文\n",
@@ -237,7 +237,7 @@ namespace CodexBridgeConsole.Tests
                     + "---" + newline
                     + "本文" + newline;
                 string expected = "---" + newline
-                    + "key: new" + newline
+                    + "key: \"new\"" + newline
                     + "---" + newline
                     + "本文" + newline;
                 string path = directory.WriteFile("agent.md", input);
@@ -258,7 +258,7 @@ namespace CodexBridgeConsole.Tests
             using (var directory = new TemporaryDirectory())
             {
                 string input = "---\nkey: old\n---\n本文\n";
-                string expected = "---\nkey: new\n---\n本文\n";
+                string expected = "---\nkey: \"new\"\n---\n本文\n";
                 string path = directory.WriteFile("agent.md", input, bom);
 
                 FrontMatterFile file = FrontMatterFile.Load(path);
@@ -289,7 +289,7 @@ namespace CodexBridgeConsole.Tests
 
                 Assert.Equal(
                     "---\n" +
-                    "key: updated\n" +
+                    "key: \"updated\"\n" +
                     "key: second\n" +
                     "---\n",
                     directory.ReadText(path));
@@ -405,7 +405,7 @@ namespace CodexBridgeConsole.Tests
 
                 Assert.Equal(
                     "---\n" +
-                    "key: second\n" +
+                    "key: \"second\"\n" +
                     "---\n",
                     directory.ReadText(path));
             }
@@ -464,10 +464,122 @@ namespace CodexBridgeConsole.Tests
                     "codex_model: gpt-5.6-luna\n" +
                     "codex_reasoning_effort: xhigh\n" +
                     "codex_sandbox: workspace-write\n" +
-                    "codex_enabled: false\n" +
+                    "codex_enabled: \"false\"\n" +
                     "---\n" +
                     "あなたは実装担当である。\n",
                     directory.ReadText(path));
+            }
+        }
+
+        [Fact]
+        public void SetValue_WritesValueInDoubleQuotes()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                string path = directory.WriteFile(
+                    "agent.md",
+                    "---\n" +
+                    "model: old\n" +
+                    "---\n");
+
+                FrontMatterFile file = FrontMatterFile.Load(path);
+                file.SetValue("model", "true");
+                Assert.True(file.Save());
+
+                // 引用符で囲むため、YAML の予約語も文字列として読まれる。
+                Assert.Equal(
+                    "---\n" +
+                    "model: \"true\"\n" +
+                    "---\n",
+                    directory.ReadText(path));
+                Assert.Equal("true", FrontMatterFile.Load(path).GetValue("model"));
+            }
+        }
+
+        [Fact]
+        public void SetValue_EscapesBackslashAndDoubleQuote()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                string path = directory.WriteFile(
+                    "agent.md",
+                    "---\n" +
+                    "key: old\n" +
+                    "---\n");
+
+                FrontMatterFile file = FrontMatterFile.Load(path);
+                file.SetValue("key", "a\\b\"c");
+                Assert.True(file.Save());
+
+                Assert.Equal(
+                    "---\n" +
+                    "key: \"a\\\\b\\\"c\"\n" +
+                    "---\n",
+                    directory.ReadText(path));
+                Assert.Equal("a\\b\"c", FrontMatterFile.Load(path).GetValue("key"));
+            }
+        }
+
+        [Fact]
+        public void GetValue_UnescapesDoubleQuotedValue()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                string path = directory.WriteFile(
+                    "agent.md",
+                    "---\n" +
+                    "escaped: \"a\\\\b\\\"c\"\n" +
+                    "---\n");
+
+                FrontMatterFile file = FrontMatterFile.Load(path);
+
+                Assert.Equal("a\\b\"c", file.GetValue("escaped"));
+            }
+        }
+
+        [Fact]
+        public void SetValue_LeavesUnchangedValueWithoutQuotes()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                string path = directory.WriteFile(
+                    "agent.md",
+                    "---\n" +
+                    "model: claude-opus-5\n" +
+                    "effort: high\n" +
+                    "---\n");
+
+                FrontMatterFile file = FrontMatterFile.Load(path);
+                file.SetValue("model", "claude-opus-5");
+                file.SetValue("effort", "max");
+                Assert.True(file.Save());
+
+                // 引用符は書き換えた行にだけ付く。値を変えていない行は元の形のまま残る。
+                Assert.Equal(
+                    "---\n" +
+                    "model: claude-opus-5\n" +
+                    "effort: \"max\"\n" +
+                    "---\n",
+                    directory.ReadText(path));
+            }
+        }
+
+        [Fact]
+        public void SetValue_DoesNotRewriteSingleQuotedValueWhenUnchanged()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                string path = directory.WriteFile(
+                    "agent.md",
+                    "---\n" +
+                    "model: 'claude-opus-5'\n" +
+                    "---\n");
+
+                FrontMatterFile file = FrontMatterFile.Load(path);
+                file.SetValue("model", "claude-opus-5");
+
+                Assert.False(file.HasChanges);
+                Assert.False(file.Save());
             }
         }
 
