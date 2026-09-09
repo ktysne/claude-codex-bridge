@@ -112,21 +112,22 @@ exe と同じフォルダに `choices.json` があれば、それで既定値を
 | 項目 | 選択肢 |
 |---|---|
 | Claude モデル | `claude-opus-5`、`claude-sonnet-5`、`claude-haiku-4-5-20251001` |
-| Claude effort | `low`、`medium`、`high` |
-| GPT モデル | `gpt-5.6-luna`、`gpt-5.6-sol` |
-| GPT effort | `low`、`medium`、`high`、`xhigh`、`max` |
+| Claude effort | `low`、`medium`、`high`、`xhigh`、`max` |
+| GPT モデル | `codex debug models` から取得。取れなければ `gpt-6-astra`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5` |
+| GPT effort | 選ばれているモデルが受け付ける値。取れなければ `low`、`medium`、`high`、`xhigh`、`max`、`ultra` |
 
-GPT effort の選択肢は `tools/codex-agent.sh` が受け付ける値と一致させる。
-スクリプト側の許容値を変えるときは、この既定値も同時に変える。
+GPT 側の 2 つは、起動時に `codex debug models` から取得できればそちらを使う。既定値はその控えである。
+取得できる値のうち、`tools/codex-agent.sh` が受け付けない effort があってはならない。スクリプト側の許容値は目録に合わせて広げる。
+Claude 側のモデルには相当する取得手段が無い。Claude Code には非対話でモデル一覧を返すコマンドが無いためである。
 
 `choices.json` の形は次のとおりである。
 
 ```json
 {
   "claudeModels": ["claude-opus-5", "claude-sonnet-5"],
-  "claudeEfforts": ["low", "medium", "high"],
-  "gptModels": ["gpt-5.6-luna", "gpt-5.6-sol"],
-  "gptEfforts": ["low", "medium", "high", "xhigh", "max"]
+  "claudeEfforts": ["low", "medium", "high", "xhigh", "max"],
+  "gptModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"],
+  "gptEfforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
 }
 ```
 
@@ -156,7 +157,7 @@ GPT effort の選択肢は `tools/codex-agent.sh` が受け付ける値と一致
 
 - Claude 側の `model` または `effort` が空である。
 - GPT 側の `codex_model` が空である(トグルが有効のときのみ検査する)。
-- GPT 側の `codex_reasoning_effort` が `low`、`medium`、`high`、`xhigh`、`max` のいずれでもない。
+- GPT 側の `codex_reasoning_effort` が `low`、`medium`、`high`、`xhigh`、`max`、`ultra` のいずれでもない。
 
 Claude 側の `effort` は Claude Code が解釈する値であり、設定コンソールは空でないことだけを検査する。
 Claude Code が受け付ける値の一覧をこの文書で断定しないためである。
