@@ -717,6 +717,26 @@ namespace CodexBridgeConsole.Tests
             }
         }
 
+        [Fact]
+        public void Reload_ReportsDefinitionThatIsNotValidUtf8()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+
+                // Shift_JIS で保存された日本語は UTF-8 として復号できない。
+                byte[] shiftJis = System.Text.Encoding.GetEncoding(932)
+                    .GetBytes("---\nmodel: x\neffort: high\n---\n日本語の本文\n");
+                File.WriteAllBytes(GetPath(directory, ClaudeHardPath), shiftJis);
+                settings.Reload();
+
+                Assert.Single(settings.UnreadableFiles);
+                Assert.Contains(ClaudeHardPath, settings.UnreadableFiles[0]);
+                Assert.False(settings.CanSave);
+            }
+        }
+
         private static void WriteMismatchedDefinitions(TemporaryDirectory directory)
         {
             WriteDefinitions(directory);
