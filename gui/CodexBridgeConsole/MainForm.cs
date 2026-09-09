@@ -18,6 +18,8 @@ namespace CodexBridgeConsole
 
         private const int KillTimeoutMilliseconds = 2000;
 
+        private const float BaseFontSize = 10F;
+
         private readonly ConsoleSettings _settings;
         private readonly Choices _choices;
         private Label _codexHomeLabel;
@@ -48,6 +50,10 @@ namespace CodexBridgeConsole
             _settings = new ConsoleSettings();
             _choices = Choices.Load();
 
+            // 既定のシステムフォントより一回り大きくする。定義ファイルの値を読み取る画面であり、
+            // モデル名や effort の綴りを取り違えないようにするためである。
+            Font = new Font(SystemFonts.MessageBoxFont.FontFamily, BaseFontSize);
+
             Text = "claude-codex-bridge 設定コンソール";
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
@@ -58,7 +64,7 @@ namespace CodexBridgeConsole
             // 文字だけが大きくなり、画素で指定した行の高さからはみ出す。
             AutoScaleMode = AutoScaleMode.Dpi;
             AutoScaleDimensions = new SizeF(96F, 96F);
-            ClientSize = new Size(820, 480);
+            ClientSize = new Size(960, 560);
 
             BuildControls();
             LoadControlsFromSettings();
@@ -78,14 +84,14 @@ namespace CodexBridgeConsole
                 AutoSize = false
             };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 168F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 208F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 60F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30F));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50F));
 
             layout.Controls.Add(BuildTargetPanel(), 0, 0);
 
@@ -146,7 +152,7 @@ namespace CodexBridgeConsole
                 Padding = new Padding(0)
             };
             panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90F));
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110F));
 
             // 行の高さを指定しないと、子が親より高く配置されて中身が切り取られる。
             // 対象パスと再読込ボタンの文字が見えなくなる。
@@ -186,14 +192,16 @@ namespace CodexBridgeConsole
                 Margin = new Padding(3),
                 Padding = new Padding(3)
             };
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92F));
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 29F));
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 16F));
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 29F));
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 16F));
-            for (int i = 0; i < 4; i++)
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96F));
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30F));
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20F));
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30F));
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20F));
+            // 見出しは 2 行に折り返すことがあるため、本文の行より高くする。
+            table.RowStyles.Add(new RowStyle(SizeType.Absolute, 58F));
+            for (int i = 0; i < 3; i++)
             {
-                table.RowStyles.Add(new RowStyle(SizeType.Percent, 25F));
+                table.RowStyles.Add(new RowStyle(SizeType.Percent, 100F / 3F));
             }
 
             table.Controls.Add(CreateHeaderLabel("区分"), 0, 0);
@@ -279,8 +287,8 @@ namespace CodexBridgeConsole
             _closeButton = new Button
             {
                 Text = "閉じる",
-                Width = 88,
-                Height = 28,
+                Width = 104,
+                Height = 34,
                 Margin = new Padding(6, 0, 0, 0)
             };
             _closeButton.Click += CloseButton_Click;
@@ -288,8 +296,8 @@ namespace CodexBridgeConsole
             _saveButton = new Button
             {
                 Text = "保存",
-                Width = 88,
-                Height = 28,
+                Width = 104,
+                Height = 34,
                 Margin = new Padding(6, 0, 0, 0)
             };
             _saveButton.Click += SaveButton_Click;
@@ -321,7 +329,7 @@ namespace CodexBridgeConsole
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleCenter,
                 Margin = new Padding(3),
-                Font = new Font(SystemFonts.MessageBoxFont, FontStyle.Bold)
+                Font = new Font(SystemFonts.MessageBoxFont.FontFamily, BaseFontSize, FontStyle.Bold)
             };
         }
 
