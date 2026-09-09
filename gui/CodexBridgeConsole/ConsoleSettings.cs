@@ -1,0 +1,494 @@
+using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.IO;
+
+namespace CodexBridgeConsole
+{
+    public sealed class ConsoleSettings
+    {
+        private const string CodexEnabledKey = "codex_enabled";
+        private const string CodexHomeKey = "codex_home";
+        private const string CodexSandboxKey = "codex_sandbox";
+
+        private static readonly string[] ValidGptEfforts =
+        {
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+        };
+
+        private static readonly DefinitionPath[] DefinitionPaths =
+        {
+            new DefinitionPath(Path.Combine("agents", "impl-hard.md"), DefinitionKind.ClaudeHard),
+            new DefinitionPath(Path.Combine("agents", "impl-standard.md"), DefinitionKind.ClaudeStandard),
+            new DefinitionPath(Path.Combine("agents", "impl-light.md"), DefinitionKind.ClaudeLight),
+            new DefinitionPath(Path.Combine("gpt-agents", "impl-standard.md"), DefinitionKind.GptStandard),
+            new DefinitionPath(Path.Combine("gpt-agents", "impl-light.md"), DefinitionKind.GptLight)
+        };
+
+        private readonly Dictionary<string, FrontMatterFile> _files =
+            new Dictionary<string, FrontMatterFile>(StringComparer.OrdinalIgnoreCase);
+        private AgentSettings _loadedImplHard;
+        private AgentSettings _loadedImplStandard;
+        private AgentSettings _loadedImplLight;
+        private bool _loadedCodexEnabled;
+
+        public ConsoleSettings()
+            : this(null)
+        {
+        }
+
+        public ConsoleSettings(string rootDirectory)
+        {
+            RootDirectory = Path.GetFullPath(
+                string.IsNullOrEmpty(rootDirectory) ? GetDefaultRootDirectory() : rootDirectory);
+            Reload();
+        }
+
+        public string RootDirectory { get; private set; }
+
+        public AgentSettings ImplHard { get; private set; }
+
+        public AgentSettings ImplStandard { get; private set; }
+
+        public AgentSettings ImplLight { get; private set; }
+
+        public bool CodexEnabled { get; set; }
+
+        public string CodexHome { get; private set; }
+
+        public string ExpandedCodexHome { get; private set; }
+
+        public bool CodexHomeExists { get; private set; }
+
+        public string CodexSandbox { get; private set; }
+
+        public IReadOnlyList<string> MissingFiles { get; private set; }
+
+        public IReadOnlyList<string> LastChangedFiles { get; private set; }
+
+        public IReadOnlyList<string> LastValidationErrors { get; private set; }
+
+        public bool CanSave
+        {
+            get { return MissingFiles.Count == 0; }
+        }
+
+        public bool HasChanges
+        {
+            get
+            {
+                return CodexEnabled != _loadedCodexEnabled
+                    || !ImplHard.HasSameValues(_loadedImplHard)
+                    || !ImplStandard.HasSameValues(_loadedImplStandard)
+                    || !ImplLight.HasSameValues(_loadedImplLight);
+            }
+        }
+
+        public void Reload()
+        {
+            var missingFiles = new List<string>();
+            _files.Clear();
+
+            for (int i = 0; i < DefinitionPaths.Length; i++)
+            {
+                DefinitionPath definition = DefinitionPaths[i];
+                string path = Path.Combine(RootDirectory, definition.RelativePath);
+                if (!File.Exists(path))
+                {
+                    missingFiles.Add(definition.RelativePath);
+                    continue;
+                }
+
+                _files.Add(definition.RelativePath, FrontMatterFile.Load(path));
+            }
+
+            ImplHard = ReadClaudeSettings(DefinitionKind.ClaudeHard);
+            ImplStandard = ReadClaudeSettings(DefinitionKind.ClaudeStandard);
+            ImplLight = ReadClaudeSettings(DefinitionKind.ClaudeLight);
+
+            FrontMatterFile gptLight;
+            if (_files.TryGetValue(GetRelativePath(DefinitionKind.GptLight), out gptLight))
+            {
+                CodexEnabled = ReadEffectiveCodexEnabled(gptLight);
+                CodexHome = gptLight.GetValue(CodexHomeKey);
+                CodexSandbox = gptLight.GetValue(CodexSandboxKey);
+            }
+            else
+            {
+                CodexEnabled = true;
+                CodexHome = null;
+                CodexSandbox = null;
+            }
+
+            ExpandedCodexHome = ExpandCodexHome(CodexHome);
+            CodexHomeExists = !string.IsNullOrEmpty(ExpandedCodexHome)
+                && Directory.Exists(ExpandedCodexHome);
+
+            ReadGptSettings(ImplStandard, DefinitionKind.GptStandard);
+            ReadGptSettings(ImplLight, DefinitionKind.GptLight);
+
+            MissingFiles = ReadOnly(missingFiles);
+            LastChangedFiles = ReadOnly(new List<string>());
+            LastValidationErrors = ReadOnly(new List<string>());
+            SaveLoadedValues();
+        }
+
+        public IReadOnlyList<string> Validate()
+        {
+            var errors = new List<string>();
+            for (int i = 0; i < MissingFiles.Count; i++)
+            {
+                errors.Add("定義ファイルが存在しない: " + MissingFiles[i]);
+            }
+
+            ValidateClaude(ImplHard, GetRelativePath(DefinitionKind.ClaudeHard), errors);
+            ValidateClaude(ImplStandard, GetRelativePath(DefinitionKind.ClaudeStandard), errors);
+            ValidateClaude(ImplLight, GetRelativePath(DefinitionKind.ClaudeLight), errors);
+
+            ValidateGpt(
+                ImplStandard,
+                GetRelativePath(DefinitionKind.GptStandard),
+                errors);
+            ValidateGpt(
+                ImplLight,
+                GetRelativePath(DefinitionKind.GptLight),
+                errors);
+
+            return ReadOnly(errors);
+        }
+
+        public ConsoleSettingsSaveResult Save()
+        {
+            IReadOnlyList<string> validationErrors = Validate();
+            if (validationErrors.Count > 0)
+            {
+                LastValidationErrors = validationErrors;
+                LastChangedFiles = ReadOnly(new List<string>());
+                return new ConsoleSettingsSaveResult(
+                    false,
+                    validationErrors,
+                    LastChangedFiles);
+            }
+
+            ApplyClaude(ImplHard, DefinitionKind.ClaudeHard);
+            ApplyClaude(ImplStandard, DefinitionKind.ClaudeStandard);
+            ApplyClaude(ImplLight, DefinitionKind.ClaudeLight);
+            ApplyGpt(ImplStandard, DefinitionKind.GptStandard);
+            ApplyGpt(ImplLight, DefinitionKind.GptLight);
+
+            var changedFiles = new List<string>();
+            try
+            {
+                for (int i = 0; i < DefinitionPaths.Length; i++)
+                {
+                    DefinitionPath definition = DefinitionPaths[i];
+                    FrontMatterFile file;
+                    if (_files.TryGetValue(definition.RelativePath, out file) && file.Save())
+                    {
+                        changedFiles.Add(definition.RelativePath);
+                    }
+                }
+            }
+            catch (FrontMatterFileChangedException)
+            {
+                // 途中まで保存できたファイルを呼び出し側へ伝えるため、一覧を残す。
+                LastChangedFiles = ReadOnly(changedFiles);
+                throw;
+            }
+
+            LastChangedFiles = ReadOnly(changedFiles);
+            LastValidationErrors = ReadOnly(new List<string>());
+            SaveLoadedValues();
+            return new ConsoleSettingsSaveResult(
+                true,
+                LastValidationErrors,
+                LastChangedFiles);
+        }
+
+        private AgentSettings ReadClaudeSettings(DefinitionKind kind)
+        {
+            FrontMatterFile file;
+            if (!_files.TryGetValue(GetRelativePath(kind), out file))
+            {
+                return new AgentSettings();
+            }
+
+            return new AgentSettings
+            {
+                ClaudeModel = file.GetValue("model"),
+                ClaudeEffort = file.GetValue("effort")
+            };
+        }
+
+        private void ReadGptSettings(AgentSettings settings, DefinitionKind kind)
+        {
+            FrontMatterFile file;
+            if (!_files.TryGetValue(GetRelativePath(kind), out file))
+            {
+                return;
+            }
+
+            settings.CodexModel = file.GetValue("codex_model");
+            settings.CodexReasoningEffort = file.GetValue("codex_reasoning_effort");
+        }
+
+        private void ValidateClaude(
+            AgentSettings settings,
+            string relativePath,
+            List<string> errors)
+        {
+            if (string.IsNullOrWhiteSpace(settings.ClaudeModel))
+            {
+                errors.Add(relativePath + " の model が空である");
+            }
+
+            if (string.IsNullOrWhiteSpace(settings.ClaudeEffort))
+            {
+                errors.Add(relativePath + " の effort が空である");
+            }
+        }
+
+        private void ValidateGpt(
+            AgentSettings settings,
+            string relativePath,
+            List<string> errors)
+        {
+            if (CodexEnabled && string.IsNullOrWhiteSpace(settings.CodexModel))
+            {
+                errors.Add(relativePath + " の codex_model が空である");
+            }
+
+            if (!IsValidGptEffort(settings.CodexReasoningEffort))
+            {
+                errors.Add(
+                    relativePath
+                    + " の codex_reasoning_effort が不正である: "
+                    + (settings.CodexReasoningEffort ?? "(未設定)")
+                    + " (low、medium、high、xhigh、max のいずれか)");
+            }
+        }
+
+        private void ApplyClaude(AgentSettings settings, DefinitionKind kind)
+        {
+            FrontMatterFile file = GetFile(kind);
+            file.SetValue("model", settings.ClaudeModel);
+            file.SetValue("effort", settings.ClaudeEffort);
+        }
+
+        private void ApplyGpt(AgentSettings settings, DefinitionKind kind)
+        {
+            FrontMatterFile file = GetFile(kind);
+            SetCodexEnabled(file, CodexEnabled);
+            file.SetValue("codex_model", settings.CodexModel);
+            file.SetValue("codex_reasoning_effort", settings.CodexReasoningEffort);
+        }
+
+        private static void SetCodexEnabled(FrontMatterFile file, bool enabled)
+        {
+            string currentValue;
+            string targetValue = enabled ? "true" : "false";
+            if (!file.TryGetValue(CodexEnabledKey, out currentValue))
+            {
+                if (!enabled)
+                {
+                    file.SetValue(CodexEnabledKey, targetValue);
+                }
+
+                return;
+            }
+
+            if (!string.Equals(currentValue, targetValue, StringComparison.Ordinal))
+            {
+                file.SetValue(CodexEnabledKey, targetValue);
+            }
+        }
+
+        private FrontMatterFile GetFile(DefinitionKind kind)
+        {
+            return _files[GetRelativePath(kind)];
+        }
+
+        private static bool ReadEffectiveCodexEnabled(FrontMatterFile file)
+        {
+            string value = file.GetValue(CodexEnabledKey);
+            return !string.Equals(value, "false", StringComparison.Ordinal);
+        }
+
+        private static bool IsValidGptEffort(string value)
+        {
+            if (value == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < ValidGptEfforts.Length; i++)
+            {
+                if (string.Equals(value, ValidGptEfforts[i], StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void SaveLoadedValues()
+        {
+            _loadedImplHard = ImplHard.Clone();
+            _loadedImplStandard = ImplStandard.Clone();
+            _loadedImplLight = ImplLight.Clone();
+            _loadedCodexEnabled = CodexEnabled;
+        }
+
+        private static string GetDefaultRootDirectory()
+        {
+            return Path.Combine(GetUserProfile(), ".claude");
+        }
+
+        private static string GetUserProfile()
+        {
+            string userProfile = Environment.GetEnvironmentVariable("USERPROFILE");
+            if (string.IsNullOrEmpty(userProfile))
+            {
+                userProfile = Environment.GetEnvironmentVariable("HOME");
+            }
+
+            if (string.IsNullOrEmpty(userProfile))
+            {
+                userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            }
+
+            return userProfile;
+        }
+
+        private static string ExpandCodexHome(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return null;
+            }
+
+            string userProfile = GetUserProfile();
+            string expanded = value;
+            if (string.Equals(expanded, "~", StringComparison.Ordinal))
+            {
+                expanded = userProfile;
+            }
+            else if (expanded.StartsWith("~/", StringComparison.Ordinal)
+                || expanded.StartsWith("~\\", StringComparison.Ordinal))
+            {
+                expanded = Path.Combine(userProfile, expanded.Substring(2));
+            }
+
+            expanded = expanded.Replace("$USERPROFILE", userProfile);
+            expanded = expanded.Replace("%USERPROFILE%", userProfile);
+
+            try
+            {
+                return Path.GetFullPath(expanded);
+            }
+            catch (ArgumentException)
+            {
+                return null;
+            }
+            catch (NotSupportedException)
+            {
+                return null;
+            }
+        }
+
+        private static string GetRelativePath(DefinitionKind kind)
+        {
+            for (int i = 0; i < DefinitionPaths.Length; i++)
+            {
+                if (DefinitionPaths[i].Kind == kind)
+                {
+                    return DefinitionPaths[i].RelativePath;
+                }
+            }
+
+            throw new ArgumentOutOfRangeException(nameof(kind));
+        }
+
+        private static IReadOnlyList<string> ReadOnly(List<string> values)
+        {
+            return new ReadOnlyCollection<string>(values);
+        }
+
+        private enum DefinitionKind
+        {
+            ClaudeHard,
+            ClaudeStandard,
+            ClaudeLight,
+            GptStandard,
+            GptLight
+        }
+
+        private sealed class DefinitionPath
+        {
+            public DefinitionPath(string relativePath, DefinitionKind kind)
+            {
+                RelativePath = relativePath;
+                Kind = kind;
+            }
+
+            public string RelativePath { get; private set; }
+
+            public DefinitionKind Kind { get; private set; }
+        }
+    }
+
+    public sealed class AgentSettings
+    {
+        public string ClaudeModel { get; set; }
+
+        public string ClaudeEffort { get; set; }
+
+        public string CodexModel { get; set; }
+
+        public string CodexReasoningEffort { get; set; }
+
+        internal AgentSettings Clone()
+        {
+            return new AgentSettings
+            {
+                ClaudeModel = ClaudeModel,
+                ClaudeEffort = ClaudeEffort,
+                CodexModel = CodexModel,
+                CodexReasoningEffort = CodexReasoningEffort
+            };
+        }
+
+        internal bool HasSameValues(AgentSettings other)
+        {
+            return other != null
+                && string.Equals(ClaudeModel, other.ClaudeModel, StringComparison.Ordinal)
+                && string.Equals(ClaudeEffort, other.ClaudeEffort, StringComparison.Ordinal)
+                && string.Equals(CodexModel, other.CodexModel, StringComparison.Ordinal)
+                && string.Equals(CodexReasoningEffort, other.CodexReasoningEffort, StringComparison.Ordinal);
+        }
+    }
+
+    public sealed class ConsoleSettingsSaveResult
+    {
+        internal ConsoleSettingsSaveResult(
+            bool succeeded,
+            IReadOnlyList<string> validationErrors,
+            IReadOnlyList<string> changedFiles)
+        {
+            Succeeded = succeeded;
+            ValidationErrors = validationErrors;
+            ChangedFiles = changedFiles;
+        }
+
+        public bool Succeeded { get; private set; }
+
+        public IReadOnlyList<string> ValidationErrors { get; private set; }
+
+        public IReadOnlyList<string> ChangedFiles { get; private set; }
+    }
+}

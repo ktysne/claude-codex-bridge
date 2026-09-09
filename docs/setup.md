@@ -245,3 +245,5 @@ Claude Code の `Agent` ツールからも、4 つの `subagent_type` をそれ�
 Claude Code の Codex プラグイン(`codex:codex-rescue` など)は、この仕組みとは別に動く。
 プラグインはセッション共有の broker 経由で `codex app-server` を起動し、broker プロセスの環境変数を起動時に固定する。
 呼び出しごとに `CODEX_HOME` を切り替える用途には向かないため、用途別アカウント運用はこのリポジトリの定義で行う。
+
+Windows で定義ファイルのモデル、effort、GPT 系サブエージェント経路の有効状態を変更する場合は、[設定コンソールの使い方](gui.md) に従って `gui/CodexBridgeConsole/CodexBridgeConsole.csproj` を `gui/dist` へ発行し、生成された `CodexBridgeConsole.exe` を起動する。
