@@ -35,6 +35,75 @@ namespace CodexBridgeConsole.Tests
         }
 
         [Fact]
+        public void SetValue_AddsSpaceAfterColonWhenValueIsEmpty()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                string path = directory.WriteFile(
+                    "agent.md",
+                    "---\n" +
+                    "key:\n" +
+                    "---\n");
+
+                FrontMatterFile file = FrontMatterFile.Load(path);
+                file.SetValue("key", "値");
+                Assert.True(file.Save());
+
+                Assert.Equal(
+                    "---\n" +
+                    "key: 値\n" +
+                    "---\n",
+                    directory.ReadText(path));
+            }
+        }
+
+        [Fact]
+        public void SetValue_AddsSpaceAfterColonWhenLineHasOnlyComment()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                string path = directory.WriteFile(
+                    "agent.md",
+                    "---\n" +
+                    "key:  # 説明\n" +
+                    "---\n");
+
+                FrontMatterFile file = FrontMatterFile.Load(path);
+                file.SetValue("key", "値");
+                Assert.True(file.Save());
+
+                Assert.Equal(
+                    "---\n" +
+                    "key: 値  # 説明\n" +
+                    "---\n",
+                    directory.ReadText(path));
+            }
+        }
+
+        [Fact]
+        public void SetValue_KeepsExistingSpacingAfterColon()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                string path = directory.WriteFile(
+                    "agent.md",
+                    "---\n" +
+                    "key:   old\n" +
+                    "---\n");
+
+                FrontMatterFile file = FrontMatterFile.Load(path);
+                file.SetValue("key", "値");
+                Assert.True(file.Save());
+
+                Assert.Equal(
+                    "---\n" +
+                    "key:   値\n" +
+                    "---\n",
+                    directory.ReadText(path));
+            }
+        }
+
+        [Fact]
         public void GetValue_DoesNotTreatInternalHashAsComment()
         {
             using (var directory = new TemporaryDirectory())
@@ -284,6 +353,89 @@ namespace CodexBridgeConsole.Tests
                 Assert.False(file.HasChanges);
                 Assert.False(file.Save());
                 Assert.Equal(original, File.ReadAllBytes(path));
+            }
+        }
+
+        [Fact]
+        public void Save_ThrowsWhenFileChangedAfterLoad()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                string path = directory.WriteFile(
+                    "agent.md",
+                    "---\n" +
+                    "key: old\n" +
+                    "---\n");
+                FrontMatterFile file = FrontMatterFile.Load(path);
+                directory.WriteFile(
+                    "agent.md",
+                    "---\n" +
+                    "key: external\n" +
+                    "---\n");
+
+                file.SetValue("key", "new");
+                FrontMatterFileChangedException exception = Assert.Throws<FrontMatterFileChangedException>(
+                    () => file.Save());
+
+                Assert.Contains(path, exception.Message);
+                Assert.Equal(
+                    "---\n" +
+                    "key: external\n" +
+                    "---\n",
+                    directory.ReadText(path));
+            }
+        }
+
+        [Fact]
+        public void Save_SucceedsTwiceOnSameInstance()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                string path = directory.WriteFile(
+                    "agent.md",
+                    "---\n" +
+                    "key: old\n" +
+                    "---\n");
+                FrontMatterFile file = FrontMatterFile.Load(path);
+
+                file.SetValue("key", "first");
+                Assert.True(file.Save());
+                file.SetValue("key", "second");
+                Assert.True(file.Save());
+
+                Assert.Equal(
+                    "---\n" +
+                    "key: second\n" +
+                    "---\n",
+                    directory.ReadText(path));
+            }
+        }
+
+        [Fact]
+        public void Save_DoesNotCheckWhenNothingChanged()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                string path = directory.WriteFile(
+                    "agent.md",
+                    "---\n" +
+                    "key: old\n" +
+                    "---\n");
+                FrontMatterFile file = FrontMatterFile.Load(path);
+                directory.WriteFile(
+                    "agent.md",
+                    "---\n" +
+                    "key: external\n" +
+                    "---\n");
+
+                file.SetValue("key", "old");
+
+                Assert.False(file.Save());
+                Assert.Equal(
+                    "---\n" +
+                    "key: external\n" +
+                    "---\n",
+                    directory.ReadText(path));
             }
         }
 

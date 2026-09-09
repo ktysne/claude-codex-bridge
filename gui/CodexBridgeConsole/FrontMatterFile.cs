@@ -18,6 +18,7 @@ namespace CodexBridgeConsole
         private readonly string _newline;
         private readonly List<TextLine> _lines;
         private string _originalText;
+        private byte[] _originalBytes;
         private int _closingDelimiterIndex;
 
         public FrontMatterFile(string path)
@@ -47,6 +48,7 @@ namespace CodexBridgeConsole
 
             _newline = FindFirstNewline(_lines) ?? "\n";
             _originalText = text;
+            _originalBytes = bytes;
         }
 
         public string FilePath
@@ -126,7 +128,10 @@ namespace CodexBridgeConsole
                 valueEnd--;
             }
 
+            // Claude Code は定義を YAML として読むため、値が空の行には空白を補う。
+            string separator = valueStart == afterColon ? " " : string.Empty;
             line.Content = line.Content.Substring(0, valueStart)
+                + separator
                 + value
                 + line.Content.Substring(valueEnd);
         }
@@ -144,12 +149,20 @@ namespace CodexBridgeConsole
             string temporaryPath = Path.Combine(
                 directory,
                 "." + fileName + "." + Guid.NewGuid().ToString("N") + ".tmp");
+            byte[] currentBytes = EncodeUtf8(currentText);
 
             try
             {
                 WriteUtf8(temporaryPath, currentText);
+                // 設定コンソールの外で変更された内容を黙って上書きしないため、置換直前に照合する。
+                if (!BytesEqual(ReadBytesForComparison(), _originalBytes))
+                {
+                    throw new FrontMatterFileChangedException(_path);
+                }
+
                 File.Replace(temporaryPath, _path, null, true);
                 _originalText = currentText;
+                _originalBytes = currentBytes;
                 return true;
             }
             finally
@@ -159,6 +172,42 @@ namespace CodexBridgeConsole
                     File.Delete(temporaryPath);
                 }
             }
+        }
+
+        private byte[] ReadBytesForComparison()
+        {
+            try
+            {
+                return File.ReadAllBytes(_path);
+            }
+            catch (IOException exception)
+            {
+                if (exception is FileNotFoundException || exception is DirectoryNotFoundException)
+                {
+                    // 読み込み後に対象ファイルが消えた場合も外部変更として扱い、呼び出し側が同じ例外で処理できるようにする。
+                    throw new FrontMatterFileChangedException(_path, exception);
+                }
+
+                throw;
+            }
+        }
+
+        private static bool BytesEqual(byte[] left, byte[] right)
+        {
+            if (left.Length != right.Length)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < left.Length; i++)
+            {
+                if (left[i] != right[i])
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private int FindKeyLine(string key)
@@ -346,20 +395,28 @@ namespace CodexBridgeConsole
 
         private void WriteUtf8(string path, string text)
         {
-            var encoding = new UTF8Encoding(false, true);
-            byte[] content = encoding.GetBytes(text);
-            byte[] preamble = _hasUtf8Bom ? Utf8Bom : new byte[0];
+            byte[] content = EncodeUtf8(text);
 
             using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
-                if (preamble.Length > 0)
-                {
-                    stream.Write(preamble, 0, preamble.Length);
-                }
-
                 stream.Write(content, 0, content.Length);
                 stream.Flush(true);
             }
+        }
+
+        private byte[] EncodeUtf8(string text)
+        {
+            var encoding = new UTF8Encoding(false, true);
+            byte[] content = encoding.GetBytes(text);
+            if (!_hasUtf8Bom)
+            {
+                return content;
+            }
+
+            byte[] result = new byte[Utf8Bom.Length + content.Length];
+            Buffer.BlockCopy(Utf8Bom, 0, result, 0, Utf8Bom.Length);
+            Buffer.BlockCopy(content, 0, result, Utf8Bom.Length, content.Length);
+            return result;
         }
 
         private sealed class TextLine
