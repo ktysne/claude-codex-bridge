@@ -18,6 +18,21 @@ namespace CodexBridgeConsole
 
         private const int KillTimeoutMilliseconds = 2000;
 
+        private const float BaseFontSize = 10F;
+
+        // agent-limit-checker の画面 (renderer/style.css) と同じ優先順で選ぶ。
+        // 同じ利用者が並べて使う道具であり、見た目を揃える。
+        // 先頭の Segoe UI は日本語の字を持たないが、日本語の部分は Windows の
+        // フォントリンクで後続の書体が使われる。CSS の指定と同じ振る舞いである。
+        private static readonly string[] PreferredFontFamilies =
+        {
+            "Segoe UI",
+            "Yu Gothic UI",
+            "Meiryo"
+        };
+
+        private static string _baseFontFamily;
+
         private readonly ConsoleSettings _settings;
         private readonly Choices _choices;
         private Label _codexHomeLabel;
@@ -43,18 +58,29 @@ namespace CodexBridgeConsole
 
         private string _codexVersionText = "確認中...";
 
+        private Control _layout;
+        private TableLayoutPanel _definitionsTable;
+
         public MainForm()
         {
             _settings = new ConsoleSettings();
             _choices = Choices.Load();
+
+            // 既定のシステムフォントより一回り大きくする。定義ファイルの値を読み取る画面であり、
+            // モデル名や effort の綴りを取り違えないようにするためである。
+            Font = CreateBaseFont(FontStyle.Regular);
 
             Text = "claude-codex-bridge 設定コンソール";
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = true;
             StartPosition = FormStartPosition.CenterScreen;
-            AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(820, 480);
+            // 画面の拡大率に合わせて配置ごと拡大する。
+            // app.manifest で高 DPI 対応を宣言しているため、基準を 96 dpi と決めておかないと
+            // 文字だけが大きくなり、画素で指定した行の高さからはみ出す。
+            AutoScaleMode = AutoScaleMode.Dpi;
+            AutoScaleDimensions = new SizeF(96F, 96F);
+
 
             BuildControls();
             LoadControlsFromSettings();
@@ -65,84 +91,98 @@ namespace CodexBridgeConsole
 
         private void BuildControls()
         {
-            var layout = new TableLayoutPanel
+            // 縦に積むだけの入れ物にする。表形式の入れ物は余った高さを行へ配るため、
+            // 画面の高さと中身の高さが食い違うと、表がつぶれて余白だけが残る。
+            var layout = new FlowLayoutPanel
             {
-                ColumnCount = 1,
-                RowCount = 8,
+                FlowDirection = FlowDirection.TopDown,
+                WrapContents = false,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 Dock = DockStyle.Fill,
-                Padding = new Padding(12),
-                AutoSize = false
+                Padding = new Padding(12)
             };
-            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 168F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
 
-            layout.Controls.Add(BuildTargetPanel(), 0, 0);
+            // 横幅の基準は定義の表とする。画面の中で最も広い中身であるためである。
+            _definitionsTable = (TableLayoutPanel)BuildDefinitionsTable();
+            int contentWidth = _definitionsTable.PreferredSize.Width;
+
+            layout.Controls.Add(BuildTargetPanel(contentWidth));
 
             _codexEnabledCheckBox = new CheckBox
             {
                 Text = "GPT 系サブエージェント経路を有効にする (impl-light / impl-standard)",
                 AutoSize = true,
-                Anchor = AnchorStyles.Left,
-                Margin = new Padding(3, 6, 3, 3)
+                Margin = new Padding(3, 6, 3, 6)
             };
             _codexEnabledCheckBox.CheckedChanged += CodexEnabledCheckBox_CheckedChanged;
-            layout.Controls.Add(_codexEnabledCheckBox, 0, 1);
+            layout.Controls.Add(_codexEnabledCheckBox);
 
-            layout.Controls.Add(BuildDefinitionsTable(), 0, 2);
-            layout.Controls.Add(BuildStatusPanel(), 0, 3);
+            layout.Controls.Add(_definitionsTable);
+            layout.Controls.Add(BuildStatusPanel(contentWidth));
 
+            // 警告が無いときは場所を取らない。空の行が余白として残ると読みにくい。
+            // 高さは行数で固定するため、収まらない文字列は末尾を省略記号にする。
+            // 中断までに保存されたファイルの一覧など、長い文言が切れて読めなくなるのを防ぐ。
             _missingFilesLabel = new Label
             {
                 AutoSize = false,
-                Dock = DockStyle.Fill,
+                AutoEllipsis = true,
+                Visible = false,
+                Width = contentWidth,
+                Height = SingleLineHeight() * 2,
                 ForeColor = Color.Firebrick,
                 TextAlign = ContentAlignment.MiddleLeft,
                 Margin = new Padding(3, 3, 3, 3)
             };
-            layout.Controls.Add(_missingFilesLabel, 0, 4);
+            layout.Controls.Add(_missingFilesLabel);
 
             var noticeLabel = new Label
             {
-                Text = "保存後、Claude Code を再起動すると反映される",
-                AutoSize = false,
-                Dock = DockStyle.Fill,
-                TextAlign = ContentAlignment.MiddleLeft,
-                Margin = new Padding(3, 3, 3, 3)
+                Text = "保存後、Claude Code を再起動すると反映されます",
+                AutoSize = true,
+                Margin = new Padding(3, 6, 3, 3)
             };
-            layout.Controls.Add(noticeLabel, 0, 5);
+            layout.Controls.Add(noticeLabel);
 
             _saveStatusLabel = new Label
             {
                 AutoSize = false,
-                Dock = DockStyle.Fill,
+                AutoEllipsis = true,
+                Width = contentWidth,
+                Height = SingleLineHeight(),
                 TextAlign = ContentAlignment.MiddleLeft,
                 Margin = new Padding(3, 3, 3, 3)
             };
-            layout.Controls.Add(_saveStatusLabel, 0, 6);
-            layout.Controls.Add(BuildButtonPanel(), 0, 7);
+            layout.Controls.Add(_saveStatusLabel);
+            layout.Controls.Add(BuildButtonPanel(contentWidth));
 
+            _layout = layout;
             Controls.Add(layout);
         }
 
-        private Control BuildTargetPanel()
+        private Control BuildTargetPanel(int width)
         {
+            _reloadButton = CreateActionButton("再読込");
+            _reloadButton.Anchor = AnchorStyles.Right;
+            _reloadButton.Click += ReloadButton_Click;
+
             var panel = new TableLayoutPanel
             {
                 ColumnCount = 2,
                 RowCount = 1,
-                Dock = DockStyle.Fill,
+
+                // 高さは中身に決めさせる。組み立ての時点では、まだ画面の書体が
+                // 子へ伝わっておらず、必要な高さを正しく測れない。
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                MinimumSize = new Size(width, 0),
                 Margin = new Padding(0),
                 Padding = new Padding(0)
             };
             panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90F));
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
             var targetLabel = new Label
             {
@@ -150,19 +190,11 @@ namespace CodexBridgeConsole
                 AutoEllipsis = true,
                 AutoSize = false,
                 Dock = DockStyle.Fill,
+                Height = SingleLineHeight(),
                 TextAlign = ContentAlignment.MiddleLeft,
                 Margin = new Padding(3, 3, 6, 3)
             };
             panel.Controls.Add(targetLabel, 0, 0);
-
-            _reloadButton = new Button
-            {
-                Text = "再読込",
-                AutoSize = true,
-                Dock = DockStyle.Fill,
-                Margin = new Padding(3)
-            };
-            _reloadButton.Click += ReloadButton_Click;
             panel.Controls.Add(_reloadButton, 1, 0);
             return panel;
         }
@@ -173,20 +205,44 @@ namespace CodexBridgeConsole
             {
                 ColumnCount = 5,
                 RowCount = 4,
-                Dock = DockStyle.Fill,
+
+                // 縦に積む入れ物の中では、自分の大きさを自分で決める必要がある。
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 CellBorderStyle = TableLayoutPanelCellBorderStyle.Single,
                 Margin = new Padding(3),
                 Padding = new Padding(3)
             };
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92F));
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 29F));
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 16F));
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 29F));
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 16F));
+            // 列幅と行の高さは中身に決めさせる。見出しの文字が最も長いことが多く、
+            // 画素で決めると書体を変えたときに切れる。
+            for (int i = 0; i < 5; i++)
+            {
+                table.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            }
+
             for (int i = 0; i < 4; i++)
             {
-                table.RowStyles.Add(new RowStyle(SizeType.Percent, 25F));
+                table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             }
+
+            int claudeModelWidth = ComboBoxWidth(
+                _choices.ClaudeModels,
+                _settings.ImplHard.ClaudeModel,
+                _settings.ImplStandard.ClaudeModel,
+                _settings.ImplLight.ClaudeModel);
+            int claudeEffortWidth = ComboBoxWidth(
+                _choices.ClaudeEfforts,
+                _settings.ImplHard.ClaudeEffort,
+                _settings.ImplStandard.ClaudeEffort,
+                _settings.ImplLight.ClaudeEffort);
+            int gptModelWidth = ComboBoxWidth(
+                _choices.GptModels,
+                _settings.ImplStandard.CodexModel,
+                _settings.ImplLight.CodexModel);
+            int gptEffortWidth = ComboBoxWidth(
+                _choices.GptEfforts,
+                _settings.ImplStandard.CodexReasoningEffort,
+                _settings.ImplLight.CodexReasoningEffort);
 
             table.Controls.Add(CreateHeaderLabel("区分"), 0, 0);
             table.Controls.Add(CreateHeaderLabel("Claude モデル (フォールバック時)"), 1, 0);
@@ -195,28 +251,28 @@ namespace CodexBridgeConsole
             table.Controls.Add(CreateHeaderLabel("effort"), 4, 0);
 
             table.Controls.Add(CreateRowLabel("hard"), 0, 1);
-            _hardModelComboBox = CreateComboBox();
-            _hardEffortComboBox = CreateComboBox();
+            _hardModelComboBox = CreateComboBox(claudeModelWidth);
+            _hardEffortComboBox = CreateComboBox(claudeEffortWidth);
             table.Controls.Add(_hardModelComboBox, 1, 1);
             table.Controls.Add(_hardEffortComboBox, 2, 1);
             table.Controls.Add(CreateCenteredLabel("(Codex を使わない)"), 3, 1);
             table.SetColumnSpan(table.Controls[table.Controls.Count - 1], 2);
 
             table.Controls.Add(CreateRowLabel("standard"), 0, 2);
-            _standardModelComboBox = CreateComboBox();
-            _standardEffortComboBox = CreateComboBox();
-            _standardGptModelComboBox = CreateComboBox();
-            _standardGptEffortComboBox = CreateComboBox();
+            _standardModelComboBox = CreateComboBox(claudeModelWidth);
+            _standardEffortComboBox = CreateComboBox(claudeEffortWidth);
+            _standardGptModelComboBox = CreateComboBox(gptModelWidth);
+            _standardGptEffortComboBox = CreateComboBox(gptEffortWidth);
             table.Controls.Add(_standardModelComboBox, 1, 2);
             table.Controls.Add(_standardEffortComboBox, 2, 2);
             table.Controls.Add(_standardGptModelComboBox, 3, 2);
             table.Controls.Add(_standardGptEffortComboBox, 4, 2);
 
             table.Controls.Add(CreateRowLabel("light"), 0, 3);
-            _lightModelComboBox = CreateComboBox();
-            _lightEffortComboBox = CreateComboBox();
-            _lightGptModelComboBox = CreateComboBox();
-            _lightGptEffortComboBox = CreateComboBox();
+            _lightModelComboBox = CreateComboBox(claudeModelWidth);
+            _lightEffortComboBox = CreateComboBox(claudeEffortWidth);
+            _lightGptModelComboBox = CreateComboBox(gptModelWidth);
+            _lightGptEffortComboBox = CreateComboBox(gptEffortWidth);
             table.Controls.Add(_lightModelComboBox, 1, 3);
             table.Controls.Add(_lightEffortComboBox, 2, 3);
             table.Controls.Add(_lightGptModelComboBox, 3, 3);
@@ -225,14 +281,15 @@ namespace CodexBridgeConsole
             return table;
         }
 
-        private Control BuildStatusPanel()
+        private Control BuildStatusPanel(int width)
         {
             var panel = new TableLayoutPanel
             {
                 ColumnCount = 1,
                 RowCount = 2,
-                Dock = DockStyle.Fill,
-                Margin = new Padding(3),
+                Width = width,
+                Height = SingleLineHeight() * 2 + 12,
+                Margin = new Padding(3, 6, 3, 6),
                 Padding = new Padding(0)
             };
             panel.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
@@ -243,60 +300,117 @@ namespace CodexBridgeConsole
                 AutoSize = false,
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleLeft,
-                Margin = new Padding(3)
+                Margin = new Padding(3, 0, 3, 0)
             };
             _codexVersionLabel = new Label
             {
                 AutoSize = false,
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleLeft,
-                Margin = new Padding(3)
+                Margin = new Padding(3, 0, 3, 0)
             };
             panel.Controls.Add(_codexHomeLabel, 0, 0);
             panel.Controls.Add(_codexVersionLabel, 0, 1);
             return panel;
         }
 
-        private Control BuildButtonPanel()
+        private Control BuildButtonPanel(int width)
         {
+            _closeButton = CreateActionButton("閉じる");
+            _closeButton.Margin = new Padding(6, 0, 0, 0);
+            _closeButton.Click += CloseButton_Click;
+
+            _saveButton = CreateActionButton("保存");
+            _saveButton.Margin = new Padding(6, 0, 0, 0);
+            _saveButton.Click += SaveButton_Click;
+
+            // 2 つのボタンの幅を広い方に揃える。文字数が違うだけで大きさが変わると落ち着かない。
+            int buttonWidth = Math.Max(_closeButton.PreferredSize.Width, _saveButton.PreferredSize.Width);
+            _closeButton.MinimumSize = new Size(buttonWidth, 0);
+            _saveButton.MinimumSize = new Size(buttonWidth, 0);
+
             var panel = new FlowLayoutPanel
             {
                 FlowDirection = FlowDirection.RightToLeft,
                 WrapContents = false,
-                Dock = DockStyle.Fill,
-                Padding = new Padding(0, 5, 0, 0),
-                Margin = new Padding(0)
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                MinimumSize = new Size(width, 0),
+                Margin = new Padding(3, 12, 3, 3),
+                Padding = new Padding(0)
             };
-
-            _closeButton = new Button
-            {
-                Text = "閉じる",
-                Width = 88,
-                Height = 28,
-                Margin = new Padding(6, 0, 0, 0)
-            };
-            _closeButton.Click += CloseButton_Click;
-
-            _saveButton = new Button
-            {
-                Text = "保存",
-                Width = 88,
-                Height = 28,
-                Margin = new Padding(6, 0, 0, 0)
-            };
-            _saveButton.Click += SaveButton_Click;
 
             panel.Controls.Add(_closeButton);
             panel.Controls.Add(_saveButton);
             return panel;
         }
 
-        private ComboBox CreateComboBox()
+        // 押しやすい大きさは文字の大きさで決まる。画素で決めると、書体を変えたときに
+        // 文字が枠に収まらなかったり、上下の余白が偏ったりする。
+        private Button CreateActionButton(string text)
+        {
+            return new Button
+            {
+                Text = text,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Padding = new Padding(16, 4, 16, 4),
+                Margin = new Padding(3)
+            };
+        }
+
+        // 中身の高さに画面を合わせる。警告の行が出入りすると必要な高さが変わる。
+        private void AdjustWindowSize()
+        {
+            if (!IsHandleCreated || _layout == null)
+            {
+                return;
+            }
+
+            Size preferred = _layout.PreferredSize;
+            if (ClientSize != preferred)
+            {
+                ClientSize = preferred;
+            }
+        }
+
+        // 1 行分の高さ。書体や文字の大きさを変えても足りなくなるのを防ぐため、余白を足す。
+        private int SingleLineHeight()
+        {
+            return Font.Height + 10;
+        }
+
+        // 一覧の中で最も長い値が収まる幅を求める。開閉のボタンと内側の余白の分を足す。
+        private int ComboBoxWidth(IReadOnlyList<string> choices, params string[] currentValues)
+        {
+            int widest = 0;
+            for (int i = 0; i < choices.Count; i++)
+            {
+                widest = Math.Max(widest, TextRenderer.MeasureText(choices[i], Font).Width);
+            }
+
+            for (int i = 0; i < currentValues.Length; i++)
+            {
+                if (!string.IsNullOrEmpty(currentValues[i]))
+                {
+                    widest = Math.Max(widest, TextRenderer.MeasureText(currentValues[i], Font).Width);
+                }
+            }
+
+            return widest + SystemInformation.VerticalScrollBarWidth + 16;
+        }
+
+        private ComboBox CreateComboBox(int width)
         {
             var comboBox = new ComboBox
             {
                 DropDownStyle = ComboBoxStyle.DropDown,
-                Dock = DockStyle.Fill,
+                Anchor = AnchorStyles.Left | AnchorStyles.Right,
+                Width = width,
+
+                // 列の幅は中身の希望する大きさから決まる。最小の幅として渡さないと、
+                // 一覧の値が入らない細さまで縮む。
+                MinimumSize = new Size(width, 0),
                 IntegralHeight = false,
                 Margin = new Padding(3)
             };
@@ -304,16 +418,18 @@ namespace CodexBridgeConsole
             return comboBox;
         }
 
+        // 表の中の文字は AutoSize に任せる。WinForms が自分の描き方で必要な大きさを
+        // 計算するため、こちらで測るより確実に切れない。
         private static Label CreateHeaderLabel(string text)
         {
             return new Label
             {
                 Text = text,
-                AutoSize = false,
-                Dock = DockStyle.Fill,
+                AutoSize = true,
+                Anchor = AnchorStyles.None,
                 TextAlign = ContentAlignment.MiddleCenter,
-                Margin = new Padding(3),
-                Font = new Font(SystemFonts.MessageBoxFont, FontStyle.Bold)
+                Margin = new Padding(8, 6, 8, 6),
+                Font = CreateBaseFont(FontStyle.Bold)
             };
         }
 
@@ -322,11 +438,39 @@ namespace CodexBridgeConsole
             return new Label
             {
                 Text = text,
-                AutoSize = false,
-                Dock = DockStyle.Fill,
+                AutoSize = true,
+                Anchor = AnchorStyles.None,
                 TextAlign = ContentAlignment.MiddleCenter,
-                Margin = new Padding(3)
+                Margin = new Padding(8, 6, 8, 6)
             };
+        }
+
+        private static Font CreateBaseFont(FontStyle style)
+        {
+            if (_baseFontFamily == null)
+            {
+                _baseFontFamily = ResolveBaseFontFamily();
+            }
+
+            return new Font(_baseFontFamily, BaseFontSize, style);
+        }
+
+        private static string ResolveBaseFontFamily()
+        {
+            FontFamily[] installed = FontFamily.Families;
+            for (int i = 0; i < PreferredFontFamilies.Length; i++)
+            {
+                for (int j = 0; j < installed.Length; j++)
+                {
+                    if (string.Equals(installed[j].Name, PreferredFontFamilies[i], StringComparison.OrdinalIgnoreCase))
+                    {
+                        return PreferredFontFamilies[i];
+                    }
+                }
+            }
+
+            // どれも入っていない環境では、その環境の標準の書体に任せる。
+            return SystemFonts.MessageBoxFont.FontFamily.Name;
         }
 
         private static Label CreateCenteredLabel(string text)
@@ -334,8 +478,8 @@ namespace CodexBridgeConsole
             return new Label
             {
                 Text = text,
-                AutoSize = false,
-                Dock = DockStyle.Fill,
+                AutoSize = true,
+                Anchor = AnchorStyles.None,
                 TextAlign = ContentAlignment.MiddleCenter,
                 Margin = new Padding(3)
             };
@@ -395,12 +539,21 @@ namespace CodexBridgeConsole
 
         private void UpdateStatusDisplay()
         {
+            // 存在するときは何も添えない。存在しないときだけ示す。
+            // 認証ホームが無いことは、ログインが済んでいない合図であるためである。
             string home = _settings.CodexHome;
-            string homeState = string.IsNullOrEmpty(home)
-                ? "未設定"
-                : (_settings.CodexHomeExists ? "存在する" : "存在しない");
+            string homeNote = string.Empty;
+            if (string.IsNullOrEmpty(home))
+            {
+                homeNote = " (未設定)";
+            }
+            else if (!_settings.CodexHomeExists)
+            {
+                homeNote = " (存在しない)";
+            }
+
             _codexHomeLabel.Text = "codex_home: " + (home ?? "(未設定)")
-                + " (" + homeState + ")    codex_sandbox: "
+                + homeNote + "    codex_sandbox: "
                 + (_settings.CodexSandbox ?? "(未設定)");
             // バージョンの取得は起動時の 1 回だけなので、再読込では取得済みの結果を出し直す。
             _codexVersionLabel.Text = "codex --version: " + _codexVersionText;
@@ -435,6 +588,10 @@ namespace CodexBridgeConsole
             {
                 _missingFilesLabel.Text = string.Empty;
             }
+
+            // 警告が無いときは行ごと隠す。空の行が余白として残ると読みにくい。
+            _missingFilesLabel.Visible = _missingFilesLabel.Text.Length > 0;
+            AdjustWindowSize();
         }
 
         private void UpdateControlState()
@@ -632,6 +789,11 @@ namespace CodexBridgeConsole
 
         private void MainForm_Load(object sender, EventArgs e)
         {
+            // 中身の希望する大きさは、ハンドルが作られて配置が済むまで確定しない。
+            // 組み立ての途中で決めると、列幅が縮んだままの大きさになる。
+            AdjustWindowSize();
+            CenterToScreen();
+
             if (_codexVersionStarted)
             {
                 return;
