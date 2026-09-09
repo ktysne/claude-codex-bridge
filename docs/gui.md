@@ -88,7 +88,8 @@ Windows 10 1903 以降と Windows 11 には .NET Framework 4.8 が同梱され�
 ### 状態表示
 
 `codex_home` と `codex_sandbox` は GPT 側 `impl-light` 定義のフロントマターから読み取り、表示だけを行う。
-`codex_home` は記載された値を表示し、`~`、`$USERPROFILE`、`%USERPROFILE%` を展開したパスが存在するかを括弧内に示す。
+`codex_home` は記載された値を表示する。`~`、`$USERPROFILE`、`%USERPROFILE%` を展開したパスが存在しない場合だけ、その旨を添える。
+展開したパスが無いことは、その認証ホームでログインが済んでいない合図である。
 `codex --version` は画面の起動時に一度だけ実行し、実行中は「確認中...」と表示する。
 実行時は GPT 側 `impl-light` 定義の `codex_home` を展開した値を `CODEX_HOME` に渡す。
 既定のホームへ暗黙に依存しないためである。
