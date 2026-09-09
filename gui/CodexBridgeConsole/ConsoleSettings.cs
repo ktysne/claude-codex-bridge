@@ -60,6 +60,10 @@ namespace CodexBridgeConsole
 
         public bool CodexEnabledMismatch { get; private set; }
 
+        // 画面でトグルを操作したことを示す。2 定義の値が食い違っているとき、
+        // 表示上の値が変わらなくても両方へ書き戻せるようにするためである。
+        public bool CodexEnabledExplicit { get; set; }
+
         public string CodexHome { get; private set; }
 
         public string ExpandedCodexHome { get; private set; }
@@ -296,7 +300,7 @@ namespace CodexBridgeConsole
 
             // トグルを操作していないときは codex_enabled に触れない。
             // 2 定義の値が食い違っている場合に、片方を黙って書き換えないためである。
-            if (CodexEnabled != _loadedCodexEnabled)
+            if (CodexEnabled != _loadedCodexEnabled || CodexEnabledExplicit)
             {
                 SetCodexEnabled(file, CodexEnabled);
             }
@@ -359,6 +363,7 @@ namespace CodexBridgeConsole
             _loadedImplStandard = ImplStandard.Clone();
             _loadedImplLight = ImplLight.Clone();
             _loadedCodexEnabled = CodexEnabled;
+            CodexEnabledExplicit = false;
         }
 
         private static string GetDefaultRootDirectory()

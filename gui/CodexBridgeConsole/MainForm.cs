@@ -86,7 +86,7 @@ namespace CodexBridgeConsole
                 Anchor = AnchorStyles.Left,
                 Margin = new Padding(3, 6, 3, 3)
             };
-            _codexEnabledCheckBox.CheckedChanged += ControlValueChanged;
+            _codexEnabledCheckBox.CheckedChanged += CodexEnabledCheckBox_CheckedChanged;
             layout.Controls.Add(_codexEnabledCheckBox, 0, 1);
 
             layout.Controls.Add(BuildDefinitionsTable(), 0, 2);
@@ -445,6 +445,19 @@ namespace CodexBridgeConsole
             _settings.CodexEnabled = _codexEnabledCheckBox.Checked;
         }
 
+        private void CodexEnabledCheckBox_CheckedChanged(object sender, EventArgs e)
+        {
+            if (_loadingControls)
+            {
+                return;
+            }
+
+            // 2 定義の値が食い違っているときは、表示上の値が変わらなくても両方へ書き戻す必要がある。
+            // 利用者がトグルを操作したことを保存側へ伝える。
+            _settings.CodexEnabledExplicit = true;
+            ControlValueChanged(sender, e);
+        }
+
         private void ControlValueChanged(object sender, EventArgs e)
         {
             if (_loadingControls)
@@ -521,11 +534,21 @@ namespace CodexBridgeConsole
                     MessageBoxIcon.Warning);
                 return false;
             }
-            catch (IOException exception)
+            catch (Exception exception) when (exception is IOException || exception is UnauthorizedAccessException)
             {
+                // 読み取り専用や権限不足は UnauthorizedAccessException で来る。IOException から派生しないため個別に受ける。
+                string message = "定義ファイルを保存できませんでした。" + Environment.NewLine + exception.Message;
+                if (_settings.LastChangedFiles.Count > 0)
+                {
+                    message += Environment.NewLine
+                        + Environment.NewLine
+                        + "中断までに保存されたファイル: "
+                        + string.Join(", ", _settings.LastChangedFiles);
+                }
+
                 MessageBox.Show(
                     this,
-                    "定義ファイルを保存できませんでした。\n" + exception.Message,
+                    message,
                     "保存に失敗",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
@@ -585,6 +608,13 @@ namespace CodexBridgeConsole
 
         private static string GetCodexVersion(string codexHome)
         {
+            // 認証ホームが分からないまま codex を起動しない。
+            // 既定の ~/.codex や親プロセスの環境変数へ暗黙に依存する呼び出しを作らないためである。
+            if (string.IsNullOrEmpty(codexHome))
+            {
+                return "認証ホーム未設定のため確認しない";
+            }
+
             try
             {
                 var startInfo = new ProcessStartInfo
@@ -598,10 +628,7 @@ namespace CodexBridgeConsole
                 };
 
                 // 認証ホームは常に明示する。既定の ~/.codex に暗黙に依存する呼び出しを作らない。
-                if (!string.IsNullOrEmpty(codexHome))
-                {
-                    startInfo.EnvironmentVariables["CODEX_HOME"] = codexHome;
-                }
+                startInfo.EnvironmentVariables["CODEX_HOME"] = codexHome;
 
                 using (var process = new Process { StartInfo = startInfo })
                 {
