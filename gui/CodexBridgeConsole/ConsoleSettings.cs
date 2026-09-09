@@ -37,6 +37,7 @@ namespace CodexBridgeConsole
         private AgentSettings _loadedImplStandard;
         private AgentSettings _loadedImplLight;
         private bool _loadedCodexEnabled;
+        private bool _saveInterrupted;
 
         public ConsoleSettings()
             : this(null)
@@ -91,9 +92,12 @@ namespace CodexBridgeConsole
         {
             get
             {
+                // 保存が途中で止まると、ディスクの内容と読み込み時の値が食い違う。
+                // 入力を戻しても変更なしとは言えないため、再読込か保存の成功まで変更ありとして扱う。
                 // トグルを操作すると、表示上の値が読み込み時と同じでも保存結果が変わる。
                 // 未保存の変更として扱わないと、確認なしに操作が失われる。
-                return CodexEnabledExplicit
+                return _saveInterrupted
+                    || CodexEnabledExplicit
                     || CodexEnabled != _loadedCodexEnabled
                     || !ImplHard.HasSameValues(_loadedImplHard)
                     || !ImplStandard.HasSameValues(_loadedImplStandard)
@@ -189,6 +193,13 @@ namespace CodexBridgeConsole
                 errors.Add("定義ファイルが存在しない: " + MissingFiles[i]);
             }
 
+            // 読めない定義があるまま保存すると、そのファイルの書き込みで落ちる。
+            // 保存の手前で理由を返す。
+            for (int i = 0; i < UnreadableFiles.Count; i++)
+            {
+                errors.Add("定義ファイルを読めない: " + UnreadableFiles[i]);
+            }
+
             ValidateClaude(ImplHard, GetRelativePath(DefinitionKind.ClaudeHard), errors);
             ValidateClaude(ImplStandard, GetRelativePath(DefinitionKind.ClaudeStandard), errors);
             ValidateClaude(ImplLight, GetRelativePath(DefinitionKind.ClaudeLight), errors);
@@ -226,6 +237,7 @@ namespace CodexBridgeConsole
 
             var changedFiles = new List<string>();
             LastChangedFiles = ReadOnly(changedFiles);
+            _saveInterrupted = true;
             try
             {
                 for (int i = 0; i < DefinitionPaths.Length; i++)
@@ -245,6 +257,7 @@ namespace CodexBridgeConsole
                 LastChangedFiles = ReadOnly(changedFiles);
             }
 
+            _saveInterrupted = false;
             RefreshCodexEnabledMismatch();
             LastValidationErrors = ReadOnly(new List<string>());
             SaveLoadedValues();
@@ -309,6 +322,28 @@ namespace CodexBridgeConsole
         // Claude 側の定義は Claude Code が YAML として読むため、model: foo: bar のような値で壊れる。
         private static bool IsSafeScalar(string value)
         {
+            // 先頭の - は YAML の並びの記号と読める。英数字を 1 つも含まない値も
+            // model: - のように意味の定まらない行になるため通さない。
+            if (value.Length == 0 || value[0] == '-')
+            {
+                return false;
+            }
+
+            bool hasAlphanumeric = false;
+            for (int i = 0; i < value.Length; i++)
+            {
+                char c = value[i];
+                if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+                {
+                    hasAlphanumeric = true;
+                }
+            }
+
+            if (!hasAlphanumeric)
+            {
+                return false;
+            }
+
             for (int i = 0; i < value.Length; i++)
             {
                 char c = value[i];
@@ -441,6 +476,7 @@ namespace CodexBridgeConsole
             _loadedImplLight = ImplLight.Clone();
             _loadedCodexEnabled = CodexEnabled;
             CodexEnabledExplicit = false;
+            _saveInterrupted = false;
         }
 
         private static string GetDefaultRootDirectory()
