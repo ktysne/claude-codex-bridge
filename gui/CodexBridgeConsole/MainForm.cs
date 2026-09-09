@@ -526,6 +526,13 @@ namespace CodexBridgeConsole
                 _loadingControls = false;
             }
 
+            // 選択肢を組み立て直したので、取得済みの目録を当て直す。
+            // 当てないと、再読込のたびに GPT 側が既定の選択肢へ戻る。
+            if (_codexModelCatalog != null)
+            {
+                ApplyCodexModelCatalog();
+            }
+
             UpdateStatusDisplay();
             UpdateGptControlState();
             UpdateControlState();
@@ -943,7 +950,9 @@ namespace CodexBridgeConsole
 
         private void GptModelTextChanged(object sender, EventArgs e)
         {
-            if (_codexModelCatalog == null)
+            // 読み込みの途中でモデル欄に値が入ると、まだ読み直していない effort を見て
+            // 既定値へ寄せてしまう。Claude 側の同じハンドラと扱いを揃える。
+            if (_loadingControls || _codexModelCatalog == null)
             {
                 return;
             }

@@ -134,7 +134,7 @@ JSON は次の形で、4 つの配列をすべて指定する。
 
 ```json
 {
-  "claudeModels": ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"],
+  "claudeModels": ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"],
   "claudeEfforts": ["low", "medium", "high", "xhigh", "max"],
   "claudeModelEfforts": [
     { "model": "claude-opus-5", "efforts": ["low", "medium", "high", "xhigh", "max"] },
@@ -192,11 +192,13 @@ Claude モデルを変えると、その行の effort の選択肢が切り替�
 変更後のモデルが現在の effort を受け付けない場合は、指定値以下で最も高い対応済みの値に変える。
 たとえば `xhigh` のまま `claude-opus-4-6` に変えると `high` になる。
 Claude Code 自身が、対応しない effort をこの規則で落として実行するためである。
+指定値以下に対応済みの値が無い場合は、その一覧の先頭の値にする。
 
 GPT 側と同じく、読み込んだ直後は定義ファイルの値をそのまま表示する。
 
-この対応表は Claude Code の公式ドキュメント(2026-09-09 時点)による。
+この対応表は Claude Code の公式ドキュメント [Model configuration](https://code.claude.com/docs/en/model-config)(2026-09-09 時点)による。
 モデルが増えたときは `choices.json` の `claudeModels` と `claudeModelEfforts` を書き換える。
+モデル ID は、導入済みの Claude Code が保持している値を使う。
 
 ## 編集できない設定
 
