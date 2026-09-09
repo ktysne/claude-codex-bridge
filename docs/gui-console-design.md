@@ -111,22 +111,29 @@ exe と同じフォルダに `choices.json` があれば、それで既定値を
 
 | 項目 | 選択肢 |
 |---|---|
-| Claude モデル | `claude-opus-5`、`claude-sonnet-5`、`claude-haiku-4-5-20251001` |
-| Claude effort | `low`、`medium`、`high` |
-| GPT モデル | `gpt-5.6-luna`、`gpt-5.6-sol` |
-| GPT effort | `low`、`medium`、`high`、`xhigh`、`max` |
+| Claude モデル | `claude-fable-5-1`、`claude-fable-5`、`claude-opus-5`、`claude-sonnet-5`、`claude-opus-4-8`、`claude-opus-4-7`、`claude-opus-4-6`、`claude-sonnet-4-6`、`claude-haiku-4-5` |
+| Claude effort | 選ばれているモデルが受け付ける値。対応表に無いモデルでは `low`、`medium`、`high`、`xhigh`、`max` |
+| GPT モデル | `codex debug models` から取得。取れなければ `gpt-6-astra`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5` |
+| GPT effort | 選ばれているモデルが受け付ける値。取れなければ `low`、`medium`、`high`、`xhigh`、`max`、`ultra` |
 
-GPT effort の選択肢は `tools/codex-agent.sh` が受け付ける値と一致させる。
-スクリプト側の許容値を変えるときは、この既定値も同時に変える。
+GPT 側の 2 つは、起動時に `codex debug models` から取得できればそちらを使う。既定値はその控えである。
+取得できる値のうち、`tools/codex-agent.sh` が受け付けない effort があってはならない。スクリプト側の許容値は目録に合わせて広げる。
+GPT effort の許容値は 3 箇所にある。`tools/codex-agent.sh` の `validate_effort`、`ConsoleSettings` の `ValidGptEfforts`、`choices.default.json` の `gptEfforts` である。値を足すときは 3 箇所を同時に変える。
+Claude 側のモデルには相当する取得手段が無い。Claude Code には非対話でモデル一覧を返すコマンドが無いためである。
+そのため Claude 側は、モデルと effort の対応を `claudeModelEfforts` として設定に持つ。この項目は任意であり、無い場合は `claudeEfforts` の一覧をモデルによらず使う。
+モデルを変えたとき、そのモデルが現在の effort を受け付けなければ、指定値以下で最も高い対応済みの値に変える。Claude Code 自身が同じ規則で落として実行するためである。
 
 `choices.json` の形は次のとおりである。
 
 ```json
 {
   "claudeModels": ["claude-opus-5", "claude-sonnet-5"],
-  "claudeEfforts": ["low", "medium", "high"],
-  "gptModels": ["gpt-5.6-luna", "gpt-5.6-sol"],
-  "gptEfforts": ["low", "medium", "high", "xhigh", "max"]
+  "claudeEfforts": ["low", "medium", "high", "xhigh", "max"],
+  "claudeModelEfforts": [
+    { "model": "claude-opus-5", "efforts": ["low", "medium", "high", "xhigh", "max"] }
+  ],
+  "gptModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"],
+  "gptEfforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
 }
 ```
 
@@ -156,10 +163,10 @@ GPT effort の選択肢は `tools/codex-agent.sh` が受け付ける値と一致
 
 - Claude 側の `model` または `effort` が空である。
 - GPT 側の `codex_model` が空である(トグルが有効のときのみ検査する)。
-- GPT 側の `codex_reasoning_effort` が `low`、`medium`、`high`、`xhigh`、`max` のいずれでもない。
+- GPT 側の `codex_reasoning_effort` が `low`、`medium`、`high`、`xhigh`、`max`、`ultra` のいずれでもない。
 
 Claude 側の `effort` は Claude Code が解釈する値であり、設定コンソールは空でないことだけを検査する。
-Claude Code が受け付ける値の一覧をこの文書で断定しないためである。
+モデルごとの対応表は選択肢を絞る補助であり、検査には使わない。対応表に無いモデルや、利用者が手で入れた値を拒まないためである。
 
 ## `tools/codex-agent.sh` の変更
 

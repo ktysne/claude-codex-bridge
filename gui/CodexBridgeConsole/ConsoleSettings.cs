@@ -23,7 +23,8 @@ namespace CodexBridgeConsole
             "medium",
             "high",
             "xhigh",
-            "max"
+            "max",
+            "ultra"
         };
 
         private static readonly DefinitionPath[] DefinitionPaths =

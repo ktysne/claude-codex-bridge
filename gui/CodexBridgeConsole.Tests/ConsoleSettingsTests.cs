@@ -737,6 +737,31 @@ namespace CodexBridgeConsole.Tests
             }
         }
 
+        [Fact]
+        public void Validate_AcceptsUltraGptEffort()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+
+                // codex debug models が ultra を返すモデルがあるため、保存で弾いてはならない。
+                WriteDefinition(
+                    directory,
+                    GptLightPath,
+                    GptDefinition("codex-light-model", "ultra", null));
+                var settings = new ConsoleSettings(directory.Path);
+
+                Assert.Equal("ultra", settings.ImplLight.CodexReasoningEffort);
+                Assert.Empty(settings.Validate());
+
+                settings.ImplStandard.CodexReasoningEffort = "ultra";
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.True(result.Succeeded);
+                Assert.Contains("codex_reasoning_effort: ultra", ReadDefinition(directory, GptStandardPath));
+            }
+        }
+
         private static void WriteMismatchedDefinitions(TemporaryDirectory directory)
         {
             WriteDefinitions(directory);
