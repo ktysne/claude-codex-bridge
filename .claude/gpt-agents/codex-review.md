@@ -1,5 +1,5 @@
 ---
-codex_home: ~/.codex  # 1 アカウント運用の既定値。2 アカウント運用では ~/.codex-review に変える
+codex_home: ~/.codex  # メインアカウント(既定ホーム)をレビュー用に使う。メインを実装補助用にする配置では ~/.codex-review にする
 codex_model: gpt-5.6-sol
 codex_reasoning_effort: medium
 codex_sandbox: read-only
