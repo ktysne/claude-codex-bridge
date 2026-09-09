@@ -136,10 +136,16 @@ JSON は次の形で、4 つの配列をすべて指定する。
 {
   "claudeModels": ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"],
   "claudeEfforts": ["low", "medium", "high", "xhigh", "max"],
+  "claudeModelEfforts": [
+    { "model": "claude-opus-5", "efforts": ["low", "medium", "high", "xhigh", "max"] },
+    { "model": "claude-opus-4-6", "efforts": ["low", "medium", "high", "max"] }
+  ],
   "gptModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"],
   "gptEfforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
 }
 ```
+
+`claudeModelEfforts` は任意である。書かない場合、Claude 側の effort はモデルによらず `claudeEfforts` の一覧になる。
 
 GPT 側の 2 つは、`codex debug models` から目録を取れた場合はそちらが優先される(次の節を参照)。
 `choices.json` の GPT 側は、目録を取れなかったときの控えである。
@@ -165,10 +171,32 @@ GPT 側の 2 つは、`codex debug models` から目録を取れた場合はそ�
 `codex` が無い、`codex_home` が読めない、出力を解析できないなどで目録を取れない場合は、`choices.json` または埋め込みの既定値を使う。
 画面には知らせない。
 
-Claude 側のモデル一覧には、これに相当する取得手段が無い。
+## Claude 側のモデルと effort
+
+Claude 側のモデル一覧には、`codex debug models` に相当する取得手段が無い。
 Claude Code には非対話でモデル一覧を返すコマンドが無いためである。
-Claude 側のモデルは `choices.json` と埋め込みの既定値で管理する。
-Claude 側の effort は `low`、`medium`、`high`、`xhigh`、`max` の 5 段階である。
+そのため Claude 側は、モデルと effort の対応を `choices.json` と埋め込みの既定値で持つ。
+
+effort に対応するモデルと、その値は次のとおりである。
+
+| モデル | 選べる effort |
+|---|---|
+| `claude-fable-5-1`、`claude-fable-5` | low、medium、high、xhigh、max |
+| `claude-opus-5`、`claude-sonnet-5` | low、medium、high、xhigh、max |
+| `claude-opus-4-8`、`claude-opus-4-7` | low、medium、high、xhigh、max |
+| `claude-opus-4-6`、`claude-sonnet-4-6` | low、medium、high、max |
+
+`claude-haiku-4-5` は effort に対応しない。対応表に無いモデルを選んだ場合は、`claudeEfforts` の一覧を出す。
+
+Claude モデルを変えると、その行の effort の選択肢が切り替わる。
+変更後のモデルが現在の effort を受け付けない場合は、指定値以下で最も高い対応済みの値に変える。
+たとえば `xhigh` のまま `claude-opus-4-6` に変えると `high` になる。
+Claude Code 自身が、対応しない effort をこの規則で落として実行するためである。
+
+GPT 側と同じく、読み込んだ直後は定義ファイルの値をそのまま表示する。
+
+この対応表は Claude Code の公式ドキュメント(2026-09-09 時点)による。
+モデルが増えたときは `choices.json` の `claudeModels` と `claudeModelEfforts` を書き換える。
 
 ## 編集できない設定
 
