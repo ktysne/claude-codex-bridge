@@ -115,7 +115,7 @@ to_slash() {
   printf '%s' "${p//\\//}"
 }
 
-# Codex へ渡す作業ディレクトリを Windows 形式(D:/...)へ揃える。
+# Codex へ渡す作業ディレクトリをドライブ文字付きの Windows 形式へ揃える。
 # Git Bash の /d/... 形式のままだと Codex 側が解決できないためである。
 # cygpath が無い環境では区切り文字の変換だけを行う。
 to_windows_path() {

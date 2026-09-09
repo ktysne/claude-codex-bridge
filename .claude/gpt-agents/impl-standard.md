@@ -1,5 +1,5 @@
 ---
-codex_home: ~/.codex  # 2 アカウント段階では実装補助専用アカウントの ~/.codex-subagent に変える
+codex_home: ~/.codex  # 1 アカウント運用の既定値。2 アカウント運用では ~/.codex-subagent に変える
 codex_model: gpt-5.6-luna
 codex_reasoning_effort: max
 codex_sandbox: workspace-write
