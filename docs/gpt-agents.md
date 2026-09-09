@@ -94,8 +94,9 @@ Codex 自身が 75 で終了した場合だけは、レートリミットの 75 
 
 スクリプトは末尾に結果の 1 行を出す。
 成功なら `codex-agent: result=ok`、レートリミットなら `codex-agent: result=rate-limited`、それ以外の失敗なら `codex-agent: result=failed exit=<code>` である。
-終了コード 2 では出さない。
-引数や定義の不備で Codex を起動する前に止まる経路であり、`codex-agent: <理由>` の 1 行だけを標準エラーに出す。
+ただし、Codex を起動する前に終了コード 2 で止まる経路では出さない。
+引数や定義の不備で止まる経路であり、`codex-agent: <理由>` の 1 行だけを標準エラーに出す。
+Codex 自身が 2 を返した場合は、他の非 0 終了と同じく `codex-agent: result=failed exit=2` を出す。
 レートリミットと判定したときは、その直前に `codex-agent: rate-limit evidence: <一致した行>` を出し、フォールバックの根拠を報告から追えるようにしている。
 
 レートリミットの判定は、`codex` が 0 以外で終了し、かつ `usage limit`、`rate limit`、`too many requests`、`429` のいずれかが大文字小文字を問わず含まれる場合に限る。
