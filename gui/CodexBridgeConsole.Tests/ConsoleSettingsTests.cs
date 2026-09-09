@@ -329,6 +329,27 @@ namespace CodexBridgeConsole.Tests
             }
         }
 
+        [Fact]
+        public void Save_NormalizesMismatchedCodexEnabledWhenToggleIsOperated()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteMismatchedDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+
+                // 食い違いは無効として表示するため、両方を無効にする操作は表示上の値が変わらない。
+                // 画面がトグルを操作したことを伝えると、表示どおりの値を両方へ書き戻す。
+                Assert.False(settings.CodexEnabled);
+                settings.CodexEnabledExplicit = true;
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.True(result.Succeeded);
+                Assert.Contains(GptLightPath, result.ChangedFiles);
+                Assert.Contains("codex_enabled: false", ReadDefinition(directory, GptStandardPath));
+                Assert.Contains("codex_enabled: false", ReadDefinition(directory, GptLightPath));
+            }
+        }
+
         private static void WriteMismatchedDefinitions(TemporaryDirectory directory)
         {
             WriteDefinitions(directory);
