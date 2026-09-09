@@ -515,6 +515,65 @@ namespace CodexBridgeConsole.Tests
             }
         }
 
+        [Fact]
+        public void Load_TreatsInvalidCodexEnabledAsDisabledAndReportsIt()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                WriteDefinition(
+                    directory,
+                    GptLightPath,
+                    GptDefinition("codex-light-model", "high", null).Replace(
+                        "codex_sandbox: workspace-write\n",
+                        "codex_sandbox: workspace-write\ncodex_enabled: typo\n"));
+                var settings = new ConsoleSettings(directory.Path);
+
+                Assert.False(settings.CodexEnabled);
+                Assert.Single(settings.CodexEnabledInvalidFiles);
+                Assert.Contains(GptLightPath, settings.CodexEnabledInvalidFiles[0]);
+            }
+        }
+
+        [Fact]
+        public void Save_RepairsInvalidCodexEnabled()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                WriteDefinition(
+                    directory,
+                    GptLightPath,
+                    GptDefinition("codex-light-model", "high", null).Replace(
+                        "codex_sandbox: workspace-write\n",
+                        "codex_sandbox: workspace-write\ncodex_enabled: typo\n"));
+                var settings = new ConsoleSettings(directory.Path);
+
+                Assert.True(settings.Save().Succeeded);
+
+                Assert.Contains("codex_enabled: false", ReadDefinition(directory, GptLightPath));
+                Assert.Empty(settings.CodexEnabledInvalidFiles);
+            }
+        }
+
+        [Fact]
+        public void Save_FailsWhenDefinitionIsDeletedAfterLoad()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+
+                File.Delete(GetPath(directory, GptStandardPath));
+                settings.ImplHard.ClaudeModel = "claude-hard-model-updated";
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.False(result.Succeeded);
+                Assert.Contains(result.ValidationErrors, e => e.Contains(GptStandardPath));
+                Assert.Contains("claude-hard-model\n", ReadDefinition(directory, ClaudeHardPath));
+            }
+        }
+
         private static void WriteMismatchedDefinitions(TemporaryDirectory directory)
         {
             WriteDefinitions(directory);
