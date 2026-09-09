@@ -586,6 +586,12 @@ namespace CodexBridgeConsole
                         + string.Join(", ", _settings.LastChangedFiles);
                 }
 
+                // ダイアログを閉じた後に前回の成功表示が残らないよう、状態行も更新する。
+                _saveStatusLabel.Text = _settings.LastChangedFiles.Count > 0
+                    ? "保存に失敗しました。中断までに保存されたファイル: "
+                        + string.Join(", ", _settings.LastChangedFiles)
+                    : "保存に失敗しました。書き換えられたファイルはありません。";
+
                 MessageBox.Show(
                     this,
                     message,
