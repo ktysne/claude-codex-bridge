@@ -87,7 +87,10 @@ namespace CodexBridgeConsole
         {
             get
             {
-                return CodexEnabled != _loadedCodexEnabled
+                // トグルを操作すると、表示上の値が読み込み時と同じでも保存結果が変わる。
+                // 未保存の変更として扱わないと、確認なしに操作が失われる。
+                return CodexEnabledExplicit
+                    || CodexEnabled != _loadedCodexEnabled
                     || !ImplHard.HasSameValues(_loadedImplHard)
                     || !ImplStandard.HasSameValues(_loadedImplStandard)
                     || !ImplLight.HasSameValues(_loadedImplLight);
@@ -196,6 +199,7 @@ namespace CodexBridgeConsole
             ApplyGpt(ImplLight, DefinitionKind.GptLight);
 
             var changedFiles = new List<string>();
+            LastChangedFiles = ReadOnly(changedFiles);
             try
             {
                 for (int i = 0; i < DefinitionPaths.Length; i++)
@@ -208,14 +212,14 @@ namespace CodexBridgeConsole
                     }
                 }
             }
-            catch (FrontMatterFileChangedException)
+            finally
             {
-                // 途中まで保存できたファイルを呼び出し側へ伝えるため、一覧を残す。
+                // 書き込みは 1 ファイルずつ行う。どの経路で中断しても、
+                // 途中まで保存できたファイルを呼び出し側へ伝えられるようにする。
                 LastChangedFiles = ReadOnly(changedFiles);
-                throw;
             }
 
-            LastChangedFiles = ReadOnly(changedFiles);
+            RefreshCodexEnabledMismatch();
             LastValidationErrors = ReadOnly(new List<string>());
             SaveLoadedValues();
             return new ConsoleSettingsSaveResult(
@@ -328,6 +332,18 @@ namespace CodexBridgeConsole
             }
         }
 
+        // 保存で 2 定義の codex_enabled を揃えた場合に、食い違いの表示を残さないため読み直す。
+        private void RefreshCodexEnabledMismatch()
+        {
+            FrontMatterFile gptLight;
+            FrontMatterFile gptStandard;
+            bool hasLight = _files.TryGetValue(GetRelativePath(DefinitionKind.GptLight), out gptLight);
+            bool hasStandard = _files.TryGetValue(GetRelativePath(DefinitionKind.GptStandard), out gptStandard);
+            CodexEnabledMismatch = hasLight
+                && hasStandard
+                && ReadEffectiveCodexEnabled(gptLight) != ReadEffectiveCodexEnabled(gptStandard);
+        }
+
         private FrontMatterFile GetFile(DefinitionKind kind)
         {
             return _files[GetRelativePath(kind)];
@@ -438,7 +454,9 @@ namespace CodexBridgeConsole
 
         private static IReadOnlyList<string> ReadOnly(List<string> values)
         {
-            return new ReadOnlyCollection<string>(values);
+            // 元のリストをそのまま包むと、後から要素を足したときに公開済みの一覧まで変わる。
+            // 代入した時点の内容を保つため写しを返す。
+            return new ReadOnlyCollection<string>(new List<string>(values));
         }
 
         private enum DefinitionKind
