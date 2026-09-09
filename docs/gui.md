@@ -4,22 +4,41 @@
 Codex の依頼処理も Claude Code のセッションも起動しないため、定義ファイルの設定値を編集する用途に限って使う。
 ただし、画面にバージョンを表示するため、起動時に `codex --version` だけを一度実行する。
 
-## ビルドと配置
+## ビルドと起動
 
-リポジトリのルートで次のコマンドを実行する。
+### 必要なもの
+
+ビルドには .NET SDK が要る。
+`dotnet --version` が応答すれば導入済みである。
+無ければ [.NET のダウンロードページ](https://dotnet.microsoft.com/download)から SDK を導入する。
+ビルドした exe の実行には .NET Framework 4.8 だけが要る。
+Windows 10 1903 以降と Windows 11 には同梱されているため、実行側で追加の導入は無い。
+
+### ビルドする
+
+`gui\build.bat` をダブルクリックする。
+`dotnet publish` で `gui\dist\CodexBridgeConsole.exe` を作り、成功するとエクスプローラーが exe を選択した状態で開く。
+失敗したときは理由を表示して止まる。
+主な理由は、.NET SDK が無いことと、起動中の exe を上書きできないことである。
+
+ターミナルから行う場合は次のコマンドと同じである。
 
 ```powershell
 dotnet publish gui/CodexBridgeConsole/CodexBridgeConsole.csproj -c Release -o gui/dist
 ```
 
-発行に成功すると `gui/dist/CodexBridgeConsole.exe` が得られる。
 生成した exe はリポジトリにコミットしない。
+`gui/dist/` は `.gitignore` で除外してある。
 
-設定コンソールは .NET Framework 4.8 を対象とする。
-Windows 10 1903 以降と Windows 11 には .NET Framework 4.8 が同梱されているため、ランタイムを別途導入する必要はない。
+### 起動する
 
-発行後は `gui/dist/CodexBridgeConsole.exe` を起動する。
+`gui\dist\CodexBridgeConsole.exe` をダブルクリックする。
+`gui\start.bat` をダブルクリックしてもよい。
+exe が無ければ先にビルドしてから起動する。
+よく使うなら、exe のショートカットをデスクトップかスタートメニューに置く。
+
 プルダウンの選択肢を変更する場合は、後述の `choices.json` を exe と同じフォルダに置く。
+リポジトリを更新して設定コンソールの変更を取り込んだときは、`build.bat` をもう一度実行して exe を作り直す。
 サブエージェント全体の配置手順は [setup.md](setup.md) を参照する。
 
 ## 書き換えの対象
