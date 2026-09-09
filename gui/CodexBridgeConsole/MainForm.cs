@@ -53,6 +53,7 @@ namespace CodexBridgeConsole
         private Button _closeButton;
         private Label _missingFilesLabel;
         private Label _saveStatusLabel;
+        private Color _saveStatusDefaultForeColor;
         private bool _loadingControls;
         private bool _codexVersionStarted;
 
@@ -157,6 +158,7 @@ namespace CodexBridgeConsole
                 TextAlign = ContentAlignment.MiddleLeft,
                 Margin = new Padding(3, 3, 3, 3)
             };
+            _saveStatusDefaultForeColor = _saveStatusLabel.ForeColor;
             layout.Controls.Add(_saveStatusLabel);
             layout.Controls.Add(BuildButtonPanel(contentWidth));
 
@@ -618,9 +620,18 @@ namespace CodexBridgeConsole
             AdjustWindowSize();
         }
 
+        // 状態行の文字色は失敗のときだけ警告色にする。成功と未保存は通常色で区別しない。
+        private void SetSaveStatus(string text, bool isError)
+        {
+            _saveStatusLabel.Text = text;
+            _saveStatusLabel.ForeColor = isError
+                ? _missingFilesLabel.ForeColor
+                : _saveStatusDefaultForeColor;
+        }
+
         private void UpdateControlState()
         {
-            _saveButton.Enabled = _settings.CanSave;
+            _saveButton.Enabled = _settings.CanSave && _settings.HasChanges;
             UpdateGptControlState();
         }
 
@@ -670,22 +681,58 @@ namespace CodexBridgeConsole
 
             SyncSettingsFromControls();
             UpdateControlState();
+            SetSaveStatus(
+                _settings.HasChanges ? "未保存の変更があります。" : "変更はありません。",
+                false);
         }
 
         private void ReloadButton_Click(object sender, EventArgs e)
         {
             SyncSettingsFromControls();
+
+            // 入力を保持して読み直すとき、Reload() が作り直す前の設定を控えておく。
+            // SyncSettingsFromControls で画面の値は既に写してあるので、参照を持つだけでよい。
+            AgentSettings keptHard = null;
+            AgentSettings keptStandard = null;
+            AgentSettings keptLight = null;
+            bool keptCodexEnabled = false;
+            bool keptCodexEnabledExplicit = false;
+            bool preserveInput = false;
             if (_settings.HasChanges)
             {
+                string message = "未保存の変更があります。定義ファイルを読み直しますか。"
+                    + Environment.NewLine
+                    + Environment.NewLine
+                    + string.Join(Environment.NewLine, _settings.DescribeChanges())
+                    + Environment.NewLine
+                    + Environment.NewLine
+                    + "「はい」: 入力中の値を保持したまま定義ファイルを読み直します。"
+                    + Environment.NewLine
+                    + "「いいえ」: 入力を捨てて読み直します。"
+                    + Environment.NewLine
+                    + "「キャンセル」: 何もしません。";
+
+                // 既定はキャンセルにする。Enter の連打で入力が消えないようにするためである。
                 DialogResult result = MessageBox.Show(
                     this,
-                    "未保存の変更を破棄して再読込しますか。",
+                    message,
                     "再読込の確認",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Warning);
-                if (result != DialogResult.Yes)
+                    MessageBoxButtons.YesNoCancel,
+                    MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button3);
+                if (result == DialogResult.Cancel)
                 {
                     return;
+                }
+
+                preserveInput = result == DialogResult.Yes;
+                if (preserveInput)
+                {
+                    keptHard = _settings.ImplHard;
+                    keptStandard = _settings.ImplStandard;
+                    keptLight = _settings.ImplLight;
+                    keptCodexEnabled = _settings.CodexEnabled;
+                    keptCodexEnabledExplicit = _settings.CodexEnabledExplicit;
                 }
             }
 
@@ -706,12 +753,27 @@ namespace CodexBridgeConsole
                     "再読込に失敗",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
-                _saveStatusLabel.Text = "再読込に失敗しました。表示は読み込み前のままです。";
+                SetSaveStatus("再読込に失敗しました。表示は読み込み前のままです。", true);
                 return;
             }
 
+            if (preserveInput)
+            {
+                // ファイル側の基準値だけを更新し、画面の値は控えから戻す。
+                // 次の保存で利用者の値がそのまま書かれ、入力し直しが要らない。
+                _settings.ImplHard.CopyValuesFrom(keptHard);
+                _settings.ImplStandard.CopyValuesFrom(keptStandard);
+                _settings.ImplLight.CopyValuesFrom(keptLight);
+                _settings.CodexEnabled = keptCodexEnabled;
+                _settings.CodexEnabledExplicit = keptCodexEnabledExplicit;
+            }
+
             LoadControlsFromSettings();
-            _saveStatusLabel.Text = "再読込しました。未保存の変更は破棄されています。";
+            SetSaveStatus(
+                preserveInput
+                    ? "再読込しました。入力中の値は保持しています。"
+                    : "再読込しました。未保存の変更は破棄されています。",
+                false);
         }
 
         private void SaveButton_Click(object sender, EventArgs e)
@@ -736,17 +798,19 @@ namespace CodexBridgeConsole
             {
                 // 書き込みは 1 ファイルずつ行うため、中断までに保存されたファイルが残る。どれが残ったかを示す。
                 string savedFiles = string.Join(", ", _settings.LastChangedFiles);
-                string message = "読み込み後に定義ファイルが外部で変更されたため保存できません。再読込してから、もう一度保存してください。";
+                string message = "読み込み後に定義ファイルが外部で変更されたため保存できません。再読込で「はい」(入力を保持)を選んでから、もう一度保存してください。";
                 if (_settings.LastChangedFiles.Count > 0)
                 {
                     message += Environment.NewLine
                         + Environment.NewLine
                         + "中断までに保存されたファイル: " + savedFiles;
-                    _saveStatusLabel.Text = "保存を中断しました。中断までに保存されたファイル: " + savedFiles;
+                    SetSaveStatus(
+                        "保存を中断しました。中断までに保存されたファイル: " + savedFiles,
+                        true);
                 }
                 else
                 {
-                    _saveStatusLabel.Text = "保存を中断しました。書き換えられたファイルはありません。";
+                    SetSaveStatus("保存を中断しました。書き換えられたファイルはありません。", true);
                 }
 
                 MessageBox.Show(
@@ -770,10 +834,12 @@ namespace CodexBridgeConsole
                 }
 
                 // ダイアログを閉じた後に前回の成功表示が残らないよう、状態行も更新する。
-                _saveStatusLabel.Text = _settings.LastChangedFiles.Count > 0
-                    ? "保存に失敗しました。中断までに保存されたファイル: "
-                        + string.Join(", ", _settings.LastChangedFiles)
-                    : "保存に失敗しました。書き換えられたファイルはありません。";
+                SetSaveStatus(
+                    _settings.LastChangedFiles.Count > 0
+                        ? "保存に失敗しました。中断までに保存されたファイル: "
+                            + string.Join(", ", _settings.LastChangedFiles)
+                        : "保存に失敗しました。書き換えられたファイルはありません。",
+                    true);
 
                 MessageBox.Show(
                     this,
@@ -792,18 +858,21 @@ namespace CodexBridgeConsole
                     "入力を確認",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
+                SetSaveStatus("入力に不備があるため保存していません。", true);
                 UpdateControlState();
                 return false;
             }
 
             if (result.ChangedFiles.Count == 0)
             {
-                _saveStatusLabel.Text = "変更されたファイルはありません。";
+                SetSaveStatus("保存しました。変更はありません。", false);
             }
             else
             {
-                _saveStatusLabel.Text = "書き換えたファイル: "
-                    + string.Join(", ", result.ChangedFiles);
+                SetSaveStatus(
+                    "保存しました。書き換えたファイル: "
+                        + string.Join(", ", result.ChangedFiles),
+                    false);
             }
 
             UpdateStatusDisplay();
@@ -1179,7 +1248,10 @@ namespace CodexBridgeConsole
 
             DialogResult result = MessageBox.Show(
                 this,
-                "未保存の変更があります。保存して閉じますか。",
+                "未保存の変更があります。保存して閉じますか。"
+                    + Environment.NewLine
+                    + Environment.NewLine
+                    + string.Join(Environment.NewLine, _settings.DescribeChanges()),
                 "終了の確認",
                 MessageBoxButtons.YesNoCancel,
                 MessageBoxIcon.Warning);

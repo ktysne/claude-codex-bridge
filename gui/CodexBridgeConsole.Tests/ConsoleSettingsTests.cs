@@ -255,6 +255,52 @@ namespace CodexBridgeConsole.Tests
         }
 
         [Fact]
+        public void DescribeChanges_ReturnsEmptyWhenNothingChanged()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+
+                Assert.Empty(settings.DescribeChanges());
+            }
+        }
+
+        [Fact]
+        public void DescribeChanges_ReportsChangedClaudeModel()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+                settings.ImplHard.ClaudeModel = "claude-hard-model-updated";
+
+                Assert.Equal(
+                    new[]
+                    {
+                        ClaudeHardPath
+                            + " の model: claude-hard-model → claude-hard-model-updated"
+                    },
+                    settings.DescribeChanges());
+            }
+        }
+
+        [Fact]
+        public void DescribeChanges_ReportsExplicitCodexEnabledWritebackWhenValueIsSame()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+                settings.CodexEnabledExplicit = true;
+
+                Assert.Equal(
+                    new[] { "codex_enabled: 両定義へ「有効」を書き戻す" },
+                    settings.DescribeChanges());
+            }
+        }
+
+        [Fact]
         public void Save_ReportsAlreadySavedFilesWhenInterrupted()
         {
             using (var directory = new TemporaryDirectory())
