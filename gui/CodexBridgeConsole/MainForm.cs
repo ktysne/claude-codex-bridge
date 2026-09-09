@@ -35,6 +35,8 @@ namespace CodexBridgeConsole
         private bool _loadingControls;
         private bool _codexVersionStarted;
 
+        private string _codexVersionText = "確認中...";
+
         public MainForm()
         {
             _settings = new ConsoleSettings();
@@ -394,16 +396,22 @@ namespace CodexBridgeConsole
             _codexHomeLabel.Text = "codex_home: " + (home ?? "(未設定)")
                 + " (" + homeState + ")    codex_sandbox: "
                 + (_settings.CodexSandbox ?? "(未設定)");
-            _codexVersionLabel.Text = "codex --version: 確認中...";
+            // バージョンの取得は起動時の 1 回だけなので、再読込では取得済みの結果を出し直す。
+            _codexVersionLabel.Text = "codex --version: " + _codexVersionText;
 
-            if (_settings.CanSave)
-            {
-                _missingFilesLabel.Text = string.Empty;
-            }
-            else
+            if (!_settings.CanSave)
             {
                 _missingFilesLabel.Text = "保存できない。見つからない定義ファイル: "
                     + string.Join(", ", _settings.MissingFiles);
+            }
+            else if (_settings.CodexEnabledMismatch)
+            {
+                _missingFilesLabel.Text = "impl-light と impl-standard の codex_enabled が食い違っている。"
+                    + "両方が有効なときだけ有効として表示する。チェックを変えて保存すると両方に同じ値を書く。";
+            }
+            else
+            {
+                _missingFilesLabel.Text = string.Empty;
             }
         }
 
@@ -563,16 +571,19 @@ namespace CodexBridgeConsole
 
         private async void LoadCodexVersionAsync()
         {
-            string version = await Task.Run(() => GetCodexVersion());
+            // CODEX_HOME は必ず明示する。既定の ~/.codex への暗黙依存を作らないためである。
+            string codexHome = _settings.ExpandedCodexHome;
+            string version = await Task.Run(() => GetCodexVersion(codexHome));
             if (IsDisposed || Disposing)
             {
                 return;
             }
 
+            _codexVersionText = version;
             _codexVersionLabel.Text = "codex --version: " + version;
         }
 
-        private static string GetCodexVersion()
+        private static string GetCodexVersion(string codexHome)
         {
             try
             {
@@ -585,6 +596,12 @@ namespace CodexBridgeConsole
                     RedirectStandardOutput = true,
                     RedirectStandardError = true
                 };
+
+                // 認証ホームは常に明示する。既定の ~/.codex に暗黙に依存する呼び出しを作らない。
+                if (!string.IsNullOrEmpty(codexHome))
+                {
+                    startInfo.EnvironmentVariables["CODEX_HOME"] = codexHome;
+                }
 
                 using (var process = new Process { StartInfo = startInfo })
                 {

@@ -52,9 +52,14 @@ Windows 10 1903 以降と Windows 11 には .NET Framework 4.8 が同梱され�
 
 「GPT 系サブエージェント経路を有効にする (impl-light / impl-standard)」は、GPT 側の 2 定義に書く `codex_enabled` の値を切り替える。
 チェックを外すと GPT モデルと effort の入力欄を無効にするが、入力済みの値は保持する。
-既存の `codex_enabled` は、チェックの状態に応じて `true` または `false` に更新する。
-無効の状態を保存すると `codex_enabled: false` が GPT 側の `impl-light` と `impl-standard` に反映される。
-キーが無い定義を有効のまま保存した場合は、省略時の既定値が `true` であるためキーを追加しない。
+チェックを変えて保存すると、`impl-light` と `impl-standard` の両方に同じ値を書く。
+無効にして保存すると `codex_enabled: false` が両方に反映される。
+チェックを操作していない場合は `codex_enabled` に触れない。
+キーが無い定義を有効のまま保存した場合も、省略時の既定値が `true` であるためキーを追加しない。
+
+2 定義の `codex_enabled` が食い違っている場合は、両方が有効なときだけ有効として表示する。
+食い違いは画面に示す。
+片方だけ無効の状態を有効として表示すると、別の項目を保存したときに無効側が有効へ戻るためである。
 
 `codex_enabled: false` のとき、`tools/codex-agent.sh` は Codex を起動せず、終了コード 3 で停止する。
 `impl-light` と `impl-standard` はこの終了コードを受けると Claude 側で実装する。
@@ -77,6 +82,8 @@ Windows 10 1903 以降と Windows 11 には .NET Framework 4.8 が同梱され�
 `codex_home` と `codex_sandbox` は GPT 側 `impl-light` 定義のフロントマターから読み取り、表示だけを行う。
 `codex_home` は記載された値を表示し、`~`、`$USERPROFILE`、`%USERPROFILE%` を展開したパスが存在するかを括弧内に示す。
 `codex --version` は画面の起動時に一度だけ実行し、実行中は「確認中...」と表示する。
+実行時は GPT 側 `impl-light` 定義の `codex_home` を展開した値を `CODEX_HOME` に渡す。既定のホームへ暗黙に依存しないためである。
+取得した結果は保持するため、再読込しても表示は戻らない。
 コマンドが見つからない場合は「見つからない」、5 秒以内に終了しない場合は「タイムアウト」と表示する。
 ログイン状態は表示しない。
 
