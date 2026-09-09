@@ -1,0 +1,27 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CodexBridgeConsole", "CodexBridgeConsole\CodexBridgeConsole.csproj", "{1F2DF7D1-5A9E-4F26-BE3C-4B8D30FDC2EA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CodexBridgeConsole.Tests", "CodexBridgeConsole.Tests\CodexBridgeConsole.Tests.csproj", "{D5B67C71-9E04-4E4D-A5FD-91B738E7F4B1}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{1F2DF7D1-5A9E-4F26-BE3C-4B8D30FDC2EA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1F2DF7D1-5A9E-4F26-BE3C-4B8D30FDC2EA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1F2DF7D1-5A9E-4F26-BE3C-4B8D30FDC2EA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1F2DF7D1-5A9E-4F26-BE3C-4B8D30FDC2EA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D5B67C71-9E04-4E4D-A5FD-91B738E7F4B1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D5B67C71-9E04-4E4D-A5FD-91B738E7F4B1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D5B67C71-9E04-4E4D-A5FD-91B738E7F4B1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D5B67C71-9E04-4E4D-A5FD-91B738E7F4B1}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal
