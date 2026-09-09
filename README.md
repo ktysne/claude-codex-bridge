@@ -55,6 +55,7 @@ Codex CLI は認証情報を `$CODEX_HOME/auth.json` に保存し、他の場所
 | `tools/codex-agent.sh` | GPT 側の定義を読んで `codex exec` を組み立てるスクリプト |
 | `docs/gpt-agents.md` | GPT 系サブエージェントの構成と、フォールバックの条件 |
 | `docs/setup.md` | アカウントのログインからサブエージェント有効化までの手順 |
+| `docs/gui-console-design.md` | 定義ファイルを GUI から書き換える設定コンソール(Windows)の設計。実装は未着手 |
 | `docs/cross-review.md`、`.cross-review.md` | ai-cross-review の手順と、このプロジェクト固有のレビュー観点 |
 
 ## 使い始めるまで
