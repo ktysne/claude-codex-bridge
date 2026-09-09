@@ -26,7 +26,7 @@ Claude Code から Codex CLI を、用途別のサブエージェントとして
 
 ## 守るべき設計原則
 
-- 用途固定の原則: アカウント A はレビュー専用、アカウント B は実装補助専用とする。利用上限の回避を目的にアカウントを切り替える構成(枠が尽きたら別アカウントへ回す、など)は導入しない。OpenAI の利用規約が禁じる rate limit の回避と解釈される余地があるためである。現在は 1 アカウント段階であり、既定ホーム(`~/.codex`)を対話と 4 定義(`impl-light`、`impl-standard`、`codex-review`、`codex-subagent`)のすべてに使う。用途別アカウントに分けた時点で、`codex-review` は `~/.codex-review` へ、他の 3 定義は `~/.codex-subagent` へ移す。
+- 用途固定の原則: アカウント A はレビュー専用、アカウント B は実装補助専用とする。利用上限の回避を目的にアカウントを切り替える構成(枠が尽きたら別アカウントへ回す、など)は導入しない。OpenAI の利用規約が禁じる rate limit の回避と解釈される余地があるためである。現在は 2 アカウント段階である。メインで使うアカウントを既定ホーム(`~/.codex`)に置き、もう一方には役割名を付けたホームを与える。メインを既定ホームに置くのは、Codex CLI の対話、VS Code や Chrome の Codex 拡張、Claude Code の Codex プラグイン(`codex:codex-rescue` など)が既定ホームしか見ないためである。既定ホームを空けるとこれらが未ログイン扱いになり、`~/.codex` が自動で再生成される。リポジトリの既定はメインをレビュー用に使う配置であり、`codex-review` は `~/.codex` を、他の 3 定義(`impl-light`、`impl-standard`、`codex-subagent`)は `~/.codex-subagent` を使う。メインを実装補助用にする配置では、`codex-review` を `~/.codex-review`、他の 3 定義を `~/.codex` にする。
 - 認証の分離: `codex` を呼ぶときは必ず `CODEX_HOME` を明示する。既定の `~/.codex` に暗黙に依存する呼び出しを書かない。
 - 権限の固定: レビュー用は `--sandbox read-only` を外さない。実装補助用でも `--dangerously-bypass-approvals-and-sandbox` は使わない。設定コンソールからも `codex_sandbox` と `codex_home` は編集させない。
 - 認証情報の非コミット: `auth.json`、トークン、アカウント ID をリポジトリに入れない。ドキュメントの例には実値を書かない。
@@ -40,7 +40,8 @@ Claude Code から Codex CLI を、用途別のサブエージェントとして
 
 ```bash
 codex --version
-CODEX_HOME="$USERPROFILE/.codex" codex login status  # 現段階は 4 定義とも既定ホームを使う
+CODEX_HOME="$USERPROFILE/.codex" codex login status  # レビュー用(codex-review)、メインアカウント
+CODEX_HOME="$USERPROFILE/.codex-subagent" codex login status  # 実装補助用(impl-light、impl-standard、codex-subagent)
 bash tools/codex-agent.sh impl-light --effort low <<< "Reply with exactly: PONG-LUNA"  # 実モデルを起動し利用枠を消費する
 bash tools/codex-agent.sh codex-review --effort low <<< "Reply with exactly: PONG-REVIEW"  # 同上
 dotnet build gui/CodexBridgeConsole.sln -c Release  # 設定コンソール
