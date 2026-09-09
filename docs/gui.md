@@ -109,7 +109,7 @@ Windows 10 1903 以降と Windows 11 には .NET Framework 4.8 が同梱され�
 
 保存前に、3 つの Claude 側定義の `model` と `effort` が空でないことを検証する。
 GPT 経路が有効な場合は、2 つの GPT 側定義の `codex_model` も空でないことを検証する。
-GPT 側の `codex_reasoning_effort` は、GPT 経路の有効状態にかかわらず `low`、`medium`、`high`、`xhigh`、`max` のいずれかであることを検証する。
+GPT 側の `codex_reasoning_effort` は、GPT 経路の有効状態にかかわらず `low`、`medium`、`high`、`xhigh`、`max`、`ultra` のいずれかであることを検証する。この一覧は `tools/codex-agent.sh` が受け付ける値である。
 定義に `codex_reasoning_effort` が無い場合は `medium` として表示する。`tools/codex-agent.sh` が省略時に `medium` を使うためである。値を変えずに保存したときは、キーを足さない。
 モデル名と effort に使えるのは、英数字と `.`、`_`、`-`、`/` だけである。
 先頭を `-` にはできず、英数字を 1 つ以上含む必要がある。`model: -` のように意味の定まらない行を書かないためである。
@@ -134,16 +134,71 @@ JSON は次の形で、4 つの配列をすべて指定する。
 
 ```json
 {
-  "claudeModels": ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"],
-  "claudeEfforts": ["low", "medium", "high"],
-  "gptModels": ["gpt-5.6-luna", "gpt-5.6-sol"],
-  "gptEfforts": ["low", "medium", "high", "xhigh", "max"]
+  "claudeModels": ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"],
+  "claudeEfforts": ["low", "medium", "high", "xhigh", "max"],
+  "claudeModelEfforts": [
+    { "model": "claude-opus-5", "efforts": ["low", "medium", "high", "xhigh", "max"] },
+    { "model": "claude-opus-4-6", "efforts": ["low", "medium", "high", "max"] }
+  ],
+  "gptModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"],
+  "gptEfforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
 }
 ```
+
+`claudeModelEfforts` は任意である。書かない場合、Claude 側の effort はモデルによらず `claudeEfforts` の一覧になる。
+
+GPT 側の 2 つは、`codex debug models` から目録を取れた場合はそちらが優先される(次の節を参照)。
+`choices.json` の GPT 側は、目録を取れなかったときの控えである。
 
 各配列は空にできず、空白だけの選択肢も指定できない。
 `choices.json` が壊れている場合や配列が欠けている場合は、埋め込みの既定値に戻る。
 読み込んだ定義ファイルの現在値が選択肢に無い場合も、現在値を先頭に追加して保持する。
+
+## GPT 側のモデルと effort の取得
+
+起動すると `codex debug models` を 1 回実行し、その出力から GPT 側のモデル名と effort の一覧を取り出す。
+`CODEX_HOME` には、GPT 側 `impl-light` 定義の `codex_home` を展開した値を渡す。
+取得できた場合、GPT モデルの選択肢は目録のモデル名になり、effort の選択肢はその行で選ばれているモデルが受け付ける値になる。
+
+モデルによって使える effort が違う。
+そのため、GPT モデルを変えると、その行の effort の選択肢が切り替わる。
+変更後のモデルが現在の effort を受け付けない場合は、そのモデルの既定の effort に切り替える。
+選べるように見えて Codex 側で弾かれる組み合わせを保存できないようにするためである。
+
+読み込んだ直後は、定義ファイルに書かれている値をそのまま表示する。
+受け付けない値であっても勝手に変えない。開いただけで定義が書き換わるのを避けるためである。
+
+`codex` が無い、`codex_home` が読めない、出力を解析できないなどで目録を取れない場合は、`choices.json` または埋め込みの既定値を使う。
+画面には知らせない。
+
+## Claude 側のモデルと effort
+
+Claude 側のモデル一覧には、`codex debug models` に相当する取得手段が無い。
+Claude Code には非対話でモデル一覧を返すコマンドが無いためである。
+そのため Claude 側は、モデルと effort の対応を `choices.json` と埋め込みの既定値で持つ。
+
+effort に対応するモデルと、その値は次のとおりである。
+
+| モデル | 選べる effort |
+|---|---|
+| `claude-fable-5-1`、`claude-fable-5` | low、medium、high、xhigh、max |
+| `claude-opus-5`、`claude-sonnet-5` | low、medium、high、xhigh、max |
+| `claude-opus-4-8`、`claude-opus-4-7` | low、medium、high、xhigh、max |
+| `claude-opus-4-6`、`claude-sonnet-4-6` | low、medium、high、max |
+
+`claude-haiku-4-5` は effort に対応しない。対応表に無いモデルを選んだ場合は、`claudeEfforts` の一覧を出す。
+
+Claude モデルを変えると、その行の effort の選択肢が切り替わる。
+変更後のモデルが現在の effort を受け付けない場合は、指定値以下で最も高い対応済みの値に変える。
+たとえば `xhigh` のまま `claude-opus-4-6` に変えると `high` になる。
+Claude Code 自身が、対応しない effort をこの規則で落として実行するためである。
+指定値以下に対応済みの値が無い場合は、その一覧の先頭の値にする。
+
+GPT 側と同じく、読み込んだ直後は定義ファイルの値をそのまま表示する。
+
+この対応表は Claude Code の公式ドキュメント [Model configuration](https://code.claude.com/docs/en/model-config)(2026-09-09 時点)による。
+モデルが増えたときは `choices.json` の `claudeModels` と `claudeModelEfforts` を書き換える。
+モデル ID は、導入済みの Claude Code が保持している値を使う。
 
 ## 編集できない設定
 

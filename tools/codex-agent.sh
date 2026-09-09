@@ -35,7 +35,7 @@ usage() {
   <agent-name>      .claude/gpt-agents/<agent-name>.md の名前
   -C <workdir>      Codex の作業ディレクトリ(既定はカレントディレクトリ)
   --effort <level>  推論 effort を定義ファイルの値より優先して指定する
-                    (low|medium|high|xhigh|max)
+                    (low|medium|high|xhigh|max|ultra)
 
 依頼文は標準入力から読む。
 
@@ -63,8 +63,8 @@ die_missing() {
 # effort は Codex が受け付ける値だけを通す。誤った値を渡すと codex 側で失敗するためである。
 validate_effort() {
   case "$1" in
-    low|medium|high|xhigh|max) ;;
-    *) die "effort の値が不正である: $1 (low|medium|high|xhigh|max)" ;;
+    low|medium|high|xhigh|max|ultra) ;;
+    *) die "effort の値が不正である: $1 (low|medium|high|xhigh|max|ultra)" ;;
   esac
 }
 
