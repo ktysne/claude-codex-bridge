@@ -212,16 +212,26 @@ esac
 ```text
 gui/
 ├─ CodexBridgeConsole.sln
+├─ build.bat                         ダブルクリックで dist へ発行する
+├─ start.bat                         exe が無ければビルドしてから起動する
 ├─ CodexBridgeConsole/
 │   ├─ CodexBridgeConsole.csproj     net48、UseWindowsForms、OutputType=WinExe
+│   ├─ app.manifest                  高 DPI 対応と対応 Windows の宣言
 │   ├─ Program.cs                    エントリポイント
 │   ├─ MainForm.cs                   画面の組み立てとイベント
-│   ├─ FrontMatterFile.cs            フロントマターの読み書きと検証
+│   ├─ ConsoleSettings.cs            5 定義の読み込み、検証、保存
+│   ├─ FrontMatterFile.cs            フロントマターの読み書き
+│   ├─ FrontMatterFileChangedException.cs  読み込み後の外部変更を表す例外
+│   ├─ CodexModelCatalog.cs          codex debug models の目録
 │   ├─ Choices.cs                    選択肢の既定値と choices.json の読み込み
 │   └─ choices.default.json          埋め込みリソース
 └─ CodexBridgeConsole.Tests/
     ├─ CodexBridgeConsole.Tests.csproj  net48、xunit
-    └─ FrontMatterFileTests.cs
+    ├─ FrontMatterFileTests.cs
+    ├─ ConsoleSettingsTests.cs
+    ├─ ChoicesTests.cs
+    ├─ CodexModelCatalogTests.cs
+    └─ TemporaryDirectory.cs            テスト用の一時フォルダ
 ```
 
 ビルドと発行のコマンドは次のとおりである。
@@ -233,6 +243,9 @@ dotnet publish gui/CodexBridgeConsole/CodexBridgeConsole.csproj -c Release -o gu
 ```
 
 `gui/dist/` と `gui/**/bin/`、`gui/**/obj/` は `.gitignore` に追加する。
+`build.bat` は上の発行と同じことをダブルクリックで行い、成功するとエクスプローラーで exe を示す。
+`start.bat` は exe が無ければ `build.bat` を呼んでから起動する。
+どちらも cmd.exe が読むため、表示する文は ASCII で書く([CLAUDE.md](../CLAUDE.md) の言語の例外)。
 exe はリポジトリにコミットせず、必要なら GitHub Release に添付する。
 
 ## 実装の段階

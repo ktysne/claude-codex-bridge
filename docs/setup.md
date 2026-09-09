@@ -52,6 +52,13 @@ codex login status
 この場合も、Claude 側定義が呼び出すスクリプトを `%USERPROFILE%\.claude\tools\codex-agent.sh` に置く。
 プロジェクト側の GPT 側定義は、ユーザー定義側より優先して使われる。
 
+`tools/codex-agent.sh` は行末が LF のまま配置する。
+CRLF に変換されると、bash が行末の CR を引数として読み、実行に失敗する。
+リポジトリでは `.gitattributes` で LF に固定しているが、エディタやコピーの経路で変換された場合は LF に戻す。
+
+リポジトリを更新して定義やスクリプトの変更を取り込んだときは、同じ手順で再配置する。
+配置済みの控えは自動では更新されない。
+
 ### 4. Claude Code の権限規則を設定する
 
 `%USERPROFILE%\.claude\settings.json` の `permissions.allow` に、次の 2 規則を追加する。
@@ -107,6 +114,15 @@ Claude Code はサブエージェント定義を呼び出せるものとして�
 エージェント定義と `CLAUDE.md` はセッション開始時に読み込まれる。
 配置した定義と追加した役割分担を有効にするため、Claude Code を再起動する。
 再起動後に表示される定義は、`impl-hard` と、選んだパターンで配置したものだけになる。
+
+### 7. 設定コンソールを導入する(任意)
+
+配置した定義のモデル、effort、GPT 経路の有効状態を GUI から変えるなら、設定コンソールを導入する。
+`gui\build.bat` をダブルクリックすると `gui\dist\CodexBridgeConsole.exe` ができる。
+ビルドには .NET SDK が要る。
+以後は exe をダブルクリックして起動し、手順 3 で配置したユーザ定義側の 5 ファイルを編集する。
+詳細は [設定コンソールの使い方](gui.md) を参照する。
+定義ファイルを手で編集する運用でも差し支えないため、この手順は省略できる。
 
 ## パターン 1
 
@@ -246,4 +262,4 @@ Claude Code の Codex プラグイン(`codex:codex-rescue` など)は、この�
 プラグインはセッション共有の broker 経由で `codex app-server` を起動し、broker プロセスの環境変数を起動時に固定する。
 呼び出しごとに `CODEX_HOME` を切り替える用途には向かないため、用途別アカウント運用はこのリポジトリの定義で行う。
 
-Windows で定義ファイルのモデル、effort、GPT 系サブエージェント経路の有効状態を変更する場合は、[設定コンソールの使い方](gui.md) に従って `gui/CodexBridgeConsole/CodexBridgeConsole.csproj` を `gui/dist` へ発行し、生成された `CodexBridgeConsole.exe` を起動する。
+定義ファイルのモデル、effort、GPT 系サブエージェント経路の有効状態を GUI から変える場合は、共通手順 7 の設定コンソールを使う。
