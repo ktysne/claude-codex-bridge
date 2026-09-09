@@ -1,0 +1,5 @@
+# bash が読むスクリプトは LF で固定する。CRLF だと Git Bash が行末の CR を引数として扱い、実行に失敗する。
+tools/codex-agent.sh text eol=lf
+
+# cmd.exe が読むバッチは CRLF で固定する。LF だけの行末でも動くことが多いが、ラベルやブロックの解釈が崩れる版があるためである。
+*.bat text eol=crlf
