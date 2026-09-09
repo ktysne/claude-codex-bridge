@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
@@ -11,6 +12,8 @@ namespace CodexBridgeConsole
     public sealed class MainForm : Form
     {
         private const int CodexVersionTimeoutMilliseconds = 5000;
+
+        private const int CommandNotFoundExitCode = 9009;
 
         private readonly ConsoleSettings _settings;
         private readonly Choices _choices;
@@ -399,10 +402,20 @@ namespace CodexBridgeConsole
             // バージョンの取得は起動時の 1 回だけなので、再読込では取得済みの結果を出し直す。
             _codexVersionLabel.Text = "codex --version: " + _codexVersionText;
 
-            if (!_settings.CanSave)
+            if (_settings.MissingFiles.Count > 0 || _settings.UnreadableFiles.Count > 0)
             {
-                _missingFilesLabel.Text = "保存できない。見つからない定義ファイル: "
-                    + string.Join(", ", _settings.MissingFiles);
+                var reasons = new List<string>();
+                if (_settings.MissingFiles.Count > 0)
+                {
+                    reasons.Add("見つからない: " + string.Join(", ", _settings.MissingFiles));
+                }
+
+                if (_settings.UnreadableFiles.Count > 0)
+                {
+                    reasons.Add("読めない: " + string.Join(" / ", _settings.UnreadableFiles));
+                }
+
+                _missingFilesLabel.Text = "保存できない。" + string.Join("  ", reasons);
             }
             else if (_settings.CodexEnabledMismatch)
             {
@@ -674,6 +687,13 @@ namespace CodexBridgeConsole
                     if (process.ExitCode == 0 && standardOutput.Length > 0)
                     {
                         return standardOutput;
+                    }
+
+                    // cmd は目的のコマンドが見つからないとき 9009 を返す。
+                    // cmd 自体は起動できるため Win32Exception にはならない。
+                    if (process.ExitCode == CommandNotFoundExitCode)
+                    {
+                        return "見つからない";
                     }
 
                     if (standardError.Length > 0)
