@@ -255,6 +255,190 @@ namespace CodexBridgeConsole.Tests
         }
 
         [Fact]
+        public void DescribeChanges_ReturnsEmptyWhenNothingChanged()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+
+                Assert.Empty(settings.DescribeChanges());
+            }
+        }
+
+        [Fact]
+        public void DescribeChanges_ReportsChangedClaudeModel()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+                settings.ImplHard.ClaudeModel = "claude-hard-model-updated";
+
+                Assert.Equal(
+                    new[]
+                    {
+                        ClaudeHardPath
+                            + " の model: claude-hard-model → claude-hard-model-updated"
+                    },
+                    settings.DescribeChanges());
+            }
+        }
+
+        [Fact]
+        public void DescribeChanges_ReportsExplicitCodexEnabledWritebackWhenValueIsSame()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+                settings.CodexEnabledExplicit = true;
+
+                Assert.Equal(
+                    new[] { "codex_enabled: 両定義へ「有効」を書き戻す" },
+                    settings.DescribeChanges());
+            }
+        }
+
+        [Fact]
+        public void ReloadPreservingEdits_KeepsEditedValueAndTakesExternalChangeForOthers()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory, true);
+                var settings = new ConsoleSettings(directory.Path);
+                settings.ImplHard.ClaudeModel = "claude-hard-model-edited";
+
+                // 利用者が触っていない項目を外部で変える。
+                WriteDefinition(
+                    directory,
+                    ClaudeLightPath,
+                    ClaudeDefinition("impl-light", "claude-light-model-external", "low"));
+                WriteDefinition(directory, GptStandardPath, GptDefinition("codex-standard-model", "xhigh", false));
+                WriteDefinition(directory, GptLightPath, GptDefinition("codex-light-model", "high", false));
+
+                IReadOnlyList<string> conflicts = settings.ReloadPreservingEdits();
+
+                Assert.Empty(conflicts);
+                Assert.Equal("claude-hard-model-edited", settings.ImplHard.ClaudeModel);
+                Assert.Equal("claude-light-model-external", settings.ImplLight.ClaudeModel);
+                Assert.False(settings.CodexEnabled);
+                Assert.False(settings.CodexEnabledExplicit);
+                Assert.Equal(
+                    new[] { ClaudeHardPath + " の model: claude-hard-model → claude-hard-model-edited" },
+                    settings.DescribeChanges());
+            }
+        }
+
+        [Fact]
+        public void ReloadPreservingEdits_PrefersEditedValueAndReportsConflict()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+                settings.ImplHard.ClaudeModel = "claude-hard-model-edited";
+                WriteDefinition(
+                    directory,
+                    ClaudeHardPath,
+                    ClaudeDefinition("impl-hard", "claude-hard-model-external", "high"));
+
+                IReadOnlyList<string> conflicts = settings.ReloadPreservingEdits();
+
+                Assert.Equal(
+                    new[]
+                    {
+                        ClaudeHardPath
+                            + " の model: 外部で claude-hard-model-external に変わったが、入力中の claude-hard-model-edited を優先する"
+                    },
+                    conflicts);
+                Assert.Equal("claude-hard-model-edited", settings.ImplHard.ClaudeModel);
+                Assert.True(settings.HasChanges);
+            }
+        }
+
+        [Fact]
+        public void ReloadPreservingEdits_KeepsExplicitCodexEnabledToggle()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory, true);
+                var settings = new ConsoleSettings(directory.Path);
+                settings.CodexEnabled = false;
+                settings.CodexEnabledExplicit = true;
+
+                settings.ReloadPreservingEdits();
+
+                Assert.False(settings.CodexEnabled);
+                Assert.True(settings.CodexEnabledExplicit);
+                Assert.True(settings.HasChanges);
+            }
+        }
+
+        [Fact]
+        public void ReloadPreservingEdits_KeepsRevertAfterInterruptedSave()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+
+                // 先頭のファイルだけ保存され、最後のファイルで中断する状態を作る。
+                WriteDefinition(
+                    directory,
+                    GptLightPath,
+                    GptDefinition("codex-light-model-external", "high", null));
+                settings.ImplHard.ClaudeModel = "claude-hard-model-updated";
+                settings.ImplLight.CodexModel = "codex-light-model-updated";
+                Assert.Throws<FrontMatterFileChangedException>(() => settings.Save());
+
+                // 書き込み済みの値を元に戻す編集は、未編集ではなく差分として扱われる。
+                settings.ImplHard.ClaudeModel = "claude-hard-model";
+                Assert.Contains(
+                    ClaudeHardPath + " の model: claude-hard-model-updated → claude-hard-model",
+                    settings.DescribeChanges());
+
+                IReadOnlyList<string> conflicts = settings.ReloadPreservingEdits();
+
+                // 戻した値が保持され、外部と重なった light の codex_model だけが競合として報告される。
+                Assert.Equal(
+                    new[]
+                    {
+                        GptLightPath
+                            + " の codex_model: 外部で codex-light-model-external に変わったが、入力中の codex-light-model-updated を優先する"
+                    },
+                    conflicts);
+                Assert.Equal("claude-hard-model", settings.ImplHard.ClaudeModel);
+                Assert.Equal("codex-light-model-updated", settings.ImplLight.CodexModel);
+                Assert.True(settings.HasChanges);
+            }
+        }
+
+        [Fact]
+        public void ReloadPreservingEdits_ReportsCodexEnabledConflictPerDefinition()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                // standard=false / light=true の食い違いから始め、画面で有効にする。
+                WriteMismatchedDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+                settings.CodexEnabled = true;
+                settings.CodexEnabledExplicit = true;
+
+                // 外部が light だけを無効にする。集約値は無効のまま変わらない。
+                WriteDefinition(directory, GptLightPath, GptDefinition("codex-light-model", "high", false));
+
+                IReadOnlyList<string> conflicts = settings.ReloadPreservingEdits();
+
+                Assert.Equal(
+                    new[] { GptLightPath + " の codex_enabled: 外部で 無効 に変わったが、入力中の 有効 を優先する" },
+                    conflicts);
+                Assert.True(settings.CodexEnabled);
+                Assert.True(settings.CodexEnabledExplicit);
+            }
+        }
+
+        [Fact]
         public void Save_ReportsAlreadySavedFilesWhenInterrupted()
         {
             using (var directory = new TemporaryDirectory())
@@ -531,10 +715,15 @@ namespace CodexBridgeConsole.Tests
                         "codex_sandbox: workspace-write\ncodex_enabled: typo\n"));
                 var settings = new ConsoleSettings(directory.Path);
 
+                // 利用者が何も変えていなくても、修復のために保存できる必要がある。
+                Assert.False(settings.HasChanges);
+                Assert.True(settings.NeedsSave);
+
                 Assert.True(settings.Save().Succeeded);
 
                 Assert.Contains("codex_enabled: \"false\"", ReadDefinition(directory, GptLightPath));
                 Assert.Empty(settings.CodexEnabledInvalidFiles);
+                Assert.False(settings.NeedsSave);
             }
         }
 
