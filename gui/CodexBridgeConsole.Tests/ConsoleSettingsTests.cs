@@ -810,6 +810,32 @@ namespace CodexBridgeConsole.Tests
                 + "本文を1行置く。\n";
         }
 
+        [Fact]
+        public void Save_DoesNotAddEmptyCodexModelWhenDefinitionLacksItAndGptIsDisabled()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+
+                // codex_model が無い定義は codex_enabled: false のときだけスクリプトを通る。
+                // 保存で空の codex_model を足すと、変えていないファイルを書き換えることになる。
+                string withoutModel = GptDefinition("codex-light-model", "high", false)
+                    .Replace("codex_model: codex-light-model\n", string.Empty);
+                WriteDefinition(directory, GptLightPath, withoutModel);
+                var settings = new ConsoleSettings(directory.Path);
+
+                Assert.Null(settings.ImplLight.CodexModel);
+                Assert.False(settings.CodexEnabled);
+
+                settings.ImplLight.CodexModel = string.Empty;
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.True(result.Succeeded);
+                Assert.Empty(result.ChangedFiles);
+                Assert.DoesNotContain("codex_model", ReadDefinition(directory, GptLightPath));
+            }
+        }
+
         private static string GptDefinition(string model, string reasoningEffort, bool? codexEnabled)
         {
             string enabled = codexEnabled.HasValue
