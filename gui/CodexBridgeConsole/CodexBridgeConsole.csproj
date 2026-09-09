@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <RootNamespace>CodexBridgeConsole</RootNamespace>
+    <AssemblyName>CodexBridgeConsole</AssemblyName>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="choices.default.json">
+      <LogicalName>CodexBridgeConsole.choices.default.json</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+</Project>
