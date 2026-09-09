@@ -48,13 +48,34 @@ $env:CODEX_HOME="$env:USERPROFILE\.codex-subagent"; codex login status
 `.claude/gpt-agents/` にある 4 定義と `tools/codex-agent.sh` も、同じプロジェクトへコピーする。
 すべてのプロジェクトで使うなら、`agents/` の 4 定義、`gpt-agents/` の 4 定義、`tools/codex-agent.sh` の 3 箇所(`%USERPROFILE%\.claude\agents\`、`%USERPROFILE%\.claude\gpt-agents\`、`%USERPROFILE%\.claude\tools\`)をそろえて置く。
 
-## 4. Claude Code を再起動する
+## 4. Claude Code の権限規則を入れる
+
+`%USERPROFILE%\.claude\settings.json` の `permissions.allow` に、次の 2 規則を追加する。
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash ~/.claude/tools/codex-agent.sh *)",
+      "Bash(bash tools/codex-agent.sh *)"
+    ]
+  }
+}
+```
+
+既存の `permissions.allow` がある場合は、配列に 2 規則を追加する。
+許可規則はコマンド文字列の先頭一致で判定される。
+そのため、4 定義の呼び出し形は `bash ~/.claude/tools/codex-agent.sh <name> ...` の 1 行から変えてはいけない。
+変数への代入や `[ -f ... ] ||` の分岐を前に付けると許可されず、auto mode でサブエージェントが Codex を呼べない。
+auto mode でない場合も、同じ規則を入れておけば確認プロンプトを省略できる。
+
+## 5. Claude Code を再起動する
 
 エージェント定義はセッション開始時に読み込まれる。
 配置しただけでは `Agent` ツールから見えないので、Claude Code を再起動する。
 再起動後、利用可能なエージェント一覧に `codex-review`、`codex-subagent`、`impl-light`、`impl-standard` が並ぶ。
 
-## 5. 動作を確認する
+## 6. 動作を確認する
 
 Git Bash で `tools/codex-agent.sh` を直接呼び出し、次のコマンドを実行する。
 
@@ -70,6 +91,10 @@ bash tools/codex-agent.sh codex-review --effort low <<< "Reply with exactly: PON
 
 Claude Code を再起動した後、`Agent` ツールで `subagent_type: codex-review` を指定し、`Reply with exactly: PONG-REVIEW` を送る。
 `PONG-REVIEW` が返り、その `CODEX_HOME` の `sessions/` にログが増えることを確認する。
+
+権限規則の確認には、Claude Code のサブエージェントから引数なしで `bash ~/.claude/tools/codex-agent.sh` を実行する。
+用法と終了コード `2` が返れば、Bash の実行が権限規則を通っている。
+「Blocked」などの拒否文言が返る場合は、`settings.json` の規則と定義の呼び出し形を確認する。
 
 ## 導入済み Codex プラグインとの関係
 

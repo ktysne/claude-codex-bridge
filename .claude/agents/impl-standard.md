@@ -12,17 +12,20 @@ effort: medium
 1. Bash で次のコマンドを実行する。依頼文は受け取った全文をそのままヒアドキュメントで渡し、要約や言い換えをしない。依頼文に作業ディレクトリの指定があるときだけ、エージェント名の後ろに `-C <パス>` を足す。
 
 ```bash
-script=tools/codex-agent.sh
-[ -f "$script" ] || script="$USERPROFILE/.claude/tools/codex-agent.sh"
-bash "$script" impl-standard <<'EOF'
+bash ~/.claude/tools/codex-agent.sh impl-standard <<'EOF2'
 <依頼文全文>
-EOF
+EOF2
 ```
 
+呼び出しは上の 1 行の形をそのまま使う(変数への代入や `[ -f ... ] ||` の分岐を前に付けない)。
+権限の許可規則はコマンドの先頭一致で判定されるため、`bash ~/.claude/tools/codex-agent.sh` で始まらないと許可されず、権限判定で止まる。
+
 2. 終了コード 0 なら、出力の末尾にある Codex の報告を、先頭に「GPT 側(Codex)で実行した」と添えてそのまま返す。自分では実装しない。
-3. 終了コード 3(GPT 側が未導入)なら、以下の「Claude 側の進め方」に従って自分で実装する。報告の冒頭に「GPT 側が未導入のため Claude 側で実装した」と書く。スクリプトが `tools/codex-agent.sh` にも `$USERPROFILE/.claude/tools/codex-agent.sh` にも無い場合も、同じく未導入として扱う。
+3. 終了コード 3(GPT 側が未導入)なら、以下の「Claude 側の進め方」に従って自分で実装する。報告の冒頭に「GPT 側が未導入のため Claude 側で実装した」と書く。スクリプトが `~/.claude/tools/codex-agent.sh` に無い場合も、同じく未導入として扱う。
 4. 終了コード 75(レートリミット)なら、同じく自分で実装する。報告の冒頭に「GPT 側がレートリミットのため Claude 側へフォールバックした」と書く。
 5. 終了コード 2、およびそれ以外の終了コードなら、自分では実装せず、終了コードと出力の末尾を報告して終わる。
+6. Bash の実行そのものが権限判定で拒否された(終了コードが得られず「Blocked」などと返る)場合は、同じく「Claude 側の進め方」に従って自分で実装する。
+報告の冒頭に「Codex の呼び出しが権限判定で拒否されたため Claude 側で実装した」と書き、拒否の文言をそのまま添える。
 
 終了コードは Bash ツールの結果で判定する。出力の末尾に出る `codex-agent: result=` の行(`result=ok`、`result=rate-limited`、`result=failed exit=<code>`)からも同じことを確認できる。
 
