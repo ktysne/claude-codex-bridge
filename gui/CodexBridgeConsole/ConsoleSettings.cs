@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
+using System.Text;
 
 namespace CodexBridgeConsole
 {
@@ -135,7 +136,8 @@ namespace CodexBridgeConsole
                 catch (Exception exception) when (
                     exception is InvalidDataException
                     || exception is IOException
-                    || exception is UnauthorizedAccessException)
+                    || exception is UnauthorizedAccessException
+                    || exception is DecoderFallbackException)
                 {
                     // 読めない定義があっても画面は開く。定義を直すための道具が、
                     // 定義が壊れているときに起動できないと使えないためである。

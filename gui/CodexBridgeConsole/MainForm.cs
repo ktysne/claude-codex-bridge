@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -514,7 +515,8 @@ namespace CodexBridgeConsole
             catch (Exception exception) when (
                 exception is IOException
                 || exception is UnauthorizedAccessException
-                || exception is InvalidDataException)
+                || exception is InvalidDataException
+                || exception is DecoderFallbackException)
             {
                 // 定義ファイルが外部で壊された場合に画面ごと落とさない。読み込み前の状態を保つ。
                 MessageBox.Show(
