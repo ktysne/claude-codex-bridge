@@ -44,6 +44,10 @@ codex login status
 `tools/codex-agent.sh` を `%USERPROFILE%\.claude\tools\` にコピーする。
 各パターンで配置する定義は、パターンごとの追加手順に示す。
 
+`.claude/agents/impl-hard.md` は、どのパターンでも Claude 側定義として配置する。
+この定義は Codex を呼ばず Claude(Opus 5 / high)だけで実装するため、GPT 側定義とスクリプトを持たない。
+次の手順で書く役割分担の表が `impl-hard` を参照するので、配置を省くと表の hard 区分を呼び出せなくなる。
+
 特定の利用先プロジェクトだけで使う場合は、Claude 側定義を `<利用先プロジェクト>/.claude/agents/` に、GPT 側定義を `<利用先プロジェクト>/.claude/gpt-agents/` に置いてもよい。
 この場合も、Claude 側定義が呼び出すスクリプトを `%USERPROFILE%\.claude\tools\codex-agent.sh` に置く。
 プロジェクト側の GPT 側定義は、ユーザー定義側より優先して使われる。
@@ -69,19 +73,49 @@ codex login status
 変数への代入や `[ -f ... ] ||` の分岐を前に付けると許可されず、auto mode でサブエージェントが Codex を呼べない。
 auto mode でない場合も、同じ規則を入れておけば確認プロンプトを省略できる。
 
-### 5. Claude Code を再起動する
+### 5. メインセッションに役割分担を指示する
 
-エージェント定義はセッション開始時に読み込まれる。
-配置した定義を利用可能にするため、Claude Code を再起動する。
-再起動後に表示される定義は、選んだパターンで配置したものだけになる。
+定義を配置しただけでは、メインセッションはどの依頼をどの定義に切り出すかを知らない。
+Claude Code はサブエージェント定義を呼び出せるものとして読み込むだけで、難易度に応じて選ぶ規則は持たないためである。
+そこで、利用先の `%USERPROFILE%\.claude\CLAUDE.md` に次の節を追加する。
+特定のプロジェクトだけで使う場合は、そのプロジェクトの `CLAUDE.md` に追加する。
+
+```markdown
+## モデル役割分担（メインセッションとサブエージェント）
+メインセッションは設計・監査・レビューに専念し、実装はサブエージェント(Agentツール)に切り出すことを基本とする。
+サブエージェントは`.claude/agents/`の3定義から難易度に応じて選ぶ。モデルとeffortは定義側に持たせてあるので、呼び出し時は`subagent_type`を選ぶだけでよい。
+
+| 区分 | 定義 | モデル / effort | 想定するタスク |
+|---|---|---|---|
+| hard | `impl-hard` | Opus 5 / high | 複数ファイル・複数層にまたがる設計変更。数値精度、並行処理、状態遷移など正しさの検証が難しいロジック。既存設計の理解が前提になる改修 |
+| standard（既定） | `impl-standard` | Opus 5 / medium | 仕様が明確な機能追加や不具合修正。テストの追加・更新を伴う通常の変更。既存パターンに沿った新規コンポーネントの実装 |
+| light | `impl-light` | Sonnet 5 / medium | 文言・コメント・ドキュメントの修正。レビュー指摘への局所的な追従修正。既存パターンをそのまま踏襲する定型的なテスト追加や小さなリファクタリング |
+
+区分の判断基準は次のとおり。迷ったら一段上の区分に倒す（安い経路で失敗して往復するほうが高くつく）。
+- 変更が1ファイルに収まり、既存コードの模倣で済むならlight。
+- 仕様は決まっているが、実装の選択肢を考える必要があるならstandard。
+- 仕様の解釈や設計判断を実装者が行う必要がある、または誤りの検出が難しいならhard。
+```
+
+表の「モデル / effort」は Claude 側定義の値である。
+`impl-light` と `impl-standard` は既定で GPT 側へ委譲し、Claude 側の値はレートリミット時のフォールバックで使われる。
+パターン 2 とパターン 3 で配置する `codex-review` と `codex-subagent` は、難易度で選ぶ定義ではないため表に含めない。
+レビューや調査を Codex に依頼するときに、メインセッションが明示的に指定する。
+
+### 6. Claude Code を再起動する
+
+エージェント定義と `CLAUDE.md` はセッション開始時に読み込まれる。
+配置した定義と追加した役割分担を有効にするため、Claude Code を再起動する。
+再起動後に表示される定義は、`impl-hard` と、選んだパターンで配置したものだけになる。
 
 ## パターン 1
 
 ### 使う定義
 
 1 アカウントで実装のサブエージェント委譲だけを使う。
-`codex_home` は、次の 2 つの GPT 側定義で `~/.codex` のままにする。
+`codex_home` は、次のうち 2 つの GPT 側定義で `~/.codex` のままにする。
 
+- `.claude/agents/impl-hard.md`
 - `.claude/agents/impl-light.md`
 - `.claude/agents/impl-standard.md`
 - `.claude/gpt-agents/impl-light.md`
@@ -107,8 +141,9 @@ Claude Code の `Agent` ツールからも `subagent_type: impl-light` と `suba
 ### 使う定義
 
 1 アカウントで実装の委譲、レビュー、実装補助をすべて使う。
-`codex_home` は、4 つの GPT 側定義で `~/.codex` のままにする。
+`codex_home` は、次のうち 4 つの GPT 側定義で `~/.codex` のままにする。
 
+- `.claude/agents/impl-hard.md`
 - `.claude/agents/impl-light.md`
 - `.claude/agents/impl-standard.md`
 - `.claude/agents/codex-review.md`
@@ -159,8 +194,9 @@ codex login status
 
 ### 使う定義
 
-4 つの Claude 側定義、4 つの GPT 側定義、`tools/codex-agent.sh` を配置する。
+5 つの Claude 側定義、4 つの GPT 側定義、`tools/codex-agent.sh` を配置する。
 
+- `.claude/agents/impl-hard.md`
 - `.claude/agents/impl-light.md`
 - `.claude/agents/impl-standard.md`
 - `.claude/agents/codex-review.md`
