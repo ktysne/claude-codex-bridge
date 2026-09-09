@@ -1,4 +1,4 @@
-﻿using CodexBridgeConsole;
+using CodexBridgeConsole;
 using Xunit;
 
 namespace CodexBridgeConsole.Tests
