@@ -63,6 +63,8 @@ namespace CodexBridgeConsole
 
         public bool CodexEnabledMismatch { get; private set; }
 
+        public IReadOnlyList<string> CodexEnabledInvalidFiles { get; private set; }
+
         // 画面でトグルを操作したことを示す。2 定義の値が食い違っているとき、
         // 表示上の値が変わらなくても両方へ書き戻せるようにするためである。
         public bool CodexEnabledExplicit { get; set; }
@@ -155,6 +157,18 @@ namespace CodexBridgeConsole
 
             // トグルは 1 つで 2 定義を切り替えるため、両方が有効なときだけ有効として表示する。
             // 片方だけ無効の状態を有効と読むと、別の項目を保存したときに無効側が有効へ戻る。
+            var invalidCodexEnabled = new List<string>();
+            if (hasLight && ReadCodexEnabledValue(gptLight) == null)
+            {
+                invalidCodexEnabled.Add(GetRelativePath(DefinitionKind.GptLight));
+            }
+
+            if (hasStandard && ReadCodexEnabledValue(gptStandard) == null)
+            {
+                invalidCodexEnabled.Add(GetRelativePath(DefinitionKind.GptStandard));
+            }
+
+            CodexEnabledInvalidFiles = ReadOnly(invalidCodexEnabled);
             bool lightEnabled = !hasLight || ReadEffectiveCodexEnabled(gptLight);
             bool standardEnabled = !hasStandard || ReadEffectiveCodexEnabled(gptStandard);
             CodexEnabled = lightEnabled && standardEnabled;
@@ -198,6 +212,22 @@ namespace CodexBridgeConsole
             for (int i = 0; i < UnreadableFiles.Count; i++)
             {
                 errors.Add("定義ファイルを読めない: " + UnreadableFiles[i]);
+            }
+
+            // 読み込み後に外部で消された定義は、書き換えないファイルでは検出できない。
+            // 5 ファイルが揃っていることを保存の手前で見る。
+            for (int i = 0; i < DefinitionPaths.Length; i++)
+            {
+                string relativePath = DefinitionPaths[i].RelativePath;
+                if (IsMissing(relativePath))
+                {
+                    continue;
+                }
+
+                if (!File.Exists(Path.Combine(RootDirectory, relativePath)))
+                {
+                    errors.Add("読み込み後に定義ファイルが無くなった: " + relativePath);
+                }
             }
 
             ValidateClaude(ImplHard, GetRelativePath(DefinitionKind.ClaudeHard), errors);
@@ -400,7 +430,11 @@ namespace CodexBridgeConsole
 
             // トグルを操作していないときは codex_enabled に触れない。
             // 2 定義の値が食い違っている場合に、片方を黙って書き換えないためである。
-            if (CodexEnabled != _loadedCodexEnabled || CodexEnabledExplicit)
+            // 不正値が書かれている定義は、保存のたびに正しい値へ直す。
+            // 直さないとスクリプトが終了コード 2 で止まり続けるためである。
+            if (CodexEnabled != _loadedCodexEnabled
+                || CodexEnabledExplicit
+                || CodexEnabledInvalidFiles.Count > 0)
             {
                 SetCodexEnabled(file, CodexEnabled);
             }
@@ -428,7 +462,7 @@ namespace CodexBridgeConsole
             }
         }
 
-        // 保存で 2 定義の codex_enabled を揃えた場合に、食い違いの表示を残さないため読み直す。
+        // 保存で codex_enabled を揃えた、または直した場合に、警告の表示を残さないため読み直す。
         private void RefreshCodexEnabledMismatch()
         {
             FrontMatterFile gptLight;
@@ -438,6 +472,19 @@ namespace CodexBridgeConsole
             CodexEnabledMismatch = hasLight
                 && hasStandard
                 && ReadEffectiveCodexEnabled(gptLight) != ReadEffectiveCodexEnabled(gptStandard);
+
+            var invalidCodexEnabled = new List<string>();
+            if (hasLight && ReadCodexEnabledValue(gptLight) == null)
+            {
+                invalidCodexEnabled.Add(GetRelativePath(DefinitionKind.GptLight));
+            }
+
+            if (hasStandard && ReadCodexEnabledValue(gptStandard) == null)
+            {
+                invalidCodexEnabled.Add(GetRelativePath(DefinitionKind.GptStandard));
+            }
+
+            CodexEnabledInvalidFiles = ReadOnly(invalidCodexEnabled);
         }
 
         private FrontMatterFile GetFile(DefinitionKind kind)
@@ -445,10 +492,47 @@ namespace CodexBridgeConsole
             return _files[GetRelativePath(kind)];
         }
 
+        // codex_enabled の読み方は tools/codex-agent.sh に合わせる。
+        // キーが無ければ true、true と false はそのまま、それ以外は不正値である。
+        // スクリプトは不正値で終了コード 2 に倒れるため、有効として表示してはならない。
+        private static bool? ReadCodexEnabledValue(FrontMatterFile file)
+        {
+            string value;
+            if (!file.TryGetValue(CodexEnabledKey, out value))
+            {
+                return true;
+            }
+
+            if (string.Equals(value, "true", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            if (string.Equals(value, "false", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            return null;
+        }
+
+        private bool IsMissing(string relativePath)
+        {
+            for (int i = 0; i < MissingFiles.Count; i++)
+            {
+                if (string.Equals(MissingFiles[i], relativePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private static bool ReadEffectiveCodexEnabled(FrontMatterFile file)
         {
-            string value = file.GetValue(CodexEnabledKey);
-            return !string.Equals(value, "false", StringComparison.Ordinal);
+            // 不正値は安全側の無効として扱う。
+            return ReadCodexEnabledValue(file) == true;
         }
 
         private static bool IsValidGptEffort(string value)

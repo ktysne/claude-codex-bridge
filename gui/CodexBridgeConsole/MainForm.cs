@@ -417,6 +417,12 @@ namespace CodexBridgeConsole
 
                 _missingFilesLabel.Text = "保存できない。" + string.Join("  ", reasons);
             }
+            else if (_settings.CodexEnabledInvalidFiles.Count > 0)
+            {
+                _missingFilesLabel.Text = "codex_enabled の値が不正である: "
+                    + string.Join(", ", _settings.CodexEnabledInvalidFiles)
+                    + "。無効として表示している。保存すると表示どおりの値へ直す。";
+            }
             else if (_settings.CodexEnabledMismatch)
             {
                 _missingFilesLabel.Text = "impl-light と impl-standard の codex_enabled が食い違っている。"
