@@ -12,9 +12,9 @@ effort: medium
 1. Bash で次のコマンドを実行する。依頼文は受け取った全文をそのままヒアドキュメントで渡し、要約や言い換えをしない。依頼文に作業ディレクトリの指定があるときだけ、エージェント名の後ろに `-C <パス>` を足す。
 
 ```bash
-bash ~/.claude/tools/codex-agent.sh impl-standard <<'EOF2'
+bash ~/.claude/tools/codex-agent.sh impl-standard <<'EOF'
 <依頼文全文>
-EOF2
+EOF
 ```
 
 呼び出しは上の 1 行の形をそのまま使う(変数への代入や `[ -f ... ] ||` の分岐を前に付けない)。
