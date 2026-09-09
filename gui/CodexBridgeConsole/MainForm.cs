@@ -20,6 +20,19 @@ namespace CodexBridgeConsole
 
         private const float BaseFontSize = 10F;
 
+        // agent-limit-checker の画面 (renderer/style.css) と同じ優先順で選ぶ。
+        // 同じ利用者が並べて使う道具であり、見た目を揃える。
+        // 先頭の Segoe UI は日本語の字を持たないが、日本語の部分は Windows の
+        // フォントリンクで後続の書体が使われる。CSS の指定と同じ振る舞いである。
+        private static readonly string[] PreferredFontFamilies =
+        {
+            "Segoe UI",
+            "Yu Gothic UI",
+            "Meiryo"
+        };
+
+        private static string _baseFontFamily;
+
         private readonly ConsoleSettings _settings;
         private readonly Choices _choices;
         private Label _codexHomeLabel;
@@ -52,7 +65,7 @@ namespace CodexBridgeConsole
 
             // 既定のシステムフォントより一回り大きくする。定義ファイルの値を読み取る画面であり、
             // モデル名や effort の綴りを取り違えないようにするためである。
-            Font = new Font(SystemFonts.MessageBoxFont.FontFamily, BaseFontSize);
+            Font = CreateBaseFont(FontStyle.Regular);
 
             Text = "claude-codex-bridge 設定コンソール";
             FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -64,7 +77,7 @@ namespace CodexBridgeConsole
             // 文字だけが大きくなり、画素で指定した行の高さからはみ出す。
             AutoScaleMode = AutoScaleMode.Dpi;
             AutoScaleDimensions = new SizeF(96F, 96F);
-            ClientSize = new Size(960, 560);
+            ClientSize = new Size(960, 576);
 
             BuildControls();
             LoadControlsFromSettings();
@@ -87,7 +100,7 @@ namespace CodexBridgeConsole
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40F));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40F));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 208F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 60F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 76F));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36F));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
@@ -329,7 +342,7 @@ namespace CodexBridgeConsole
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleCenter,
                 Margin = new Padding(3),
-                Font = new Font(SystemFonts.MessageBoxFont.FontFamily, BaseFontSize, FontStyle.Bold)
+                Font = CreateBaseFont(FontStyle.Bold)
             };
         }
 
@@ -343,6 +356,34 @@ namespace CodexBridgeConsole
                 TextAlign = ContentAlignment.MiddleCenter,
                 Margin = new Padding(3)
             };
+        }
+
+        private static Font CreateBaseFont(FontStyle style)
+        {
+            if (_baseFontFamily == null)
+            {
+                _baseFontFamily = ResolveBaseFontFamily();
+            }
+
+            return new Font(_baseFontFamily, BaseFontSize, style);
+        }
+
+        private static string ResolveBaseFontFamily()
+        {
+            FontFamily[] installed = FontFamily.Families;
+            for (int i = 0; i < PreferredFontFamilies.Length; i++)
+            {
+                for (int j = 0; j < installed.Length; j++)
+                {
+                    if (string.Equals(installed[j].Name, PreferredFontFamilies[i], StringComparison.OrdinalIgnoreCase))
+                    {
+                        return PreferredFontFamilies[i];
+                    }
+                }
+            }
+
+            // どれも入っていない環境では、その環境の標準の書体に任せる。
+            return SystemFonts.MessageBoxFont.FontFamily.Name;
         }
 
         private static Label CreateCenteredLabel(string text)
