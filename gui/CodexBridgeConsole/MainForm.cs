@@ -53,7 +53,11 @@ namespace CodexBridgeConsole
             MaximizeBox = false;
             MinimizeBox = true;
             StartPosition = FormStartPosition.CenterScreen;
-            AutoScaleMode = AutoScaleMode.Font;
+            // 画面の拡大率に合わせて配置ごと拡大する。
+            // app.manifest で高 DPI 対応を宣言しているため、基準を 96 dpi と決めておかないと
+            // 文字だけが大きくなり、画素で指定した行の高さからはみ出す。
+            AutoScaleMode = AutoScaleMode.Dpi;
+            AutoScaleDimensions = new SizeF(96F, 96F);
             ClientSize = new Size(820, 480);
 
             BuildControls();
@@ -143,6 +147,10 @@ namespace CodexBridgeConsole
             };
             panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90F));
+
+            // 行の高さを指定しないと、子が親より高く配置されて中身が切り取られる。
+            // 対象パスと再読込ボタンの文字が見えなくなる。
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
             var targetLabel = new Label
             {
