@@ -37,6 +37,7 @@ namespace CodexBridgeConsole
         private readonly Choices _choices;
         private Label _codexHomeLabel;
         private Label _codexVersionLabel;
+        private Label _codexCatalogLabel;
         private CheckBox _codexEnabledCheckBox;
         private ComboBox _hardModelComboBox;
         private ComboBox _hardEffortComboBox;
@@ -61,6 +62,9 @@ namespace CodexBridgeConsole
         private CodexModelCatalog _codexModelCatalog;
 
         private string _codexVersionText = "確認中...";
+
+        // codex debug models の取得結果に応じた文言。GPT モデル一覧が目録由来か既定値かを利用者に示す。
+        private string _codexCatalogText = "取得中...";
 
         private Control _layout;
         private TableLayoutPanel _definitionsTable;
@@ -296,14 +300,15 @@ namespace CodexBridgeConsole
             var panel = new TableLayoutPanel
             {
                 ColumnCount = 1,
-                RowCount = 2,
+                RowCount = 3,
                 Width = width,
-                Height = SingleLineHeight() * 2 + 12,
+                Height = SingleLineHeight() * 3 + 12,
                 Margin = new Padding(3, 6, 3, 6),
                 Padding = new Padding(0)
             };
-            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
-            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 33.33F));
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 33.33F));
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 33.33F));
 
             _codexHomeLabel = new Label
             {
@@ -319,8 +324,16 @@ namespace CodexBridgeConsole
                 TextAlign = ContentAlignment.MiddleLeft,
                 Margin = new Padding(3, 0, 3, 0)
             };
+            _codexCatalogLabel = new Label
+            {
+                AutoSize = false,
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Margin = new Padding(3, 0, 3, 0)
+            };
             panel.Controls.Add(_codexHomeLabel, 0, 0);
             panel.Controls.Add(_codexVersionLabel, 0, 1);
+            panel.Controls.Add(_codexCatalogLabel, 0, 2);
             return panel;
         }
 
@@ -583,6 +596,8 @@ namespace CodexBridgeConsole
                 + (_settings.CodexSandbox ?? "(未設定)");
             // バージョンの取得は起動時の 1 回だけなので、再読込では取得済みの結果を出し直す。
             _codexVersionLabel.Text = "codex --version: " + _codexVersionText;
+            // 目録の取得も起動時の 1 回だけなので、再読込では取得済みの結果を出し直す。
+            _codexCatalogLabel.Text = "GPT モデル一覧: " + _codexCatalogText;
 
             if (_settings.MissingFiles.Count > 0 || _settings.UnreadableFiles.Count > 0)
             {
@@ -903,14 +918,35 @@ namespace CodexBridgeConsole
         {
             // CODEX_HOME は必ず明示する。既定の ~/.codex への暗黙依存を作らないためである。
             string codexHome = _settings.ExpandedCodexHome;
+            if (string.IsNullOrEmpty(codexHome))
+            {
+                // codexHome が空だと CodexModelCatalog.Load は必ず null を返すため、起動もしない。
+                _codexCatalogText = "認証ホーム未設定のため取得しない。既定値を使用";
+                if (!IsDisposed && !Disposing)
+                {
+                    UpdateStatusDisplay();
+                }
+
+                return;
+            }
+
             CodexModelCatalog catalog = await Task.Run(() => CodexModelCatalog.Load(codexHome));
-            if (IsDisposed || Disposing || catalog == null)
+            if (IsDisposed || Disposing)
             {
                 return;
             }
 
+            if (catalog == null)
+            {
+                _codexCatalogText = "取得できないため既定値を使用";
+                UpdateStatusDisplay();
+                return;
+            }
+
+            _codexCatalogText = "codex debug models から取得";
             _codexModelCatalog = catalog;
             ApplyCodexModelCatalog();
+            UpdateStatusDisplay();
         }
 
         private void ApplyCodexModelCatalog()
