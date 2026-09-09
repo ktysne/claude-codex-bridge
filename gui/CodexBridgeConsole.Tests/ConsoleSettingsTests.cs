@@ -658,6 +658,27 @@ namespace CodexBridgeConsole.Tests
             }
         }
 
+        [Theory]
+        [InlineData("/d/accounts/codex", "D:\\accounts\\codex")]
+        [InlineData("/c/Users/test/.codex", "C:\\Users\\test\\.codex")]
+        [InlineData("/d", "D:\\")]
+        public void Load_ConvertsMsysStyleCodexHomeLikeTheScript(string codexHome, string expected)
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                WriteDefinition(
+                    directory,
+                    GptLightPath,
+                    "---\ncodex_home: " + codexHome
+                        + "\ncodex_model: codex-light-model\ncodex_reasoning_effort: high\ncodex_sandbox: workspace-write\n---\n本文\n");
+
+                var settings = new ConsoleSettings(directory.Path);
+
+                Assert.Equal(expected, settings.ExpandedCodexHome);
+            }
+        }
+
         private static void WriteMismatchedDefinitions(TemporaryDirectory directory)
         {
             WriteDefinitions(directory);
