@@ -577,10 +577,15 @@ namespace CodexBridgeConsole.Tests
                         "codex_sandbox: workspace-write\ncodex_enabled: typo\n"));
                 var settings = new ConsoleSettings(directory.Path);
 
+                // 利用者が何も変えていなくても、修復のために保存できる必要がある。
+                Assert.False(settings.HasChanges);
+                Assert.True(settings.NeedsSave);
+
                 Assert.True(settings.Save().Succeeded);
 
                 Assert.Contains("codex_enabled: \"false\"", ReadDefinition(directory, GptLightPath));
                 Assert.Empty(settings.CodexEnabledInvalidFiles);
+                Assert.False(settings.NeedsSave);
             }
         }
 
