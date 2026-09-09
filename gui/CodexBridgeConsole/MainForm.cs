@@ -924,12 +924,7 @@ namespace CodexBridgeConsole
             if (string.IsNullOrEmpty(codexHome))
             {
                 // codexHome が空だと CodexModelCatalog.Load は必ず null を返すため、起動もしない。
-                _codexCatalogText = "認証ホーム未設定のため取得しない。既定値を使用";
-                if (!IsDisposed && !Disposing)
-                {
-                    UpdateStatusDisplay();
-                }
-
+                SetCodexCatalogText("認証ホーム未設定のため取得しない。既定値を使用");
                 return;
             }
 
@@ -941,15 +936,20 @@ namespace CodexBridgeConsole
 
             if (catalog == null)
             {
-                _codexCatalogText = "取得できないため既定値を使用";
-                UpdateStatusDisplay();
+                SetCodexCatalogText("取得できないため既定値を使用");
                 return;
             }
 
-            _codexCatalogText = "codex debug models から取得";
+            SetCodexCatalogText("codex debug models から取得");
             _codexModelCatalog = catalog;
             ApplyCodexModelCatalog();
-            UpdateStatusDisplay();
+        }
+
+        // 取得結果は保持し、再読込では UpdateStatusDisplay が同じ文言を出し直す。
+        private void SetCodexCatalogText(string text)
+        {
+            _codexCatalogText = text;
+            _codexCatalogLabel.Text = "GPT モデル一覧: " + text;
         }
 
         private void ApplyCodexModelCatalog()
