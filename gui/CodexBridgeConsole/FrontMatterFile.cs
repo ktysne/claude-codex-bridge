@@ -103,7 +103,7 @@ namespace CodexBridgeConsole
             int lineIndex = FindKeyLine(key);
             if (lineIndex < 0)
             {
-                _lines.Insert(_closingDelimiterIndex, new TextLine(key + ": " + value, _newline));
+                _lines.Insert(_closingDelimiterIndex, new TextLine(key + ": " + Quote(value), _newline));
                 _closingDelimiterIndex++;
                 return;
             }
@@ -132,7 +132,7 @@ namespace CodexBridgeConsole
             string separator = valueStart == afterColon ? " " : string.Empty;
             line.Content = line.Content.Substring(0, valueStart)
                 + separator
-                + value
+                + Quote(value)
                 + line.Content.Substring(valueEnd);
         }
 
@@ -241,14 +241,68 @@ namespace CodexBridgeConsole
             }
 
             string value = line.Substring(valueStart, valueEnd - valueStart);
-            if (value.Length >= 2
-                && ((value[0] == '"' && value[value.Length - 1] == '"')
-                    || (value[0] == '\'' && value[value.Length - 1] == '\'')))
+            if (value.Length >= 2 && value[0] == '"' && value[value.Length - 1] == '"')
             {
-                value = value.Substring(1, value.Length - 2);
+                return Unescape(value.Substring(1, value.Length - 2));
+            }
+
+            // 単一引用符の中は YAML も fm_get もエスケープを解釈しない。外すだけにする。
+            if (value.Length >= 2 && value[0] == '\'' && value[value.Length - 1] == '\'')
+            {
+                return value.Substring(1, value.Length - 2);
             }
 
             return value;
+        }
+
+        // 書き込む値は常に二重引用符で囲む。YAML が true や 123 を文字列以外として読むのを防ぐためである。
+        // エスケープするのは \ と " だけである。tools/codex-agent.sh の fm_get は外側の引用符を外すだけで
+        // エスケープを戻さないため、この 2 文字を含む値を書くとスクリプトと設定コンソールで読みがずれる。
+        // 設定コンソールは値に使える文字を英数字と . _ - / に限っており、この 2 文字は通らない。
+        private static string Quote(string value)
+        {
+            var builder = new StringBuilder(value.Length + 2);
+            builder.Append('"');
+            for (int i = 0; i < value.Length; i++)
+            {
+                char c = value[i];
+                if (c == '\\' || c == '"')
+                {
+                    builder.Append('\\');
+                }
+
+                builder.Append(c);
+            }
+
+            builder.Append('"');
+            return builder.ToString();
+        }
+
+        // Quote が付けたエスケープを戻す。扱うのは \\ と \" だけであり、
+        // それ以外の \ は文字として残す。手で書かれた Windows のパスを壊さないためである。
+        private static string Unescape(string value)
+        {
+            if (value.IndexOf('\\') < 0)
+            {
+                return value;
+            }
+
+            var builder = new StringBuilder(value.Length);
+            for (int i = 0; i < value.Length; i++)
+            {
+                char c = value[i];
+                if (c == '\\'
+                    && i + 1 < value.Length
+                    && (value[i + 1] == '\\' || value[i + 1] == '"'))
+                {
+                    i++;
+                    c = value[i];
+                }
+
+                builder.Append(c);
+            }
+
+            return builder.ToString();
         }
 
         private static int FindValueStart(string line, int afterColon)
