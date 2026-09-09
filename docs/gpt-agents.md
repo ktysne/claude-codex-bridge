@@ -10,7 +10,7 @@ Claude Code のサブエージェント `impl-light`、`impl-standard`、`codex-
 どの定義を配置するかは、実装用の委譲だけを使うパターンと、レビュー用も使うパターンで選べる。
 
 委譲の対象は `impl-light`、`impl-standard`、`codex-review`、`codex-subagent` の 4 つである。
-`impl-hard` は GPT 側へ委譲せず、Claude(Opus 5 / high)が担う。
+`impl-hard`(`.claude/agents/impl-hard.md`)は GPT 側へ委譲せず、Claude(Opus 5 / high)が担う。
 設計判断を伴う変更や、正しさの検証が難しい変更は、メインセッションと同じ Claude 系に留めたほうが、監査で挙動の食い違いを追いやすいためである。
 
 ## 構成
@@ -171,7 +171,7 @@ Codex の回答本文が流れる標準出力にはフィルタを掛けない�
 そのため、このリポジトリの定義は、このリポジトリでのみ効く。
 全プロジェクトに適用するなら、次の 3 つを置く。
 
-1. `.claude/agents/` の 4 定義を `%USERPROFILE%\.claude\agents\` に置き換える。
+1. `.claude/agents/` の 5 定義(`impl-hard` を含む)を `%USERPROFILE%\.claude\agents\` に置き換える。
 2. `.claude/gpt-agents/` の 4 定義を `%USERPROFILE%\.claude\gpt-agents\` にコピーする。
 3. `tools/codex-agent.sh` を `%USERPROFILE%\.claude\tools\` にコピーする。
 
