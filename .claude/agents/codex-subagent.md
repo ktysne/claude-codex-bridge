@@ -16,9 +16,9 @@ tools: Bash
 - 依頼文に作業ディレクトリ(Claude Code とは別の worktree)の指定が必須。指定が無ければ実行せず、worktree を分けた作業ディレクトリの指定を求める旨を返す。
 
 ```bash
-bash ~/.claude/tools/codex-agent.sh codex-subagent -C "<別 worktree のパス>" <<'EOF2'
+bash ~/.claude/tools/codex-agent.sh codex-subagent -C "<別 worktree のパス>" <<'EOF'
 <依頼文全文>
-EOF2
+EOF
 ```
 
 呼び出しは上の 1 行の形をそのまま使う(変数への代入や `[ -f ... ] ||` の分岐を前に付けない)。
