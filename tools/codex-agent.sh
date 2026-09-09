@@ -254,11 +254,15 @@ trap 'rm -f "$out_file" "$err_file" "$err_filtered"' EXIT
 
 # 認証ホームは常に明示する。既定の ~/.codex への暗黙依存を作らない。
 # --dangerously-bypass-approvals-and-sandbox は付けない。
+# 承認方針は never に固定する。このスクリプトは非対話の委譲専用で承認を返す相手がいないため、
+# 呼び出し側の config.toml が on-request 等でも承認待ちで止まらないようにする
+# (ai-cross-review の cross-review.js は、この明示があるスクリプトに限って bridge 経由を選ぶ)。
 CODEX_HOME="$codex_home" codex exec \
   --skip-git-repo-check \
   --sandbox "$codex_sandbox" \
   -m "$codex_model" \
   -c "model_reasoning_effort=\"$codex_effort\"" \
+  -c approval_policy=never \
   -C "$workdir" \
   - <<<"$prompt" >"$out_file" 2>"$err_file"
 codex_status=$?
