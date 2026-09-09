@@ -36,7 +36,6 @@ Codex 側のモデル、effort、認証ホームは `.claude/gpt-agents/` の定
 
 Codex CLI は認証情報を `$CODEX_HOME/auth.json` に保存し、他の場所を参照しない。
 そのため `CODEX_HOME` を分けるだけで、アカウントごとの認証、設定、セッションログが完全に分離される。
-この挙動の検証記録は [docs/verification-2026-09-02.md](docs/verification-2026-09-02.md) にある。
 
 ## ファイル
 
@@ -53,9 +52,6 @@ Codex CLI は認証情報を `$CODEX_HOME/auth.json` に保存し、他の場所
 | `tools/codex-agent.sh` | GPT 側の定義を読んで `codex exec` を組み立てるスクリプト |
 | `docs/gpt-agents.md` | GPT 系サブエージェントの構成と、フォールバックの条件 |
 | `docs/setup.md` | アカウントのログインからサブエージェント有効化までの手順 |
-| `docs/verification-2026-09-02.md` | ChatGPT 回答の妥当性検証と、定義、呼び出しの動作確認の記録 |
-| `docs/backlog.md` | 残作業と、開発者の判断を要する事項 |
-| `docs/chatgpt-answer-2026-09-02.md` | 検討の出発点になった ChatGPT の回答(原文) |
 | `docs/cross-review.md`、`.cross-review.md` | ai-cross-review の手順と、このプロジェクト固有のレビュー観点 |
 
 ## 使い始めるまで
