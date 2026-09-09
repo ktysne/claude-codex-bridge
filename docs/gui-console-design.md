@@ -111,14 +111,16 @@ exe と同じフォルダに `choices.json` があれば、それで既定値を
 
 | 項目 | 選択肢 |
 |---|---|
-| Claude モデル | `claude-opus-5`、`claude-sonnet-5`、`claude-haiku-4-5-20251001` |
-| Claude effort | `low`、`medium`、`high`、`xhigh`、`max` |
+| Claude モデル | `claude-fable-5-1`、`claude-fable-5`、`claude-opus-5`、`claude-sonnet-5`、`claude-opus-4-8`、`claude-opus-4-7`、`claude-opus-4-6`、`claude-sonnet-4-6`、`claude-haiku-4-5` |
+| Claude effort | 選ばれているモデルが受け付ける値。対応表に無いモデルでは `low`、`medium`、`high`、`xhigh`、`max` |
 | GPT モデル | `codex debug models` から取得。取れなければ `gpt-6-astra`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5` |
 | GPT effort | 選ばれているモデルが受け付ける値。取れなければ `low`、`medium`、`high`、`xhigh`、`max`、`ultra` |
 
 GPT 側の 2 つは、起動時に `codex debug models` から取得できればそちらを使う。既定値はその控えである。
 取得できる値のうち、`tools/codex-agent.sh` が受け付けない effort があってはならない。スクリプト側の許容値は目録に合わせて広げる。
 Claude 側のモデルには相当する取得手段が無い。Claude Code には非対話でモデル一覧を返すコマンドが無いためである。
+そのため Claude 側は、モデルと effort の対応を `claudeModelEfforts` として設定に持つ。この項目は任意であり、無い場合は `claudeEfforts` の一覧をモデルによらず使う。
+モデルを変えたとき、そのモデルが現在の effort を受け付けなければ、指定値以下で最も高い対応済みの値に変える。Claude Code 自身が同じ規則で落として実行するためである。
 
 `choices.json` の形は次のとおりである。
 
@@ -126,6 +128,9 @@ Claude 側のモデルには相当する取得手段が無い。Claude Code に�
 {
   "claudeModels": ["claude-opus-5", "claude-sonnet-5"],
   "claudeEfforts": ["low", "medium", "high", "xhigh", "max"],
+  "claudeModelEfforts": [
+    { "model": "claude-opus-5", "efforts": ["low", "medium", "high", "xhigh", "max"] }
+  ],
   "gptModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"],
   "gptEfforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
 }

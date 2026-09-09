@@ -252,6 +252,7 @@ namespace CodexBridgeConsole
             table.Controls.Add(CreateRowLabel("hard"), 0, 1);
             _hardModelComboBox = CreateComboBox(claudeModelWidth);
             _hardEffortComboBox = CreateComboBox(claudeEffortWidth);
+            _hardModelComboBox.TextChanged += ClaudeModelTextChanged;
             table.Controls.Add(_hardModelComboBox, 1, 1);
             table.Controls.Add(_hardEffortComboBox, 2, 1);
             table.Controls.Add(CreateCenteredLabel("(Codex を使わない)"), 3, 1);
@@ -262,6 +263,7 @@ namespace CodexBridgeConsole
             _standardEffortComboBox = CreateComboBox(claudeEffortWidth);
             _standardGptModelComboBox = CreateComboBox(gptModelWidth);
             _standardGptEffortComboBox = CreateComboBox(gptEffortWidth);
+            _standardModelComboBox.TextChanged += ClaudeModelTextChanged;
             _standardGptModelComboBox.TextChanged += GptModelTextChanged;
             table.Controls.Add(_standardModelComboBox, 1, 2);
             table.Controls.Add(_standardEffortComboBox, 2, 2);
@@ -273,6 +275,7 @@ namespace CodexBridgeConsole
             _lightEffortComboBox = CreateComboBox(claudeEffortWidth);
             _lightGptModelComboBox = CreateComboBox(gptModelWidth);
             _lightGptEffortComboBox = CreateComboBox(gptEffortWidth);
+            _lightModelComboBox.TextChanged += ClaudeModelTextChanged;
             _lightGptModelComboBox.TextChanged += GptModelTextChanged;
             table.Controls.Add(_lightModelComboBox, 1, 3);
             table.Controls.Add(_lightEffortComboBox, 2, 3);
@@ -492,16 +495,25 @@ namespace CodexBridgeConsole
             try
             {
                 SetComboItems(_hardModelComboBox, _choices.ClaudeModels, _settings.ImplHard.ClaudeModel);
-                SetComboItems(_hardEffortComboBox, _choices.ClaudeEfforts, _settings.ImplHard.ClaudeEffort);
+                SetComboItems(
+                    _hardEffortComboBox,
+                    _choices.ClaudeEffortsFor(_settings.ImplHard.ClaudeModel),
+                    _settings.ImplHard.ClaudeEffort);
                 SetComboItems(_standardModelComboBox, _choices.ClaudeModels, _settings.ImplStandard.ClaudeModel);
-                SetComboItems(_standardEffortComboBox, _choices.ClaudeEfforts, _settings.ImplStandard.ClaudeEffort);
+                SetComboItems(
+                    _standardEffortComboBox,
+                    _choices.ClaudeEffortsFor(_settings.ImplStandard.ClaudeModel),
+                    _settings.ImplStandard.ClaudeEffort);
                 SetComboItems(_standardGptModelComboBox, _choices.GptModels, _settings.ImplStandard.CodexModel);
                 SetComboItems(
                     _standardGptEffortComboBox,
                     _choices.GptEfforts,
                     _settings.ImplStandard.CodexReasoningEffort);
                 SetComboItems(_lightModelComboBox, _choices.ClaudeModels, _settings.ImplLight.ClaudeModel);
-                SetComboItems(_lightEffortComboBox, _choices.ClaudeEfforts, _settings.ImplLight.ClaudeEffort);
+                SetComboItems(
+                    _lightEffortComboBox,
+                    _choices.ClaudeEffortsFor(_settings.ImplLight.ClaudeModel),
+                    _settings.ImplLight.ClaudeEffort);
                 SetComboItems(_lightGptModelComboBox, _choices.GptModels, _settings.ImplLight.CodexModel);
                 SetComboItems(
                     _lightGptEffortComboBox,
@@ -857,6 +869,76 @@ namespace CodexBridgeConsole
             }
 
             SetComboItems(effortComboBox, efforts, effortComboBox.Text);
+        }
+
+        private void ClaudeModelTextChanged(object sender, EventArgs e)
+        {
+            // 読み込み直後は値を変えない。開いただけで定義が書き換わるのを避けるためである。
+            if (_loadingControls)
+            {
+                return;
+            }
+
+            var modelComboBox = (ComboBox)sender;
+            ComboBox effortComboBox = ClaudeEffortComboBoxFor(modelComboBox);
+
+            // 利用者がモデルを変えたときは、そのモデルが受け付けない effort を残さない。
+            // 残すと、選べるように見えて Claude Code 側で別の値へ落とされる組み合わせを保存できてしまう。
+            IReadOnlyList<string> efforts = _choices.ClaudeEffortsFor(modelComboBox.Text);
+            effortComboBox.Text = Choices.NearestSupportedEffort(efforts, effortComboBox.Text);
+
+            bool loading = _loadingControls;
+            _loadingControls = true;
+            try
+            {
+                SetComboItems(effortComboBox, efforts, effortComboBox.Text);
+            }
+            finally
+            {
+                _loadingControls = loading;
+            }
+
+            ResizeClaudeComboBoxes();
+            AdjustWindowSize();
+        }
+
+        private ComboBox ClaudeEffortComboBoxFor(ComboBox modelComboBox)
+        {
+            if (modelComboBox == _hardModelComboBox)
+            {
+                return _hardEffortComboBox;
+            }
+
+            return modelComboBox == _standardModelComboBox
+                ? _standardEffortComboBox
+                : _lightEffortComboBox;
+        }
+
+        // 選択肢を差し替えると必要な幅が変わる。列は中身の希望する大きさで決まるため、幅を計算し直す。
+        private void ResizeClaudeComboBoxes()
+        {
+            int modelWidth = ComboBoxWidth(
+                _choices.ClaudeModels,
+                _hardModelComboBox.Text,
+                _standardModelComboBox.Text,
+                _lightModelComboBox.Text);
+
+            var efforts = new List<string>();
+            CollectItems(efforts, _hardEffortComboBox);
+            CollectItems(efforts, _standardEffortComboBox);
+            CollectItems(efforts, _lightEffortComboBox);
+            int effortWidth = ComboBoxWidth(
+                efforts,
+                _hardEffortComboBox.Text,
+                _standardEffortComboBox.Text,
+                _lightEffortComboBox.Text);
+
+            SetComboBoxWidth(_hardModelComboBox, modelWidth);
+            SetComboBoxWidth(_standardModelComboBox, modelWidth);
+            SetComboBoxWidth(_lightModelComboBox, modelWidth);
+            SetComboBoxWidth(_hardEffortComboBox, effortWidth);
+            SetComboBoxWidth(_standardEffortComboBox, effortWidth);
+            SetComboBoxWidth(_lightEffortComboBox, effortWidth);
         }
 
         private void GptModelTextChanged(object sender, EventArgs e)
