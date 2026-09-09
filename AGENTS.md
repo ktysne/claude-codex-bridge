@@ -6,7 +6,7 @@
 
 Claude Code から Codex CLI を、用途別のサブエージェントとして呼び出す仕組みを整備する。
 レビュー用と実装補助用で ChatGPT アカウントを分け、`CODEX_HOME` を分離して認証を切り替える。
-全体像は [README.md](README.md)、設計上の制約と検証結果は [docs/verification-2026-09-02.md](docs/verification-2026-09-02.md) を参照。
+全体像は [README.md](README.md)、サブエージェントの構成と設計上の制約は [docs/gpt-agents.md](docs/gpt-agents.md) を参照。
 
 ## 言語
 
