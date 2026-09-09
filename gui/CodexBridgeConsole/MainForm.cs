@@ -33,6 +33,8 @@ namespace CodexBridgeConsole
 
         private static string _baseFontFamily;
 
+        private static readonly IReadOnlyList<string> EmptyList = new string[0];
+
         private readonly ConsoleSettings _settings;
         private readonly Choices _choices;
         private Label _codexHomeLabel;
@@ -714,14 +716,6 @@ namespace CodexBridgeConsole
         private void ReloadButton_Click(object sender, EventArgs e)
         {
             SyncSettingsFromControls();
-
-            // 入力を保持して読み直すとき、Reload() が作り直す前の設定を控えておく。
-            // SyncSettingsFromControls で画面の値は既に写してあるので、参照を持つだけでよい。
-            AgentSettings keptHard = null;
-            AgentSettings keptStandard = null;
-            AgentSettings keptLight = null;
-            bool keptCodexEnabled = false;
-            bool keptCodexEnabledExplicit = false;
             bool preserveInput = false;
             if (_settings.HasChanges)
             {
@@ -731,7 +725,7 @@ namespace CodexBridgeConsole
                     + string.Join(Environment.NewLine, _settings.DescribeChanges())
                     + Environment.NewLine
                     + Environment.NewLine
-                    + "「はい」: 入力中の値を保持したまま定義ファイルを読み直します。"
+                    + "「はい」: 上の項目は入力中の値を残し、それ以外は定義ファイルの値に読み直します。"
                     + Environment.NewLine
                     + "「いいえ」: 入力を捨てて読み直します。"
                     + Environment.NewLine
@@ -751,19 +745,19 @@ namespace CodexBridgeConsole
                 }
 
                 preserveInput = result == DialogResult.Yes;
-                if (preserveInput)
-                {
-                    keptHard = _settings.ImplHard;
-                    keptStandard = _settings.ImplStandard;
-                    keptLight = _settings.ImplLight;
-                    keptCodexEnabled = _settings.CodexEnabled;
-                    keptCodexEnabledExplicit = _settings.CodexEnabledExplicit;
-                }
             }
 
+            IReadOnlyList<string> conflicts = EmptyList;
             try
             {
-                _settings.Reload();
+                if (preserveInput)
+                {
+                    conflicts = _settings.ReloadPreservingEdits();
+                }
+                else
+                {
+                    _settings.Reload();
+                }
             }
             catch (Exception exception) when (
                 exception is IOException
@@ -782,23 +776,27 @@ namespace CodexBridgeConsole
                 return;
             }
 
-            if (preserveInput)
-            {
-                // ファイル側の基準値だけを更新し、画面の値は控えから戻す。
-                // 次の保存で利用者の値がそのまま書かれ、入力し直しが要らない。
-                _settings.ImplHard.CopyValuesFrom(keptHard);
-                _settings.ImplStandard.CopyValuesFrom(keptStandard);
-                _settings.ImplLight.CopyValuesFrom(keptLight);
-                _settings.CodexEnabled = keptCodexEnabled;
-                _settings.CodexEnabledExplicit = keptCodexEnabledExplicit;
-            }
-
             LoadControlsFromSettings();
             SetSaveStatus(
                 preserveInput
-                    ? "再読込しました。入力中の値は保持しています。"
+                    ? "再読込しました。編集した項目は入力中の値を保持しています。"
                     : "再読込しました。未保存の変更は破棄されています。",
                 false);
+
+            // 編集した項目が外部でも変わっていたときは、どちらを採ったかを見せる。
+            // 黙って入力中の値を残すと、外部の変更に気づかないまま上書き保存してしまう。
+            if (conflicts.Count > 0)
+            {
+                MessageBox.Show(
+                    this,
+                    "編集した項目が定義ファイル側でも変わっていました。入力中の値を残しています。"
+                        + Environment.NewLine
+                        + Environment.NewLine
+                        + string.Join(Environment.NewLine, conflicts),
+                    "外部の変更と重なった項目",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
         }
 
         private void SaveButton_Click(object sender, EventArgs e)
