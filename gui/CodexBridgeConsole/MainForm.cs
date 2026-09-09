@@ -15,6 +15,8 @@ namespace CodexBridgeConsole
 
         private const int CommandNotFoundExitCode = 9009;
 
+        private const int KillTimeoutMilliseconds = 2000;
+
         private readonly ConsoleSettings _settings;
         private readonly Choices _choices;
         private Label _codexHomeLabel;
@@ -645,6 +647,46 @@ namespace CodexBridgeConsole
             _codexVersionLabel.Text = "codex --version: " + version;
         }
 
+        private static void KillProcessTree(Process process)
+        {
+            try
+            {
+                using (var killer = Process.Start(new ProcessStartInfo
+                {
+                    FileName = "taskkill.exe",
+                    Arguments = "/PID " + process.Id + " /T /F",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                }))
+                {
+                    if (killer != null)
+                    {
+                        killer.WaitForExit(KillTimeoutMilliseconds);
+                    }
+                }
+            }
+            catch (Exception exception) when (
+                exception is Win32Exception || exception is InvalidOperationException)
+            {
+                // taskkill を起動できない場合に備え、少なくとも自分が起動した cmd は止める。
+            }
+
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill();
+                }
+            }
+            catch (Exception exception) when (
+                exception is Win32Exception || exception is InvalidOperationException)
+            {
+                // 既に終了している場合は何もしない。画面の起動を待たせないためである。
+            }
+        }
+
         private static string GetCodexVersion(string codexHome)
         {
             // 認証ホームが分からないまま codex を起動しない。
@@ -676,15 +718,9 @@ namespace CodexBridgeConsole
                     process.Start();
                     if (!process.WaitForExit(CodexVersionTimeoutMilliseconds))
                     {
-                        try
-                        {
-                            process.Kill();
-                        }
-                        catch (InvalidOperationException)
-                        {
-                            // タイムアウト後にプロセスが終了していても、画面の起動を待たせない。
-                        }
-
+                        // 起動したのは cmd であり、codex 本体はその子である。
+                        // cmd だけを止めても子が残るため、プロセスツリーごと落とす。
+                        KillProcessTree(process);
                         return "タイムアウト";
                     }
 
