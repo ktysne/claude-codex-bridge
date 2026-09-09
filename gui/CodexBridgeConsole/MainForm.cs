@@ -486,7 +486,26 @@ namespace CodexBridgeConsole
                 }
             }
 
-            _settings.Reload();
+            try
+            {
+                _settings.Reload();
+            }
+            catch (Exception exception) when (
+                exception is IOException
+                || exception is UnauthorizedAccessException
+                || exception is InvalidDataException)
+            {
+                // 定義ファイルが外部で壊された場合に画面ごと落とさない。読み込み前の状態を保つ。
+                MessageBox.Show(
+                    this,
+                    "定義ファイルを読み込めませんでした。" + Environment.NewLine + exception.Message,
+                    "再読込に失敗",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+                _saveStatusLabel.Text = "再読込に失敗しました。表示は読み込み前のままです。";
+                return;
+            }
+
             LoadControlsFromSettings();
             _saveStatusLabel.Text = "再読込しました。未保存の変更は破棄されています。";
         }
@@ -577,6 +596,7 @@ namespace CodexBridgeConsole
                     + string.Join(", ", result.ChangedFiles);
             }
 
+            UpdateStatusDisplay();
             UpdateControlState();
             return true;
         }
@@ -617,10 +637,12 @@ namespace CodexBridgeConsole
 
             try
             {
+                // Windows の npm は codex.cmd を置く。UseShellExecute = false で "codex" を直接起動すると
+                // .cmd を解決できず、導入済みでも見つからない扱いになる。PATH の解決を cmd に任せる。
                 var startInfo = new ProcessStartInfo
                 {
-                    FileName = "codex",
-                    Arguments = "--version",
+                    FileName = "cmd.exe",
+                    Arguments = "/c codex --version",
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     RedirectStandardOutput = true,
