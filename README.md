@@ -53,9 +53,11 @@ Codex CLI は認証情報を `$CODEX_HOME/auth.json` に保存し、他の場所
 | `.claude/gpt-agents/impl-light.md` | 小規模実装用 GPT 側定義。Codex のモデル、effort、認証ホーム、サンドボックス、役割文を持つ |
 | `.claude/gpt-agents/impl-standard.md` | 一般実装用 GPT 側定義。Codex のモデル、effort、認証ホーム、サンドボックス、役割文を持つ |
 | `tools/codex-agent.sh` | GPT 側の定義を読んで `codex exec` を組み立てるスクリプト |
+| `gui/` | 定義ファイルを GUI から書き換える設定コンソール(Windows、.NET Framework 4.8)の一式 |
 | `docs/gpt-agents.md` | GPT 系サブエージェントの構成と、フォールバックの条件 |
 | `docs/setup.md` | アカウントのログインからサブエージェント有効化までの手順 |
-| `docs/gui-console-design.md` | 定義ファイルを GUI から書き換える設定コンソール(Windows)の設計。実装は未着手 |
+| `docs/gui.md` | 設定コンソールの使い方 |
+| `docs/gui-console-design.md` | 定義ファイルを GUI から書き換える設定コンソール(Windows)の設計。実装済み |
 | `docs/cross-review.md`、`.cross-review.md` | ai-cross-review の手順と、このプロジェクト固有のレビュー観点 |
 
 ## 使い始めるまで

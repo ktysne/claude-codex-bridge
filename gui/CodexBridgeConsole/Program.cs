@@ -6,7 +6,9 @@ namespace CodexBridgeConsole
         [System.STAThread]
         private static void Main()
         {
-            // 段階 3 で MainForm を起動する形に差し替える。
+            System.Windows.Forms.Application.EnableVisualStyles();
+            System.Windows.Forms.Application.SetCompatibleTextRenderingDefault(false);
+            System.Windows.Forms.Application.Run(new MainForm());
         }
     }
 }
