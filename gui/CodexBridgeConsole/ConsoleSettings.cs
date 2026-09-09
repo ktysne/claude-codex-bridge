@@ -94,6 +94,19 @@ namespace CodexBridgeConsole
             get { return MissingFiles.Count == 0 && UnreadableFiles.Count == 0; }
         }
 
+        // codex_enabled の不正値は、利用者が何も変えなくても保存で修復する。
+        // 修復待ちは未保存の変更ではないが、保存する意味がある状態として区別する。
+        public bool HasPendingRepairs
+        {
+            get { return CodexEnabledInvalidFiles.Count > 0; }
+        }
+
+        // 保存ボタンを押す意味があるかどうか。未保存の変更か、修復待ちのどちらかがあるときに真になる。
+        public bool NeedsSave
+        {
+            get { return HasChanges || HasPendingRepairs; }
+        }
+
         public bool HasChanges
         {
             get

@@ -92,6 +92,7 @@ namespace CodexBridgeConsole
 
             BuildControls();
             LoadControlsFromSettings();
+            SetSaveStatus(IdleStatusText(), false);
 
             Load += MainForm_Load;
             FormClosing += MainForm_FormClosing;
@@ -638,6 +639,14 @@ namespace CodexBridgeConsole
             AdjustWindowSize();
         }
 
+        // 未保存の変更が無いときの状態行。修復待ちがあるときは、ボタンが押せる理由を示す。
+        private string IdleStatusText()
+        {
+            return _settings.HasPendingRepairs
+                ? "保存すると codex_enabled の不正値を直します。"
+                : "変更はありません。";
+        }
+
         // 状態行の文字色は失敗のときだけ警告色にする。成功と未保存は通常色で区別しない。
         private void SetSaveStatus(string text, bool isError)
         {
@@ -649,7 +658,7 @@ namespace CodexBridgeConsole
 
         private void UpdateControlState()
         {
-            _saveButton.Enabled = _settings.CanSave && _settings.HasChanges;
+            _saveButton.Enabled = _settings.CanSave && _settings.NeedsSave;
             UpdateGptControlState();
         }
 
@@ -699,9 +708,7 @@ namespace CodexBridgeConsole
 
             SyncSettingsFromControls();
             UpdateControlState();
-            SetSaveStatus(
-                _settings.HasChanges ? "未保存の変更があります。" : "変更はありません。",
-                false);
+            SetSaveStatus(_settings.HasChanges ? "未保存の変更があります。" : IdleStatusText(), false);
         }
 
         private void ReloadButton_Click(object sender, EventArgs e)
