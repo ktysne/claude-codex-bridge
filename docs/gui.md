@@ -109,7 +109,7 @@ Windows 10 1903 以降と Windows 11 には .NET Framework 4.8 が同梱され�
 
 保存前に、3 つの Claude 側定義の `model` と `effort` が空でないことを検証する。
 GPT 経路が有効な場合は、2 つの GPT 側定義の `codex_model` も空でないことを検証する。
-GPT 側の `codex_reasoning_effort` は、GPT 経路の有効状態にかかわらず `low`、`medium`、`high`、`xhigh`、`max` のいずれかであることを検証する。
+GPT 側の `codex_reasoning_effort` は、GPT 経路の有効状態にかかわらず `low`、`medium`、`high`、`xhigh`、`max`、`ultra` のいずれかであることを検証する。この一覧は `tools/codex-agent.sh` が受け付ける値である。
 定義に `codex_reasoning_effort` が無い場合は `medium` として表示する。`tools/codex-agent.sh` が省略時に `medium` を使うためである。値を変えずに保存したときは、キーを足さない。
 モデル名と effort に使えるのは、英数字と `.`、`_`、`-`、`/` だけである。
 先頭を `-` にはできず、英数字を 1 つ以上含む必要がある。`model: -` のように意味の定まらない行を書かないためである。
@@ -135,15 +135,40 @@ JSON は次の形で、4 つの配列をすべて指定する。
 ```json
 {
   "claudeModels": ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"],
-  "claudeEfforts": ["low", "medium", "high"],
-  "gptModels": ["gpt-5.6-luna", "gpt-5.6-sol"],
-  "gptEfforts": ["low", "medium", "high", "xhigh", "max"]
+  "claudeEfforts": ["low", "medium", "high", "xhigh", "max"],
+  "gptModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"],
+  "gptEfforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
 }
 ```
+
+GPT 側の 2 つは、`codex debug models` から目録を取れた場合はそちらが優先される(次の節を参照)。
+`choices.json` の GPT 側は、目録を取れなかったときの控えである。
 
 各配列は空にできず、空白だけの選択肢も指定できない。
 `choices.json` が壊れている場合や配列が欠けている場合は、埋め込みの既定値に戻る。
 読み込んだ定義ファイルの現在値が選択肢に無い場合も、現在値を先頭に追加して保持する。
+
+## GPT 側のモデルと effort の取得
+
+起動すると `codex debug models` を 1 回実行し、その出力から GPT 側のモデル名と effort の一覧を取り出す。
+`CODEX_HOME` には、GPT 側 `impl-light` 定義の `codex_home` を展開した値を渡す。
+取得できた場合、GPT モデルの選択肢は目録のモデル名になり、effort の選択肢はその行で選ばれているモデルが受け付ける値になる。
+
+モデルによって使える effort が違う。
+そのため、GPT モデルを変えると、その行の effort の選択肢が切り替わる。
+変更後のモデルが現在の effort を受け付けない場合は、そのモデルの既定の effort に切り替える。
+選べるように見えて Codex 側で弾かれる組み合わせを保存できないようにするためである。
+
+読み込んだ直後は、定義ファイルに書かれている値をそのまま表示する。
+受け付けない値であっても勝手に変えない。開いただけで定義が書き換わるのを避けるためである。
+
+`codex` が無い、`codex_home` が読めない、出力を解析できないなどで目録を取れない場合は、`choices.json` または埋め込みの既定値を使う。
+画面には知らせない。
+
+Claude 側のモデル一覧には、これに相当する取得手段が無い。
+Claude Code には非対話でモデル一覧を返すコマンドが無いためである。
+Claude 側のモデルは `choices.json` と埋め込みの既定値で管理する。
+Claude 側の effort は `low`、`medium`、`high`、`xhigh`、`max` の 5 段階である。
 
 ## 編集できない設定
 

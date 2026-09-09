@@ -1,4 +1,4 @@
-using CodexBridgeConsole;
+﻿using CodexBridgeConsole;
 using Xunit;
 
 namespace CodexBridgeConsole.Tests
@@ -13,9 +13,9 @@ namespace CodexBridgeConsole.Tests
                 Choices choices = Choices.Load(directory.Path);
 
                 Assert.Equal(new[] { "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001" }, choices.ClaudeModels);
-                Assert.Equal(new[] { "low", "medium", "high" }, choices.ClaudeEfforts);
-                Assert.Equal(new[] { "gpt-5.6-luna", "gpt-5.6-sol" }, choices.GptModels);
-                Assert.Equal(new[] { "low", "medium", "high", "xhigh", "max" }, choices.GptEfforts);
+                Assert.Equal(new[] { "low", "medium", "high", "xhigh", "max" }, choices.ClaudeEfforts);
+                Assert.Equal(new[] { "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5" }, choices.GptModels);
+                Assert.Equal(new[] { "low", "medium", "high", "xhigh", "max", "ultra" }, choices.GptEfforts);
             }
         }
 

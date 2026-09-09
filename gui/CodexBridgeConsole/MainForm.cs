@@ -56,6 +56,9 @@ namespace CodexBridgeConsole
         private bool _loadingControls;
         private bool _codexVersionStarted;
 
+        // codex debug models から取れた目録。取れなかった間は null で、_choices の既定値を使う。
+        private CodexModelCatalog _codexModelCatalog;
+
         private string _codexVersionText = "確認中...";
 
         private Control _layout;
@@ -259,6 +262,7 @@ namespace CodexBridgeConsole
             _standardEffortComboBox = CreateComboBox(claudeEffortWidth);
             _standardGptModelComboBox = CreateComboBox(gptModelWidth);
             _standardGptEffortComboBox = CreateComboBox(gptEffortWidth);
+            _standardGptModelComboBox.TextChanged += GptModelTextChanged;
             table.Controls.Add(_standardModelComboBox, 1, 2);
             table.Controls.Add(_standardEffortComboBox, 2, 2);
             table.Controls.Add(_standardGptModelComboBox, 3, 2);
@@ -269,6 +273,7 @@ namespace CodexBridgeConsole
             _lightEffortComboBox = CreateComboBox(claudeEffortWidth);
             _lightGptModelComboBox = CreateComboBox(gptModelWidth);
             _lightGptEffortComboBox = CreateComboBox(gptEffortWidth);
+            _lightGptModelComboBox.TextChanged += GptModelTextChanged;
             table.Controls.Add(_lightModelComboBox, 1, 3);
             table.Controls.Add(_lightEffortComboBox, 2, 3);
             table.Controls.Add(_lightGptModelComboBox, 3, 3);
@@ -797,6 +802,153 @@ namespace CodexBridgeConsole
 
             _codexVersionStarted = true;
             LoadCodexVersionAsync();
+            LoadCodexModelCatalogAsync();
+        }
+
+        // codex debug models の取得は画面の表示を待たせない。
+        // 取得できないときは _choices の既定値のままにする。
+        private async void LoadCodexModelCatalogAsync()
+        {
+            // CODEX_HOME は必ず明示する。既定の ~/.codex への暗黙依存を作らないためである。
+            string codexHome = _settings.ExpandedCodexHome;
+            CodexModelCatalog catalog = await Task.Run(() => CodexModelCatalog.Load(codexHome));
+            if (IsDisposed || Disposing || catalog == null)
+            {
+                return;
+            }
+
+            _codexModelCatalog = catalog;
+            ApplyCodexModelCatalog();
+        }
+
+        private void ApplyCodexModelCatalog()
+        {
+            bool loading = _loadingControls;
+            _loadingControls = true;
+            try
+            {
+                SetComboItems(
+                    _standardGptModelComboBox,
+                    _codexModelCatalog.Models,
+                    _standardGptModelComboBox.Text);
+                SetComboItems(
+                    _lightGptModelComboBox,
+                    _codexModelCatalog.Models,
+                    _lightGptModelComboBox.Text);
+                ApplyGptEffortChoices(_standardGptModelComboBox, _standardGptEffortComboBox);
+                ApplyGptEffortChoices(_lightGptModelComboBox, _lightGptEffortComboBox);
+            }
+            finally
+            {
+                _loadingControls = loading;
+            }
+
+            ResizeGptComboBoxes();
+            AdjustWindowSize();
+        }
+
+        // effort の選べる値はモデルごとに違う。目録が知らないモデルには既定の一覧を残す。
+        private void ApplyGptEffortChoices(ComboBox modelComboBox, ComboBox effortComboBox)
+        {
+            IReadOnlyList<string> efforts = _codexModelCatalog.EffortsFor(modelComboBox.Text);
+            if (efforts.Count == 0)
+            {
+                efforts = _choices.GptEfforts;
+            }
+
+            SetComboItems(effortComboBox, efforts, effortComboBox.Text);
+        }
+
+        private void GptModelTextChanged(object sender, EventArgs e)
+        {
+            if (_codexModelCatalog == null)
+            {
+                return;
+            }
+
+            var modelComboBox = (ComboBox)sender;
+            ComboBox effortComboBox = modelComboBox == _standardGptModelComboBox
+                ? _standardGptEffortComboBox
+                : _lightGptEffortComboBox;
+
+            // 利用者がモデルを変えたときは、そのモデルが受け付けない effort を残さない。
+            // 残すと、選べるように見えて Codex 側で弾かれる組み合わせを保存できてしまう。
+            // 読み込み直後は値を変えない。開いただけで定義が書き換わるのを避けるためである。
+            IReadOnlyList<string> efforts = _codexModelCatalog.EffortsFor(modelComboBox.Text);
+            string effort = effortComboBox.Text;
+            if (efforts.Count > 0 && !Contains(efforts, effort))
+            {
+                string defaultEffort = _codexModelCatalog.DefaultEffortFor(modelComboBox.Text);
+                effortComboBox.Text = string.IsNullOrEmpty(defaultEffort) ? efforts[0] : defaultEffort;
+            }
+
+            bool loading = _loadingControls;
+            _loadingControls = true;
+            try
+            {
+                ApplyGptEffortChoices(modelComboBox, effortComboBox);
+            }
+            finally
+            {
+                _loadingControls = loading;
+            }
+
+            ResizeGptComboBoxes();
+            AdjustWindowSize();
+        }
+
+        private static bool Contains(IReadOnlyList<string> values, string value)
+        {
+            for (int i = 0; i < values.Count; i++)
+            {
+                if (string.Equals(values[i], value, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        // 選択肢を差し替えると必要な幅が変わる。列は中身の希望する大きさで決まるため、幅を計算し直す。
+        private void ResizeGptComboBoxes()
+        {
+            IReadOnlyList<string> models = _codexModelCatalog != null
+                ? _codexModelCatalog.Models
+                : _choices.GptModels;
+            int modelWidth = ComboBoxWidth(
+                models,
+                _standardGptModelComboBox.Text,
+                _lightGptModelComboBox.Text);
+
+            var efforts = new List<string>();
+            CollectItems(efforts, _standardGptEffortComboBox);
+            CollectItems(efforts, _lightGptEffortComboBox);
+            int effortWidth = ComboBoxWidth(
+                efforts,
+                _standardGptEffortComboBox.Text,
+                _lightGptEffortComboBox.Text);
+
+            SetComboBoxWidth(_standardGptModelComboBox, modelWidth);
+            SetComboBoxWidth(_lightGptModelComboBox, modelWidth);
+            SetComboBoxWidth(_standardGptEffortComboBox, effortWidth);
+            SetComboBoxWidth(_lightGptEffortComboBox, effortWidth);
+        }
+
+        private static void CollectItems(List<string> values, ComboBox comboBox)
+        {
+            for (int i = 0; i < comboBox.Items.Count; i++)
+            {
+                values.Add(Convert.ToString(comboBox.Items[i]));
+            }
+        }
+
+        private static void SetComboBoxWidth(ComboBox comboBox, int width)
+        {
+            // 列の幅は中身の希望する大きさから決まる。最小の幅も同時に更新しないと、
+            // 一覧の値が入らない細さまで縮む。
+            comboBox.MinimumSize = new Size(width, 0);
+            comboBox.Width = width;
         }
 
         private async void LoadCodexVersionAsync()
