@@ -45,7 +45,7 @@ Codex CLI は認証情報を `$CODEX_HOME/auth.json` に保存し、他の場所
 |---|---|
 | `.claude/agents/codex-review.md` | レビュー用サブエージェントの定義。`~/.claude/tools/codex-agent.sh` への転送を持つ |
 | `.claude/agents/codex-subagent.md` | 実装補助用サブエージェントの定義。`~/.claude/tools/codex-agent.sh` への転送を持つ |
-| `.claude/agents/impl-hard.md` | 高難度実装用サブエージェントの定義。Codex を呼ばず Claude(Opus 5 / high)で実装する。GPT 側定義を持たない |
+| `.claude/agents/impl-hard.md` | 高難度実装用サブエージェントの定義。Codex を呼ばず、定義に書いた Claude 側のモデルで実装する。GPT 側定義を持たない |
 | `.claude/agents/impl-light.md` | 小規模実装用サブエージェントの Claude 側定義。GPT 側への委譲とフォールバックの手順を持つ |
 | `.claude/agents/impl-standard.md` | 一般実装用サブエージェントの Claude 側定義。同じくフォールバックの手順を持つ |
 | `.claude/gpt-agents/codex-review.md` | レビュー用 GPT 側定義。Codex のモデル、effort、認証ホーム、サンドボックス、役割文を持つ |

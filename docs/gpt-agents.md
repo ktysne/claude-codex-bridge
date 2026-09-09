@@ -10,29 +10,31 @@ Claude Code のサブエージェント `impl-light`、`impl-standard`、`codex-
 どの定義を配置するかは、実装用の委譲だけを使うパターンと、レビュー用も使うパターンで選べる。
 
 委譲の対象は `impl-light`、`impl-standard`、`codex-review`、`codex-subagent` の 4 つである。
-`impl-hard`(`.claude/agents/impl-hard.md`)は GPT 側へ委譲せず、Claude(Opus 5 / high)が担う。
+`impl-hard`(`.claude/agents/impl-hard.md`)は GPT 側へ委譲せず、定義に書いた Claude 側のモデルが担う。
 設計判断を伴う変更や、正しさの検証が難しい変更は、メインセッションと同じ Claude 系に留めたほうが、監査で挙動の食い違いを追いやすいためである。
 
 ## 構成
 
 ```text
 Claude Code(メインセッション)
-├─ codex-review(Claude、Haiku)       .claude/agents/codex-review.md
+├─ codex-review                      .claude/agents/codex-review.md
 │   └─ tools/codex-agent.sh           .claude/gpt-agents/codex-review.md を読む
-│       └─ codex exec                 CODEX_HOME=~/.codex、gpt-5.6-sol、medium、read-only
-├─ codex-subagent(Claude、Haiku)     .claude/agents/codex-subagent.md
+│       └─ codex exec                 CODEX_HOME=~/.codex、read-only
+├─ codex-subagent                    .claude/agents/codex-subagent.md
 │   └─ tools/codex-agent.sh           .claude/gpt-agents/codex-subagent.md を読む
-│       └─ codex exec                 CODEX_HOME=~/.codex、gpt-5.6-sol、medium、workspace-write
-├─ impl-light(Claude、Sonnet 5)      .claude/agents/impl-light.md
+│       └─ codex exec                 CODEX_HOME=~/.codex、workspace-write
+├─ impl-light                        .claude/agents/impl-light.md
 │   └─ tools/codex-agent.sh           .claude/gpt-agents/impl-light.md を読む
-│       └─ codex exec                 CODEX_HOME=~/.codex、gpt-5.6-luna、xhigh、workspace-write
-└─ impl-standard(Claude、Opus 5)     .claude/agents/impl-standard.md
+│       └─ codex exec                 CODEX_HOME=~/.codex、workspace-write
+└─ impl-standard                     .claude/agents/impl-standard.md
     └─ tools/codex-agent.sh           .claude/gpt-agents/impl-standard.md を読む
-        └─ codex exec                 CODEX_HOME=~/.codex、gpt-5.6-luna、max、workspace-write
+        └─ codex exec                 CODEX_HOME=~/.codex、workspace-write
 ```
 
-`codex-review` と `codex-subagent` は GPT-5.6 Sol / medium を使い、サンドボックスだけが異なる。
-`impl-light` と `impl-standard` は同じ形で、Claude 側のモデルと GPT 側の effort が異なる。
+`codex-review` と `codex-subagent` は同じ形で、サンドボックスだけが異なる。
+`impl-light` と `impl-standard` も同じ形で、定義に書くモデルと effort だけが異なる。
+Claude 側と GPT 側のモデルと effort は各定義のフロントマターが正であり、設定コンソール([gui.md](gui.md))や手編集で変えられる。
+そのため、この文書には具体値を書かない。
 
 4 つのサブエージェントは依頼を受けると、まず `tools/codex-agent.sh` を 1 回呼び、依頼文をヒアドキュメントで標準入力に流す。
 コマンドライン引数に埋め込むと、依頼文に含まれる引用符やバックスラッシュで壊れるためである。
@@ -194,10 +196,10 @@ bash tools/codex-agent.sh impl-light --effort low <<< "Reply with exactly: PONG-
 先頭に監査用の 1 行が出る。
 
 ```text
-codex-agent: agent=impl-light model=gpt-5.6-luna effort=low sandbox=workspace-write codex_home=... workdir=...
+codex-agent: agent=impl-light model=<定義の codex_model> effort=low sandbox=workspace-write codex_home=... workdir=...
 ```
 
-続く Codex のヘッダで `model: gpt-5.6-luna` と `reasoning effort` を確認し、`PONG-LUNA` に続いて `codex-agent: result=ok` が出れば期待どおりである。
+続く Codex のヘッダで定義どおりの `model` と `reasoning effort` を確認し、`PONG-LUNA` に続いて `codex-agent: result=ok` が出れば期待どおりである。
 
 フォールバック経路は、試験用の環境変数で確認する。
 
