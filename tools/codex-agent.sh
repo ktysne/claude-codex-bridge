@@ -12,7 +12,7 @@
 # 終了コード:
 #   0   Codex が正常に終了した
 #   2   引数、定義ファイルの内容、環境の不備でスクリプトが起動しなかった
-#   3   GPT 側が未導入である(codex コマンドが無い、または定義ファイルが無い)
+#   3   GPT 側が未導入、または無効化されている(codex コマンドが無い、定義ファイルが無い、または codex_enabled: false)
 #       呼び出し側は Claude へフォールバックする
 #   75  Codex がレートリミットで実行できなかった(呼び出し側は Claude へフォールバックする)
 #   他  Codex の終了コードをそのまま返す
@@ -42,7 +42,7 @@ usage() {
 終了コード:
   0   Codex が正常に終了した
   2   引数、定義ファイルの内容、環境の不備でスクリプトが起動しなかった
-  3   GPT 側が未導入である(codex コマンドが無い、または定義ファイルが無い)
+  3   GPT 側が未導入、または無効化されている(codex コマンドが無い、定義ファイルが無い、または codex_enabled: false)
   75  Codex がレートリミットで実行できなかった
   他  Codex の終了コードをそのまま返す(Codex 自身の 75 は 1 に写像する)
 USAGE
@@ -53,9 +53,10 @@ die() {
   exit 2
 }
 
-# GPT 側が未導入であることを示す。呼び出し側はこの終了コードで Claude へフォールバックする。
+# GPT 側が未導入または無効化されていることを示す。呼び出し側はこの終了コードで Claude へフォールバックする。
 die_missing() {
   printf 'codex-agent: %s\n' "$1" >&2
+  printf 'codex-agent: result=failed exit=3\n'
   exit 3
 }
 
@@ -166,6 +167,16 @@ codex_home="$(fm_get codex_home)"
 codex_model="$(fm_get codex_model)"
 codex_effort="$(fm_get codex_reasoning_effort)"
 codex_sandbox="$(fm_get codex_sandbox)"
+codex_enabled="$(fm_get codex_enabled)"
+
+# キーが無いときだけ true を補う。値を書きかけた指定は不正として止める。
+# 他のキーと違い、既定が Codex を起動する側に倒れるためである。
+grep -q '^codex_enabled:' <<<"$front_matter" || codex_enabled="true"
+case "$codex_enabled" in
+  true) ;;
+  false) die_missing "GPT 側が無効化されている (codex_enabled: false): $def_file" ;;
+  *) die "codex_enabled の値が不正である: $codex_enabled (true または false)" ;;
+esac
 
 [ -n "$codex_home" ] || die "フロントマターに codex_home が無い: $def_file"
 [ -n "$codex_model" ] || die "フロントマターに codex_model が無い: $def_file"
