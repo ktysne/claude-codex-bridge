@@ -279,6 +279,69 @@ namespace CodexBridgeConsole.Tests
             }
         }
 
+        [Fact]
+        public void Load_TreatsMismatchedCodexEnabledAsDisabled()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteMismatchedDefinitions(directory);
+
+                var settings = new ConsoleSettings(directory.Path);
+
+                Assert.False(settings.CodexEnabled);
+                Assert.True(settings.CodexEnabledMismatch);
+            }
+        }
+
+        [Fact]
+        public void Save_KeepsMismatchedCodexEnabledWhenToggleIsNotChanged()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteMismatchedDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+
+                settings.ImplHard.ClaudeModel = "claude-hard-model-updated";
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.True(result.Succeeded);
+                Assert.Equal(new[] { ClaudeHardPath }, result.ChangedFiles);
+                Assert.Contains("codex_enabled: false", ReadDefinition(directory, GptStandardPath));
+                Assert.Contains("codex_enabled: true", ReadDefinition(directory, GptLightPath));
+            }
+        }
+
+        [Fact]
+        public void Save_WritesSameCodexEnabledToBothWhenToggleIsChanged()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteMismatchedDefinitions(directory);
+                var settings = new ConsoleSettings(directory.Path);
+
+                settings.CodexEnabled = true;
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.True(result.Succeeded);
+                Assert.Contains(GptStandardPath, result.ChangedFiles);
+                Assert.Contains("codex_enabled: true", ReadDefinition(directory, GptStandardPath));
+                Assert.Contains("codex_enabled: true", ReadDefinition(directory, GptLightPath));
+            }
+        }
+
+        private static void WriteMismatchedDefinitions(TemporaryDirectory directory)
+        {
+            WriteDefinitions(directory);
+            WriteDefinition(
+                directory,
+                GptStandardPath,
+                GptDefinition("codex-standard-model", "xhigh", false));
+            WriteDefinition(
+                directory,
+                GptLightPath,
+                GptDefinition("codex-light-model", "high", true));
+        }
+
         private static void WriteDefinitions(TemporaryDirectory directory, bool? codexEnabled = null)
         {
             WriteDefinition(

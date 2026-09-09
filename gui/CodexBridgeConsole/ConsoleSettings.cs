@@ -58,6 +58,8 @@ namespace CodexBridgeConsole
 
         public bool CodexEnabled { get; set; }
 
+        public bool CodexEnabledMismatch { get; private set; }
+
         public string CodexHome { get; private set; }
 
         public string ExpandedCodexHome { get; private set; }
@@ -111,15 +113,24 @@ namespace CodexBridgeConsole
             ImplLight = ReadClaudeSettings(DefinitionKind.ClaudeLight);
 
             FrontMatterFile gptLight;
-            if (_files.TryGetValue(GetRelativePath(DefinitionKind.GptLight), out gptLight))
+            FrontMatterFile gptStandard;
+            bool hasLight = _files.TryGetValue(GetRelativePath(DefinitionKind.GptLight), out gptLight);
+            bool hasStandard = _files.TryGetValue(GetRelativePath(DefinitionKind.GptStandard), out gptStandard);
+
+            // トグルは 1 つで 2 定義を切り替えるため、両方が有効なときだけ有効として表示する。
+            // 片方だけ無効の状態を有効と読むと、別の項目を保存したときに無効側が有効へ戻る。
+            bool lightEnabled = !hasLight || ReadEffectiveCodexEnabled(gptLight);
+            bool standardEnabled = !hasStandard || ReadEffectiveCodexEnabled(gptStandard);
+            CodexEnabled = lightEnabled && standardEnabled;
+            CodexEnabledMismatch = hasLight && hasStandard && lightEnabled != standardEnabled;
+
+            if (hasLight)
             {
-                CodexEnabled = ReadEffectiveCodexEnabled(gptLight);
                 CodexHome = gptLight.GetValue(CodexHomeKey);
                 CodexSandbox = gptLight.GetValue(CodexSandboxKey);
             }
             else
             {
-                CodexEnabled = true;
                 CodexHome = null;
                 CodexSandbox = null;
             }
@@ -282,7 +293,13 @@ namespace CodexBridgeConsole
         private void ApplyGpt(AgentSettings settings, DefinitionKind kind)
         {
             FrontMatterFile file = GetFile(kind);
-            SetCodexEnabled(file, CodexEnabled);
+
+            // トグルを操作していないときは codex_enabled に触れない。
+            // 2 定義の値が食い違っている場合に、片方を黙って書き換えないためである。
+            if (CodexEnabled != _loadedCodexEnabled)
+            {
+                SetCodexEnabled(file, CodexEnabled);
+            }
             file.SetValue("codex_model", settings.CodexModel);
             file.SetValue("codex_reasoning_effort", settings.CodexReasoningEffort);
         }
