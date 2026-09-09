@@ -122,9 +122,12 @@ namespace CodexBridgeConsole
             layout.Controls.Add(BuildStatusPanel(contentWidth));
 
             // 警告が無いときは場所を取らない。空の行が余白として残ると読みにくい。
+            // 高さは行数で固定するため、収まらない文字列は末尾を省略記号にする。
+            // 中断までに保存されたファイルの一覧など、長い文言が切れて読めなくなるのを防ぐ。
             _missingFilesLabel = new Label
             {
                 AutoSize = false,
+                AutoEllipsis = true,
                 Visible = false,
                 Width = contentWidth,
                 Height = SingleLineHeight() * 2,
@@ -145,6 +148,7 @@ namespace CodexBridgeConsole
             _saveStatusLabel = new Label
             {
                 AutoSize = false,
+                AutoEllipsis = true,
                 Width = contentWidth,
                 Height = SingleLineHeight(),
                 TextAlign = ContentAlignment.MiddleLeft,
