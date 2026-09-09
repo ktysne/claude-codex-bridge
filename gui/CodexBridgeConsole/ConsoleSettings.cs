@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Globalization;
 using System.IO;
 using System.Text;
 
@@ -360,35 +359,12 @@ namespace CodexBridgeConsole
             }
         }
 
-        // フロントマターへ引用符なしで書くため、YAML の意味を変える文字を通さない。
-        // Claude 側の定義は Claude Code が YAML として読むため、model: foo: bar のような値で壊れる。
+        // 値は FrontMatterFile が二重引用符で囲んで書くため、YAML の予約語や数値でも文字列として読まれる。
+        // 使える文字を絞るのは、tools/codex-agent.sh の fm_get が外側の引用符を外すだけで
+        // エスケープを戻さないためである。\ と " を通さない限り、スクリプトと設定コンソールの読みは一致する。
         private static bool IsSafeScalar(string value)
         {
-            // 先頭の - は YAML の並びの記号と読める。英数字を 1 つも含まない値も
-            // model: - のように意味の定まらない行になるため通さない。
-            if (value.Length == 0 || value[0] == '-')
-            {
-                return false;
-            }
-
-            bool hasAlphanumeric = false;
-            for (int i = 0; i < value.Length; i++)
-            {
-                char c = value[i];
-                if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
-                {
-                    hasAlphanumeric = true;
-                }
-            }
-
-            if (!hasAlphanumeric)
-            {
-                return false;
-            }
-
-            // 引用符を付けずに書くため、YAML が文字列以外として読む値は通さない。
-            // model: true や model: 123 は真偽値や数値になり、文字列を期待する定義を壊す。
-            if (IsYamlKeyword(value) || IsNumber(value))
+            if (value.Length == 0)
             {
                 return false;
             }
@@ -553,30 +529,6 @@ namespace CodexBridgeConsole
             }
 
             return null;
-        }
-
-        private static bool IsYamlKeyword(string value)
-        {
-            string[] keywords = { "null", "true", "false", "yes", "no", "on", "off" };
-            for (int i = 0; i < keywords.Length; i++)
-            {
-                if (string.Equals(value, keywords[i], StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private static bool IsNumber(string value)
-        {
-            double parsed;
-            return double.TryParse(
-                value,
-                NumberStyles.Float,
-                CultureInfo.InvariantCulture,
-                out parsed);
         }
 
         private bool IsCodexEnabledInvalid(DefinitionKind kind)
