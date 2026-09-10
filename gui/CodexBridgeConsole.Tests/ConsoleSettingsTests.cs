@@ -1131,6 +1131,56 @@ namespace CodexBridgeConsole.Tests
             }
         }
 
+        [Fact]
+        public void ReloadPreservingEdits_ReportsExternalCodexHomeChangeOnImplStandard()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                CreateCodexHomes(directory, ".codex-review");
+                ConsoleSettings settings = CreateSettings(directory);
+                settings.CodexHome = "~/.codex-subagent";
+
+                // impl-light は変えず、impl-standard の codex_home だけを外部で変える。
+                WriteDefinition(directory, GptStandardPath, WithCodexHome(
+                    GptDefinition("codex-standard-model", "xhigh", null),
+                    "~/.codex-review"));
+
+                IReadOnlyList<string> conflicts = settings.ReloadPreservingEdits();
+
+                Assert.Equal(
+                    new[]
+                    {
+                        GptStandardPath
+                            + " の codex_home: 外部で ~/.codex-review に変わったが、入力中の ~/.codex-subagent を優先する"
+                    },
+                    conflicts);
+                Assert.Equal("~/.codex-subagent", settings.CodexHome);
+                Assert.True(settings.CodexHomeMismatch);
+            }
+        }
+
+        [Fact]
+        public void Save_RejectsCodexHomeRemovedAfterListing()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                ConsoleSettings settings = CreateSettings(directory);
+                settings.CodexHome = "~/.codex-subagent";
+                Assert.True(settings.CodexHomeIsListed);
+
+                Directory.Delete(Path.Combine(HomePath(directory), ".codex-subagent"));
+
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.False(result.Succeeded);
+                Assert.Contains("認証ホームが存在しない: ~/.codex-subagent", result.ValidationErrors);
+                Assert.Contains("codex_home: ~/.codex\n", ReadDefinition(directory, GptLightPath));
+                Assert.Contains("codex_home: ~/.codex\n", ReadDefinition(directory, GptStandardPath));
+            }
+        }
+
         private static string WithCodexHome(string definition, string codexHome)
         {
             return definition.Replace("codex_home: ~/.codex\n", "codex_home: " + codexHome + "\n");
