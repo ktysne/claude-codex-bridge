@@ -158,7 +158,7 @@ Claude Code の `Agent` ツールからも `subagent_type: impl-light` と `suba
 ### 使う定義
 
 1 アカウントで実装の委譲、レビュー、実装補助をすべて使う。
-リポジトリの GPT 側定義は 2 アカウント運用の値で書かれているため、次のうち 4 つの GPT 側定義の `codex_home` を `~/.codex` に書き換える(`codex-review` は既に `~/.codex` である)。
+リポジトリの GPT 側定義は 2 アカウント運用の値で書かれているため、次のうち `impl-light`、`impl-standard`、`codex-subagent` の 3 つの `codex_home` を `~/.codex` に書き換える(`codex-review` は既に `~/.codex` である)。
 
 - `.claude/agents/impl-hard.md`
 - `.claude/agents/impl-light.md`
