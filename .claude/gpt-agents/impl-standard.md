@@ -1,5 +1,5 @@
 ---
-codex_home: ~/.codex-subagent  # 実装補助用アカウント。メインを実装補助用にする配置では ~/.codex にする
+codex_home: ~/.codex-subagent  # サブエージェント専用アカウント
 codex_model: gpt-5.6-luna
 codex_reasoning_effort: max
 codex_sandbox: workspace-write
