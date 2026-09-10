@@ -301,6 +301,7 @@ namespace CodexBridgeConsole
             // 集約値だけを比べると、片方だけが外部で変わった場合を見逃す。
             bool? previousStandardEnabled = ReadFileCodexEnabled(DefinitionKind.GptStandard);
             bool? previousLightEnabled = ReadFileCodexEnabled(DefinitionKind.GptLight);
+            string previousStandardCodexHome = ReadFileCodexHome(DefinitionKind.GptStandard);
 
             Reload();
 
@@ -320,6 +321,11 @@ namespace CodexBridgeConsole
                 CodexHomeKey,
                 conflicts);
 
+            // impl-standard 側の外部変更は代表値との比較では見えないため、定義ごとに見る。
+            // 保存では選択値を両定義へ書くので、知らせずに上書きしてはならない。
+            AddCodexHomeConflict(
+                conflicts, DefinitionKind.GptStandard, previousStandardCodexHome, editedCodexHome, previousCodexHome);
+
             if (codexEnabledEdited)
             {
                 AddCodexEnabledConflict(
@@ -331,6 +337,32 @@ namespace CodexBridgeConsole
             }
 
             return ReadOnly(conflicts);
+        }
+
+        // 定義の codex_home が外部で変わり、入力中の値とも違うときだけ競合として知らせる。
+        // 入力中の値が読み込み時から変わっていなければ、外部変更はそのまま反映されるので知らせない。
+        private void AddCodexHomeConflict(
+            List<string> conflicts,
+            DefinitionKind kind,
+            string previous,
+            string edited,
+            string previousSelected)
+        {
+            if (string.Equals(edited, previousSelected, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            string reloaded = ReadFileCodexHome(kind);
+            if (previous != null
+                && reloaded != null
+                && !string.Equals(reloaded, previous, StringComparison.Ordinal)
+                && !string.Equals(reloaded, edited, StringComparison.Ordinal))
+            {
+                conflicts.Add(
+                    GetRelativePath(kind) + " の " + CodexHomeKey + ": 外部で " + FormatValue(reloaded)
+                    + " に変わったが、入力中の " + FormatValue(edited) + " を優先する");
+            }
         }
 
         // 定義の codex_enabled が外部で変わり、入力中の値とも違うときだけ競合として知らせる。
@@ -541,6 +573,13 @@ namespace CodexBridgeConsole
                 ImplLight,
                 GetRelativePath(DefinitionKind.GptLight),
                 errors);
+
+            // 選択肢は読み込み時に列挙したものなので、保存の手前で認証ホームがまだ実在するかを見る。
+            // 消えたホームを書くと、次のサブエージェント起動が認証ホーム不足で止まる。
+            if (ShouldWriteCodexHome() && !Directory.Exists(ExpandedCodexHome))
+            {
+                errors.Add("認証ホームが存在しない: " + FormatValue(CodexHome));
+            }
 
             return ReadOnly(errors);
         }
