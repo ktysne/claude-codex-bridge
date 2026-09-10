@@ -164,7 +164,7 @@ EOF
 **書き込み可能な呼び出しは worktree を分ける。**
 `codex-review` は `read-only` で動くため、ファイルを書き換えない。
 `codex-subagent` は `workspace-write` で動くため、呼び出し側が Claude Code と別の worktree を用意し、`-C` で別 worktree を必ず指定する。
-`impl-light` と `impl-standard` は同じ worktree で動くが、実行中はメインセッションが同じファイルを編集しない。
+`impl-hard`、`impl-light`、`impl-standard` は同じ worktree で動くが、実行中はメインセッションが同じファイルを編集しない。
 書き込み範囲の大きい依頼は `codex-subagent` に回し、worktree を分ける。
 
 **Codex が書き込めるのは `-C` で指定した作業ディレクトリの配下だけである。**
