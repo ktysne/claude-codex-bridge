@@ -224,6 +224,30 @@ codex login
 codex login status
 ```
 
+#### サブエージェント側のホームを CLI から開く
+
+`%USERPROFILE%\.codex-subagent` の設定値を CLI から確認したり書き換えたりする場合は、PowerShell のプロファイル(`$PROFILE`)に次の関数を追加し、`codex` の代わりに `codex-sub` で起動する。
+サブエージェント側のホームは `CODEX_HOME` を明示しないと開けないため、環境変数の設定と `codex` の起動を 1 つの関数にまとめている。
+
+```powershell
+function codex-sub {
+    $env:CODEX_HOME = "$env:USERPROFILE\.codex-subagent"
+    try { codex @args } finally { Remove-Item Env:CODEX_HOME -ErrorAction SilentlyContinue }
+}
+```
+
+`finally` で `CODEX_HOME` を消しているのは、`codex-sub` を終えた後に同じシェルで `codex` と打ったときに、既定ホームのアカウントへ戻るようにするためである。
+戻しの作業は不要であり、`codex-sub` と `codex` を同じシェルで交互に使ってよい。
+
+```powershell
+codex-sub login status  # サブエージェント側のログイン状態を確認する
+codex-sub               # サブエージェント側のホームで対話を開く
+codex login status      # 既定ホーム側に戻っていることを確認する
+```
+
+サブエージェント専用のアカウントは、設定値の確認や点検に限って CLI から開く。
+実装の依頼やレビューを `codex-sub` で行うと、用途固定の原則(通常利用とレビューは既定ホームのアカウントで行う)から外れる。
+
 ### 使う定義
 
 5 つの Claude 側定義、4 つの GPT 側定義、`tools/codex-agent.sh` を配置する。
