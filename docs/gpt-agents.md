@@ -1,19 +1,20 @@
 # GPT 系サブエージェントを Codex CLI で動かす
 
-Claude Code のサブエージェント `impl-light`、`impl-standard`、`codex-review`、`codex-subagent` は、`tools/codex-agent.sh` を通じて Codex CLI を呼び出す。
-`impl-light` と `impl-standard` は、GPT 側がレートリミットで使えないときだけ、サブエージェント自身が Claude として実装する。
+Claude Code のサブエージェント `impl-hard`、`impl-light`、`impl-standard`、`codex-review`、`codex-subagent` は、`tools/codex-agent.sh` を通じて Codex CLI を呼び出す。
+`impl-hard`、`impl-light`、`impl-standard` は、GPT 側が未設定、未導入、無効化、またはレートリミットで使えないときだけ、サブエージェント自身が Claude として実装する。
 
 ## 目的
 
-1 アカウントで運用する場合は、4 定義すべてが既定の認証ホーム(`~/.codex`)を使う。
+1 アカウントで運用する場合は、5 定義すべてが既定の認証ホーム(`~/.codex`)を使う。
 2 アカウントで運用する場合は、通常利用とレビューに使うアカウントを既定ホーム(`~/.codex`)に置き、サブエージェント専用のアカウントに `~/.codex-subagent` を与える。
-ここでいう**通常利用**は Codex CLI の対話、VS Code や Chrome の Codex 拡張、Claude Code の Codex プラグインを指し、**サブエージェント**は GPT 側へ実装を委譲する `impl-light`、`impl-standard`、`codex-subagent` の 3 定義を指す。
+ここでいう**通常利用**は Codex CLI の対話、VS Code や Chrome の Codex 拡張、Claude Code の Codex プラグインを指し、**サブエージェント**は GPT 側へ実装を委譲する `impl-hard`、`impl-light`、`impl-standard`、`codex-subagent` の 4 定義を指す。
 `codex-review` も Claude Code からはサブエージェントとして起動されるが、役割はレビューなので既定ホーム側に置く。
 どの定義を配置するかは、実装用の委譲だけを使うパターンと、レビュー用も使うパターンで選べる。
 
-委譲の対象は `impl-light`、`impl-standard`、`codex-review`、`codex-subagent` の 4 つである。
-`impl-hard`(`.claude/agents/impl-hard.md`)は GPT 側へ委譲せず、定義に書いた Claude 側のモデルが担う。
+委譲の対象は `impl-hard`、`impl-light`、`impl-standard`、`codex-review`、`codex-subagent` の 5 つである。
+このうち `impl-hard`(`.claude/agents/impl-hard.md`)だけは、出荷時の GPT 側定義(`.claude/gpt-agents/impl-hard.md`)に `codex_model` を書いておらず、既定では GPT 側へ委譲せず、定義に書いた Claude 側のモデルが担う。
 設計判断を伴う変更や、正しさの検証が難しい変更は、メインセッションと同じ Claude 系に留めたほうが、監査で挙動の食い違いを追いやすいためである。
+GPT 側に委ねたい場合は、`.claude/gpt-agents/impl-hard.md` に `codex_model` と `codex_reasoning_effort` を書く(設定コンソールからも設定できる)。
 
 ## 構成
 
@@ -25,6 +26,9 @@ Claude Code(メインセッション)
 ├─ codex-subagent                    .claude/agents/codex-subagent.md
 │   └─ tools/codex-agent.sh           .claude/gpt-agents/codex-subagent.md を読む
 │       └─ codex exec                 CODEX_HOME=~/.codex、workspace-write
+├─ impl-hard                         .claude/agents/impl-hard.md
+│   └─ tools/codex-agent.sh           .claude/gpt-agents/impl-hard.md を読む(既定は codex_model 未設定)
+│       └─ codex exec                 codex_model を設定した場合のみ実行。CODEX_HOME=~/.codex、workspace-write
 ├─ impl-light                        .claude/agents/impl-light.md
 │   └─ tools/codex-agent.sh           .claude/gpt-agents/impl-light.md を読む
 │       └─ codex exec                 CODEX_HOME=~/.codex、workspace-write
@@ -37,14 +41,15 @@ Claude Code(メインセッション)
 2 アカウント運用の値は「認証ホームの割り当て」の表に従う。
 
 `codex-review` と `codex-subagent` は同じ形で、サンドボックスだけが異なる。
-`impl-light` と `impl-standard` も同じ形で、定義に書くモデルと effort だけが異なる。
+`impl-hard`、`impl-light`、`impl-standard` も同じ形で、定義に書くモデルと effort だけが異なる。
+`impl-hard` は出荷時の GPT 側定義に `codex_model` を書いていないため、既定ではこの経路を使わず Claude 側にフォールバックする。
 Claude 側と GPT 側のモデルと effort は各定義のフロントマターが正であり、設定コンソール([gui.md](gui.md))や手編集で変えられる。
 そのため、この文書には具体値を書かない。
 
-4 つのサブエージェントは依頼を受けると、まず `tools/codex-agent.sh` を 1 回呼び、依頼文をヒアドキュメントで標準入力に流す。
+5 つのサブエージェントは依頼を受けると、まず `tools/codex-agent.sh` を 1 回呼び、依頼文をヒアドキュメントで標準入力に流す。
 コマンドライン引数に埋め込むと、依頼文に含まれる引用符やバックスラッシュで壊れるためである。
 スクリプトが成功すれば、その出力をそのまま返す。
-`impl-light` と `impl-standard` はレートリミットで失敗したときだけ、サブエージェント自身が Claude として実装する。
+`impl-hard`、`impl-light`、`impl-standard` は、GPT 側が未導入、無効化、未設定、またはレートリミットで使えないときだけ、サブエージェント自身が Claude として実装する。
 `codex-review` と `codex-subagent` は、非 0 終了時にフォールバックせず、終了コードと出力末尾を報告して停止する。
 
 ## 定義ファイルの二層
@@ -70,7 +75,7 @@ GPT 側の定義では、フロントマター直後から末尾までが Codex 
 GPT 側の定義(`.claude/gpt-agents/<name>.md`)で使うキーは次の 5 つである。
 
 - **codex_home**：`CODEX_HOME` に渡すディレクトリ。必須。`~`、`$USERPROFILE`、`%USERPROFILE%` を実パスへ展開する。存在しなければ実行せずに終了コード 2 で止まる。
-- **codex_model**：`codex exec -m` に渡すモデル名。必須。
+- **codex_model**：`codex exec -m` に渡すモデル名。無いか空の場合は、その定義で GPT 側を使わない設定として終了コード 3 で止まる。区分ごとに GPT 経路の有無を切り替える手段であり、`codex_enabled`(定義をまとめて止める切替)とは役割が異なる。
 - **codex_reasoning_effort**：`-c model_reasoning_effort=` に渡す値。省略時は `medium`。`low`、`medium`、`high`、`xhigh`、`max`、`ultra` のみを受け付ける。どの値が使えるかはモデルによって異なる。`codex debug models` の `supported_reasoning_levels` が正である。
 - **codex_sandbox**：`--sandbox` に渡す値。省略時は `read-only`。`read-only` と `workspace-write` のみを受け付ける。
 - **codex_enabled**：`true` または `false` のみを受け付ける。省略時は `true`。`false` のときは Codex を起動せず終了コード 3 で止まる。それ以外の値は終了コード 2 で止まる。キーを書いて値を空にした場合は省略とみなさず、終了コード 2 で止まる。省略時を `true` とするのは、既存の定義ファイルを書き換えずに動かし続けるためである。
@@ -83,14 +88,14 @@ Claude 側の定義(`.claude/agents/<name>.md`)のフロントマターは、Cla
 
 ## フォールバックの条件と終了コード
 
-`impl-light` と `impl-standard` はスクリプトの終了コードでフォールバックの要否を決める。
+`impl-hard`、`impl-light`、`impl-standard` はスクリプトの終了コードでフォールバックの要否を決める。
 
 - **0**：Codex が完了した。出力の末尾にある Codex の報告をそのまま返し、Claude 側では実装しない。
 - **2**：引数、定義ファイルの内容、環境の不備でスクリプトが起動しなかった。フロントマターのキー不足、effort やサンドボックスの不正値、`codex_home` の不在、作業ディレクトリの不在、端末からの起動、空の依頼文がこれにあたる。実装せず、終了コードと出力の末尾を報告して終わる。
-- **3**：GPT 側が未導入、または無効化されている。`codex` コマンドが PATH に無いか、`.claude/gpt-agents/<name>.md` が見つからないか、`codex_enabled: false` が書かれている場合である。サブエージェント自身が Claude として実装し、その旨を報告の冒頭に書く。
+- **3**：GPT 側が未導入、無効化、または未設定である。`codex` コマンドが PATH に無い、`.claude/gpt-agents/<name>.md` が見つからない、`codex_enabled: false` が書かれている、`codex_model` が無いか空である、のいずれかに当たる場合である。サブエージェント自身が Claude として実装し、その旨を報告の冒頭に書く。キー名の誤記も `codex_model` の未設定と同じ経路で Claude 側へ倒れるため、報告の冒頭には `codex-agent:` の理由行をそのまま添える。
 - **75**：Codex がレートリミットで実行できなかった。サブエージェント自身が Claude として実装し、フォールバックした旨を報告の冒頭に書く。
 - **権限判定で拒否された場合**：Bash の実行自体が拒否され、終了コードを得られない。
-  `impl-light` と `impl-standard` は Claude 側で実装し、報告の冒頭に「Codex の呼び出しが権限判定で拒否されたため Claude 側で実装した」と書く。
+  `impl-hard`、`impl-light`、`impl-standard` は Claude 側で実装し、報告の冒頭に「Codex の呼び出しが権限判定で拒否されたため Claude 側で実装した」と書く。
   `codex-review` と `codex-subagent` は拒否の文言をそのまま報告して停止する。
 - **その他**：Codex の終了コードをそのまま返している。実装せず、同じく終了コードと出力の末尾を報告して終わる。
 
@@ -115,12 +120,12 @@ Codex の版によって通知の出力先が変わるためである。
 `429` は単語境界で照合し、ID や桁数の一致で誤検出しないようにしている。
 
 スクリプト自体が見つからない場合も、GPT 側が未導入とみなす。
-4 つのサブエージェントはカレントディレクトリの `tools/codex-agent.sh` を先に探し、無ければ `%USERPROFILE%\.claude\tools\codex-agent.sh` を使う。
-`impl-light` と `impl-standard` はどちらも無ければ自分で実装し、`codex-review` と `codex-subagent` は終了コードと出力の末尾を報告して停止する。
+5 つのサブエージェントはカレントディレクトリの `tools/codex-agent.sh` を先に探し、無ければ `%USERPROFILE%\.claude\tools\codex-agent.sh` を使う。
+`impl-hard`、`impl-light`、`impl-standard` はどちらも無ければ自分で実装し、`codex-review` と `codex-subagent` は終了コードと出力の末尾を報告して停止する。
 
 ## 認証ホームの割り当て
 
-1 アカウントで使う場合は、4 定義の `codex_home` を `~/.codex` にする。
+1 アカウントで使う場合は、5 定義の `codex_home` を `~/.codex` にする。
 2 アカウントで使う場合は、通常利用とレビューに使うアカウントが既定ホーム(`~/.codex`)を使い、サブエージェント専用のアカウントが `~/.codex-subagent` を使う。
 通常利用のアカウントを既定ホームに置くのは、Codex CLI の対話、VS Code や Chrome の Codex 拡張、Claude Code の Codex プラグインが既定ホームしか見ないためである。
 既定ホームを空けるとこれらが未ログイン扱いになり、`~/.codex` が自動で再生成される。
@@ -130,6 +135,7 @@ GPT 側の定義の `codex_home` は次の表のとおりに書く。
 |---|---|
 | `codex-review` | `~/.codex` |
 | `codex-subagent` | `~/.codex-subagent` |
+| `impl-hard` | `~/.codex-subagent` |
 | `impl-light` | `~/.codex-subagent` |
 | `impl-standard` | `~/.codex-subagent` |
 
@@ -158,7 +164,7 @@ EOF
 **書き込み可能な呼び出しは worktree を分ける。**
 `codex-review` は `read-only` で動くため、ファイルを書き換えない。
 `codex-subagent` は `workspace-write` で動くため、呼び出し側が Claude Code と別の worktree を用意し、`-C` で別 worktree を必ず指定する。
-`impl-light` と `impl-standard` は同じ worktree で動くが、実行中はメインセッションが同じファイルを編集しない。
+`impl-hard`、`impl-light`、`impl-standard` は同じ worktree で動くが、実行中はメインセッションが同じファイルを編集しない。
 書き込み範囲の大きい依頼は `codex-subagent` に回し、worktree を分ける。
 
 **Codex が書き込めるのは `-C` で指定した作業ディレクトリの配下だけである。**
@@ -187,8 +193,8 @@ Codex の回答本文が流れる標準出力にはフィルタを掛けない�
 そのため、このリポジトリの定義は、このリポジトリでのみ効く。
 全プロジェクトに適用するなら、次の 3 つを置く。
 
-1. `.claude/agents/` の 5 定義(`impl-hard` を含む)を `%USERPROFILE%\.claude\agents\` に置き換える。
-2. `.claude/gpt-agents/` の 4 定義を `%USERPROFILE%\.claude\gpt-agents\` にコピーする。
+1. `.claude/agents/` の 5 定義を `%USERPROFILE%\.claude\agents\` に置き換える。
+2. `.claude/gpt-agents/` の 5 定義を `%USERPROFILE%\.claude\gpt-agents\` にコピーする。
 3. `tools/codex-agent.sh` を `%USERPROFILE%\.claude\tools\` にコピーする。
 
 ## 動作確認

@@ -31,8 +31,19 @@ namespace CodexBridgeConsole
             new DefinitionPath(Path.Combine("agents", "impl-hard.md"), DefinitionKind.ClaudeHard),
             new DefinitionPath(Path.Combine("agents", "impl-standard.md"), DefinitionKind.ClaudeStandard),
             new DefinitionPath(Path.Combine("agents", "impl-light.md"), DefinitionKind.ClaudeLight),
+            new DefinitionPath(Path.Combine("gpt-agents", "impl-hard.md"), DefinitionKind.GptHard),
             new DefinitionPath(Path.Combine("gpt-agents", "impl-standard.md"), DefinitionKind.GptStandard),
             new DefinitionPath(Path.Combine("gpt-agents", "impl-light.md"), DefinitionKind.GptLight)
+        };
+
+        // codex_enabled と codex_home は、この 3 定義をまとめて 1 つの設定として扱う。
+        // 定義ごとに違う値を持たせると、一部の区分だけ別の認証ホームで動く状態を画面から作れてしまう。
+        // 区分ごとに GPT 経路の有無を切り替える手段は codex_model の未設定である。
+        private static readonly DefinitionKind[] GptDefinitionKinds =
+        {
+            DefinitionKind.GptHard,
+            DefinitionKind.GptStandard,
+            DefinitionKind.GptLight
         };
 
         private readonly Dictionary<string, FrontMatterFile> _files =
@@ -80,11 +91,11 @@ namespace CodexBridgeConsole
 
         public IReadOnlyList<string> CodexEnabledInvalidFiles { get; private set; }
 
-        // 画面でトグルを操作したことを示す。2 定義の値が食い違っているとき、
-        // 表示上の値が変わらなくても両方へ書き戻せるようにするためである。
+        // 画面でトグルを操作したことを示す。定義ごとの値が食い違っているとき、
+        // 表示上の値が変わらなくてもすべてへ書き戻せるようにするためである。
         public bool CodexEnabledExplicit { get; set; }
 
-        // 選択中の認証ホーム。impl-light と impl-standard の codex_home を 1 つの設定として扱う。
+        // 選択中の認証ホーム。GPT 側 3 定義の codex_home を 1 つの設定として扱う。
         // 値の形は定義ファイルと同じ ~/<ディレクトリ名> である。
         public string CodexHome
         {
@@ -106,7 +117,7 @@ namespace CodexBridgeConsole
         // 選択中の値が一覧にあるかどうか。一覧に無い値は表示するだけで、保存では書き換えない。
         public bool CodexHomeIsListed { get; private set; }
 
-        // impl-light と impl-standard の codex_home が食い違うかどうか。
+        // GPT 側 3 定義の codex_home が食い違うかどうか。
         public bool CodexHomeMismatch { get; private set; }
 
         public string ExpandedCodexHome { get; private set; }
@@ -187,6 +198,11 @@ namespace CodexBridgeConsole
                 GetRelativePath(DefinitionKind.ClaudeLight));
             AddGptChanges(
                 changes,
+                _loadedImplHard,
+                ImplHard,
+                GetRelativePath(DefinitionKind.GptHard));
+            AddGptChanges(
+                changes,
                 _loadedImplStandard,
                 ImplStandard,
                 GetRelativePath(DefinitionKind.GptStandard));
@@ -216,7 +232,7 @@ namespace CodexBridgeConsole
             else if (CodexEnabledExplicit)
             {
                 changes.Add(
-                    "codex_enabled: 両定義へ「"
+                    "codex_enabled: 3 定義へ「"
                     + FormatCodexEnabled(CodexEnabled)
                     + "」を書き戻す");
             }
@@ -240,7 +256,15 @@ namespace CodexBridgeConsole
             AgentSettings current,
             string relativePath)
         {
-            AddValueChange(changes, relativePath, "codex_model", loaded.CodexModel, current.CodexModel);
+            // codex_model はキーが無いこと(null)と空値が同じ意味である。
+            // tools/codex-agent.sh はどちらも「GPT 側を使わない」として読む。
+            // 差分として区別すると、キーの無い定義を開いただけで未保存の変更として並ぶ。
+            AddValueChange(
+                changes,
+                relativePath,
+                "codex_model",
+                NormalizeCodexModel(loaded.CodexModel),
+                NormalizeCodexModel(current.CodexModel));
             AddValueChange(
                 changes,
                 relativePath,
@@ -276,6 +300,13 @@ namespace CodexBridgeConsole
             return string.IsNullOrEmpty(value) ? "(空)" : value;
         }
 
+        // codex_model はキーが無いこと(null)と空値のどちらも「GPT 側を使わない」を意味する。
+        // 比較と書き込みでは同じ値として扱う。
+        private static string NormalizeCodexModel(string value)
+        {
+            return value ?? string.Empty;
+        }
+
         private static string FormatCodexEnabled(bool value)
         {
             return value ? "有効" : "無効";
@@ -297,10 +328,12 @@ namespace CodexBridgeConsole
             string editedCodexHome = CodexHome;
             string previousCodexHome = _loadedCodexHome;
 
-            // codex_enabled は 2 定義の集約値を画面に出すが、外部変更の検出は定義ごとに行う。
-            // 集約値だけを比べると、片方だけが外部で変わった場合を見逃す。
+            // codex_enabled は 3 定義の集約値を画面に出すが、外部変更の検出は定義ごとに行う。
+            // 集約値だけを比べると、一部だけが外部で変わった場合を見逃す。
+            bool? previousHardEnabled = ReadFileCodexEnabled(DefinitionKind.GptHard);
             bool? previousStandardEnabled = ReadFileCodexEnabled(DefinitionKind.GptStandard);
             bool? previousLightEnabled = ReadFileCodexEnabled(DefinitionKind.GptLight);
+            string previousHardCodexHome = ReadFileCodexHome(DefinitionKind.GptHard);
             string previousStandardCodexHome = ReadFileCodexHome(DefinitionKind.GptStandard);
 
             Reload();
@@ -309,6 +342,7 @@ namespace CodexBridgeConsole
             RestoreClaudeEdits(ImplHard, editedHard, previousHard, GetRelativePath(DefinitionKind.ClaudeHard), conflicts);
             RestoreClaudeEdits(ImplStandard, editedStandard, previousStandard, GetRelativePath(DefinitionKind.ClaudeStandard), conflicts);
             RestoreClaudeEdits(ImplLight, editedLight, previousLight, GetRelativePath(DefinitionKind.ClaudeLight), conflicts);
+            RestoreGptEdits(ImplHard, editedHard, previousHard, GetRelativePath(DefinitionKind.GptHard), conflicts);
             RestoreGptEdits(ImplStandard, editedStandard, previousStandard, GetRelativePath(DefinitionKind.GptStandard), conflicts);
             RestoreGptEdits(ImplLight, editedLight, previousLight, GetRelativePath(DefinitionKind.GptLight), conflicts);
 
@@ -321,13 +355,17 @@ namespace CodexBridgeConsole
                 CodexHomeKey,
                 conflicts);
 
-            // impl-standard 側の外部変更は代表値との比較では見えないため、定義ごとに見る。
-            // 保存では選択値を両定義へ書くので、知らせずに上書きしてはならない。
+            // impl-hard と impl-standard 側の外部変更は代表値との比較では見えないため、定義ごとに見る。
+            // 保存では選択値を 3 定義へ書くので、知らせずに上書きしてはならない。
+            AddCodexHomeConflict(
+                conflicts, DefinitionKind.GptHard, previousHardCodexHome, editedCodexHome, previousCodexHome);
             AddCodexHomeConflict(
                 conflicts, DefinitionKind.GptStandard, previousStandardCodexHome, editedCodexHome, previousCodexHome);
 
             if (codexEnabledEdited)
             {
+                AddCodexEnabledConflict(
+                    conflicts, DefinitionKind.GptHard, previousHardEnabled, editedCodexEnabled);
                 AddCodexEnabledConflict(
                     conflicts, DefinitionKind.GptStandard, previousStandardEnabled, editedCodexEnabled);
                 AddCodexEnabledConflict(
@@ -401,8 +439,15 @@ namespace CodexBridgeConsole
             string relativePath,
             List<string> conflicts)
         {
+            // キーが無いこと(null)と空値は同じ「未設定」である。区別すると、
+            // 触っていない未設定の欄が編集済みと判定される。
             target.CodexModel = RestoreEdit(
-                target.CodexModel, edited.CodexModel, previous.CodexModel, relativePath, "codex_model", conflicts);
+                NormalizeCodexModel(target.CodexModel),
+                NormalizeCodexModel(edited.CodexModel),
+                NormalizeCodexModel(previous.CodexModel),
+                relativePath,
+                "codex_model",
+                conflicts);
             target.CodexReasoningEffort = RestoreEdit(
                 target.CodexReasoningEffort,
                 edited.CodexReasoningEffort,
@@ -482,28 +527,10 @@ namespace CodexBridgeConsole
             ImplLight = ReadClaudeSettings(DefinitionKind.ClaudeLight);
 
             FrontMatterFile gptLight;
-            FrontMatterFile gptStandard;
             bool hasLight = _files.TryGetValue(GetRelativePath(DefinitionKind.GptLight), out gptLight);
-            bool hasStandard = _files.TryGetValue(GetRelativePath(DefinitionKind.GptStandard), out gptStandard);
 
-            // トグルは 1 つで 2 定義を切り替えるため、両方が有効なときだけ有効として表示する。
-            // 片方だけ無効の状態を有効と読むと、別の項目を保存したときに無効側が有効へ戻る。
-            var invalidCodexEnabled = new List<string>();
-            if (hasLight && ReadCodexEnabledValue(gptLight) == null)
-            {
-                invalidCodexEnabled.Add(GetRelativePath(DefinitionKind.GptLight));
-            }
-
-            if (hasStandard && ReadCodexEnabledValue(gptStandard) == null)
-            {
-                invalidCodexEnabled.Add(GetRelativePath(DefinitionKind.GptStandard));
-            }
-
-            CodexEnabledInvalidFiles = ReadOnly(invalidCodexEnabled);
-            bool lightEnabled = !hasLight || ReadEffectiveCodexEnabled(gptLight);
-            bool standardEnabled = !hasStandard || ReadEffectiveCodexEnabled(gptStandard);
-            CodexEnabled = lightEnabled && standardEnabled;
-            CodexEnabledMismatch = hasLight && hasStandard && lightEnabled != standardEnabled;
+            CodexEnabled = ReadAggregatedCodexEnabled();
+            RefreshCodexEnabledMismatch();
 
             // 選択肢は CodexHome より先に決める。CodexHome の設定子が一覧との照合を行うためである。
             CodexHomeChoices = EnumerateCodexHomes(_homeDirectory);
@@ -520,6 +547,7 @@ namespace CodexBridgeConsole
 
             RefreshCodexHomeMismatch();
 
+            ReadGptSettings(ImplHard, DefinitionKind.GptHard);
             ReadGptSettings(ImplStandard, DefinitionKind.GptStandard);
             ReadGptSettings(ImplLight, DefinitionKind.GptLight);
 
@@ -546,7 +574,7 @@ namespace CodexBridgeConsole
             }
 
             // 読み込み後に外部で消された定義は、書き換えないファイルでは検出できない。
-            // 5 ファイルが揃っていることを保存の手前で見る。
+            // 対象のファイルが揃っていることを保存の手前で見る。
             for (int i = 0; i < DefinitionPaths.Length; i++)
             {
                 string relativePath = DefinitionPaths[i].RelativePath;
@@ -565,6 +593,10 @@ namespace CodexBridgeConsole
             ValidateClaude(ImplStandard, GetRelativePath(DefinitionKind.ClaudeStandard), errors);
             ValidateClaude(ImplLight, GetRelativePath(DefinitionKind.ClaudeLight), errors);
 
+            ValidateGpt(
+                ImplHard,
+                GetRelativePath(DefinitionKind.GptHard),
+                errors);
             ValidateGpt(
                 ImplStandard,
                 GetRelativePath(DefinitionKind.GptStandard),
@@ -600,6 +632,7 @@ namespace CodexBridgeConsole
             ApplyClaude(ImplHard, DefinitionKind.ClaudeHard);
             ApplyClaude(ImplStandard, DefinitionKind.ClaudeStandard);
             ApplyClaude(ImplLight, DefinitionKind.ClaudeLight);
+            ApplyGpt(ImplHard, DefinitionKind.GptHard);
             ApplyGpt(ImplStandard, DefinitionKind.GptStandard);
             ApplyGpt(ImplLight, DefinitionKind.GptLight);
 
@@ -732,11 +765,9 @@ namespace CodexBridgeConsole
             string relativePath,
             List<string> errors)
         {
-            if (CodexEnabled && string.IsNullOrWhiteSpace(settings.CodexModel))
-            {
-                errors.Add(relativePath + " の codex_model が空である");
-            }
-            else if (!string.IsNullOrWhiteSpace(settings.CodexModel) && !IsSafeScalar(settings.CodexModel))
+            // 空の codex_model は「GPT 側を使わない」という正常な設定である。
+            // tools/codex-agent.sh は未設定の定義を終了コード 3 で止め、Claude 側定義のモデルが実装する。
+            if (!string.IsNullOrWhiteSpace(settings.CodexModel) && !IsSafeScalar(settings.CodexModel))
             {
                 errors.Add(relativePath + " の codex_model に使えない文字がある: " + settings.CodexModel + ScalarRuleText);
             }
@@ -762,26 +793,26 @@ namespace CodexBridgeConsole
         {
             FrontMatterFile file = GetFile(kind);
 
-            // codex_home は 2 定義を 1 つの設定として扱うため、選択中の値を両方へ書く。
+            // codex_home は GPT 側 3 定義を 1 つの設定として扱うため、選択中の値をすべてへ書く。
             if (ShouldWriteCodexHome())
             {
                 file.SetValue(CodexHomeKey, CodexHome);
             }
 
             // トグルを操作していないときは codex_enabled に触れない。
-            // 2 定義の値が食い違っている場合に、片方を黙って書き換えないためである。
+            // 定義ごとの値が食い違っている場合に、一部を黙って書き換えないためである。
             // 不正値が書かれている定義は、保存のたびに正しい値へ直す。
             // 直さないとスクリプトが終了コード 2 で止まり続けるためである。
-            // 直す対象は不正値を持つ定義だけとする。正常なもう片方を巻き添えにしないためである。
+            // 直す対象は不正値を持つ定義だけとする。正常な定義を巻き添えにしないためである。
             if (CodexEnabled != _loadedCodexEnabled
                 || CodexEnabledExplicit
                 || IsCodexEnabledInvalid(kind))
             {
                 SetCodexEnabled(file, CodexEnabled);
             }
-            // codex_model が無い定義は、GPT 経路が無効のときだけ保存を通る(スクリプトは無効判定を先に行う)。
-            // 値が空でキーも無いなら書かない。空のキーを足しても定義は有効にならず、変えていないファイルを書き換えるだけになる。
-            string codexModel = settings.CodexModel ?? string.Empty;
+            // codex_model が空、またはキーが無い定義は「GPT 側を使わない」設定として扱われる。
+            // 値が空でキーも無いなら書かない。空のキーを足しても意味は変わらず、変えていないファイルを書き換えるだけになる。
+            string codexModel = NormalizeCodexModel(settings.CodexModel);
             string existingCodexModel;
             if (codexModel.Length > 0 || file.TryGetValue("codex_model", out existingCodexModel))
             {
@@ -813,7 +844,7 @@ namespace CodexBridgeConsole
                 return false;
             }
 
-            // 食い違っているときは、選択中の値を変えていなくても両定義を揃える。
+            // 食い違っているときは、選択中の値を変えていなくても 3 定義を揃える。
             return CodexHomeMismatch
                 || !string.Equals(CodexHome, _loadedCodexHome, StringComparison.Ordinal);
         }
@@ -838,40 +869,83 @@ namespace CodexBridgeConsole
             }
         }
 
+        // トグルに出す 3 定義の集約値。すべてが有効なときだけ有効とする。
+        // 一部だけ無効の状態を有効と読むと、別の項目を保存したときに無効側が有効へ戻る。
+        // 読めなかった定義は判断材料にしない(有効として数える)。
+        private bool ReadAggregatedCodexEnabled()
+        {
+            for (int i = 0; i < GptDefinitionKinds.Length; i++)
+            {
+                if (ReadFileCodexEnabled(GptDefinitionKinds[i]) == false)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         // 保存で codex_enabled を揃えた、または直した場合に、警告の表示を残さないため読み直す。
         private void RefreshCodexEnabledMismatch()
         {
-            FrontMatterFile gptLight;
-            FrontMatterFile gptStandard;
-            bool hasLight = _files.TryGetValue(GetRelativePath(DefinitionKind.GptLight), out gptLight);
-            bool hasStandard = _files.TryGetValue(GetRelativePath(DefinitionKind.GptStandard), out gptStandard);
-            CodexEnabledMismatch = hasLight
-                && hasStandard
-                && ReadEffectiveCodexEnabled(gptLight) != ReadEffectiveCodexEnabled(gptStandard);
-
+            bool anyEnabled = false;
+            bool anyDisabled = false;
             var invalidCodexEnabled = new List<string>();
-            if (hasLight && ReadCodexEnabledValue(gptLight) == null)
+            for (int i = 0; i < GptDefinitionKinds.Length; i++)
             {
-                invalidCodexEnabled.Add(GetRelativePath(DefinitionKind.GptLight));
+                DefinitionKind kind = GptDefinitionKinds[i];
+                FrontMatterFile file;
+                if (!_files.TryGetValue(GetRelativePath(kind), out file))
+                {
+                    continue;
+                }
+
+                if (ReadCodexEnabledValue(file) == null)
+                {
+                    invalidCodexEnabled.Add(GetRelativePath(kind));
+                }
+
+                if (ReadEffectiveCodexEnabled(file))
+                {
+                    anyEnabled = true;
+                }
+                else
+                {
+                    anyDisabled = true;
+                }
             }
 
-            if (hasStandard && ReadCodexEnabledValue(gptStandard) == null)
-            {
-                invalidCodexEnabled.Add(GetRelativePath(DefinitionKind.GptStandard));
-            }
-
+            CodexEnabledMismatch = anyEnabled && anyDisabled;
             CodexEnabledInvalidFiles = ReadOnly(invalidCodexEnabled);
         }
 
         // 保存で codex_home を揃えた場合に、警告の表示を残さないため読み直す。
-        // 画面に出す値は impl-light の側であり、impl-standard がそれと違えば食い違いとする。
+        // 3 定義のうち 1 つでも値が違えば食い違いとする。画面に出す代表値は impl-light の側である。
         private void RefreshCodexHomeMismatch()
         {
-            string light = ReadFileCodexHome(DefinitionKind.GptLight);
-            string standard = ReadFileCodexHome(DefinitionKind.GptStandard);
-            CodexHomeMismatch = light != null
-                && standard != null
-                && !string.Equals(light, standard, StringComparison.Ordinal);
+            bool hasFirst = false;
+            string first = null;
+            bool mismatch = false;
+            for (int i = 0; i < GptDefinitionKinds.Length; i++)
+            {
+                string value = ReadFileCodexHome(GptDefinitionKinds[i]);
+                if (value == null)
+                {
+                    continue;
+                }
+
+                if (!hasFirst)
+                {
+                    hasFirst = true;
+                    first = value;
+                }
+                else if (!string.Equals(first, value, StringComparison.Ordinal))
+                {
+                    mismatch = true;
+                }
+            }
+
+            CodexHomeMismatch = mismatch;
         }
 
         // 定義ごとの codex_home。ファイルが無いときは null を返し、キーが無いときは空文字を返す。
@@ -1036,6 +1110,9 @@ namespace CodexBridgeConsole
                 case DefinitionKind.ClaudeLight:
                     CopyClaudeValues(ImplLight, _loadedImplLight);
                     break;
+                case DefinitionKind.GptHard:
+                    CopyGptValues(ImplHard, _loadedImplHard);
+                    break;
                 case DefinitionKind.GptStandard:
                     CopyGptValues(ImplStandard, _loadedImplStandard);
                     break;
@@ -1192,6 +1269,7 @@ namespace CodexBridgeConsole
             ClaudeHard,
             ClaudeStandard,
             ClaudeLight,
+            GptHard,
             GptStandard,
             GptLight
         }

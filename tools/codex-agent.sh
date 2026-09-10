@@ -12,7 +12,8 @@
 # 終了コード:
 #   0   Codex が正常に終了した
 #   2   引数、定義ファイルの内容、環境の不備でスクリプトが起動しなかった
-#   3   GPT 側が未導入、または無効化されている(codex コマンドが無い、定義ファイルが無い、または codex_enabled: false)
+#   3   GPT 側が未導入、無効化、または未設定である
+#       (codex コマンドが無い、定義ファイルが無い、codex_enabled: false、または codex_model が無いか空)
 #       呼び出し側は Claude へフォールバックする
 #   75  Codex がレートリミットで実行できなかった(呼び出し側は Claude へフォールバックする)
 #   他  Codex の終了コードをそのまま返す
@@ -42,7 +43,8 @@ usage() {
 終了コード:
   0   Codex が正常に終了した
   2   引数、定義ファイルの内容、環境の不備でスクリプトが起動しなかった
-  3   GPT 側が未導入、または無効化されている(codex コマンドが無い、定義ファイルが無い、または codex_enabled: false)
+  3   GPT 側が未導入、無効化、または未設定である
+      (codex コマンドが無い、定義ファイルが無い、codex_enabled: false、または codex_model が無いか空)
   75  Codex がレートリミットで実行できなかった
   他  Codex の終了コードをそのまま返す(Codex 自身の 75 は 1 に写像する)
 USAGE
@@ -53,7 +55,7 @@ die() {
   exit 2
 }
 
-# GPT 側が未導入または無効化されていることを示す。呼び出し側はこの終了コードで Claude へフォールバックする。
+# GPT 側が未導入、無効化、または未設定であることを示す。呼び出し側はこの終了コードで Claude へフォールバックする。
 die_missing() {
   printf 'codex-agent: %s\n' "$1" >&2
   printf 'codex-agent: result=failed exit=3\n'
@@ -179,7 +181,10 @@ case "$codex_enabled" in
 esac
 
 [ -n "$codex_home" ] || die "フロントマターに codex_home が無い: $def_file"
-[ -n "$codex_model" ] || die "フロントマターに codex_model が無い: $def_file"
+# codex_model が無い、または空の定義は「GPT 側を使わない」設定として扱う。
+# 区分ごとに GPT 経路の有無を切り替える手段であり、codex_enabled(3 定義をまとめて止める切替)とは役割が異なる。
+# キー名の誤記もここで Claude 側へ倒れるため、呼び出し側は報告の冒頭に理由を書く。
+[ -n "$codex_model" ] || die_missing "codex_model が未設定である(GPT 側を使わない): $def_file"
 [ -n "$codex_effort" ] || codex_effort="medium"
 # 既定は安全側の read-only。書き込みが必要な定義だけが明示する。
 [ -n "$codex_sandbox" ] || codex_sandbox="read-only"
