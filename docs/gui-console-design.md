@@ -9,9 +9,9 @@
 
 設定コンソールは、次の 3 つを GUI から行えるようにする。
 
-- GPT 系サブエージェント経路(`impl-light` と `impl-standard` が Codex へ委譲する経路)の有効と無効を切り替える。
+- GPT 系サブエージェント経路(`impl-hard`、`impl-standard`、`impl-light` が Codex へ委譲する経路)の有効と無効を切り替える。
 - hard、standard、light の各区分で使う Claude 側のモデルと effort をプルダウンで選ぶ。
-- standard と light の各区分で使う GPT 側のモデルと effort をプルダウンで選ぶ。
+- hard、standard、light の各区分で使う GPT 側のモデルと effort をプルダウンで選ぶ。GPT モデルの選択肢には「(未設定)」を含み、選ぶとその区分は GPT 側を使わない。
 
 設定コンソールは Codex も Claude Code も起動しない。
 Claude Code と `tools/codex-agent.sh` がセッション開始時や呼び出し時に読む定義ファイルのフロントマターだけを書き換える設定エディタである。
@@ -37,8 +37,8 @@ Windows 10 1903 以降と Windows 11 には 4.8 が同梱されているため�
 
 | 区分 | Claude 側(`agents/<name>.md`) | GPT 側(`gpt-agents/<name>.md`) |
 |---|---|---|
-| hard(`impl-hard`) | `model`、`effort` | なし(Codex を呼ばない) |
-| standard(`impl-standard`) | `model`、`effort`(フォールバック時に使う) | `codex_home`、`codex_enabled`、`codex_model`、`codex_reasoning_effort` |
+| hard(`impl-hard`) | `model`、`effort` | `codex_home`、`codex_enabled`、`codex_model`、`codex_reasoning_effort` |
+| standard(`impl-standard`) | `model`、`effort`(フォールバック時に使う) | 同上 |
 | light(`impl-light`) | 同上 | 同上 |
 
 `codex_sandbox` は表示するだけで編集させない。
@@ -47,8 +47,8 @@ Windows 10 1903 以降と Windows 11 には 4.8 が同梱されているため�
 
 ### Claude 側の `model` と `effort`
 
-`impl-light` と `impl-standard` の Claude 側の値は、GPT 側がレートリミットで使えないときのフォールバックで使われる。
-`impl-hard` は常に Claude 側の値で動く。
+`impl-light` と `impl-standard` の Claude 側の値は、GPT 側が未導入、無効化、またはレートリミットで使えないときのフォールバックで使われる。
+`impl-hard` の Claude 側の値は、GPT 側が未設定、未導入、無効化、またはレートリミットで使えないときに使われる。出荷時の GPT 側定義には `codex_model` を書かないため、`impl-hard` は既定ではこの値だけで動く。
 プルダウンにこの違いを示すため、standard と light の Claude 側の列見出しに「(フォールバック時)」を添える。
 
 ### GPT 経路の有効と無効
@@ -60,9 +60,12 @@ GPT 側定義を別名に退避すれば疑似的に無効化できるが、設�
 
 - **codex_enabled**：`true` または `false`。省略時は `true`。`false` のときスクリプトは Codex を起動せず、終了コード 3 で止まる。
 
-終了コード 3 の意味を「GPT 側が未導入、または無効化されている」に広げる。
-`impl-light` と `impl-standard` は既存の手順どおり Claude 側で実装し、報告の冒頭を「GPT 側が未導入または無効化されているため Claude 側で実装した」に直す。
-設定コンソールのトグルは、`impl-light` と `impl-standard` の GPT 側定義に同じ値を書く。
+終了コード 3 の意味を「GPT 側が未導入、無効化、または未設定である」に広げる。
+未設定とは、GPT 側定義の `codex_model` が無いか空であることを指す。
+`codex_model` の未設定は区分ごとに GPT 経路の有無を切り替える手段であり、`codex_enabled`(3 定義をまとめて止める切替)とは役割が異なる。
+`impl-hard` は出荷時のフロントマターに `codex_model` を書いていないため、この経路で既定では Claude 側にフォールバックする。
+`impl-hard`、`impl-light`、`impl-standard` は既存の手順どおり Claude 側で実装し、報告の冒頭を「GPT 側が未導入、無効化、または未設定のため Claude 側で実装した」に直す。
+設定コンソールのトグルは、`impl-hard`、`impl-light`、`impl-standard` の GPT 側定義に同じ値を書く。
 
 `codex_enabled` の値は `true` と `false` だけを受け付ける。
 それ以外の値はスクリプトが終了コード 2(定義の不備)で止める。
@@ -74,13 +77,13 @@ GPT 側定義を別名に退避すれば疑似的に無効化できるが、設�
 
 `codex_home` は、`%USERPROFILE%` 直下に実在する `.codex` で始まるディレクトリから選ぶ。
 値は `~/.codex-subagent` の形で扱い、任意のパスは入力させない。
-設定コンソールの役割はサブエージェント(`impl-light` と `impl-standard`)の設定を切り替えることであり、どのホームをどの用途に割り当てるかは縛らない。
+設定コンソールの役割はサブエージェント(`impl-hard`、`impl-light`、`impl-standard`)の設定を切り替えることであり、どのホームをどの用途に割り当てるかは縛らない。
 用途の割り当ては [CLAUDE.md](../CLAUDE.md) の「用途固定の原則」が定める。
 
-選んだ値は、`codex_enabled` と同じく `impl-light` と `impl-standard` の両方へ書く。
-2 定義を 1 つの設定として扱うためである。
-2 定義の値が食い違っているときは `impl-light` の値を選択中として表示し、食い違いを画面に示す。
-保存すると選択中の値で両方が揃う。
+選んだ値は、`codex_enabled` と同じく `impl-hard`、`impl-light`、`impl-standard` の 3 つへ書く。
+3 定義を 1 つの設定として扱うためである。
+3 定義の値が食い違っているときは `impl-light` の値を選択中として表示し、食い違いを画面に示す。
+保存すると選択中の値で 3 つが揃う。
 
 現在の値が一覧に無い場合(ディレクトリが存在しない、`$USERPROFILE` 形式など `~/` 以外の書き方、未設定)は、その値に注記を添えて選択肢の先頭に足し、選択状態にする。
 選び直さずに保存した場合、その値は書き換えない。
@@ -97,10 +100,10 @@ GPT 側定義を別名に退避すれば疑似的に無効化できるが、設�
 ┌ claude-codex-bridge 設定コンソール ───────────────────────────────────────┐
 │ 対象: C:\Users\<user>\.claude                                    [再読込]  │
 │                                                                           │
-│ [x] GPT 系サブエージェント経路を有効にする (impl-light / impl-standard)   │
+│ [x] GPT 系サブエージェント経路を有効にする (impl-hard / impl-standard / impl-light) │
 │                                                                           │
 │ 区分      Claude モデル        effort     GPT モデル        effort        │
-│ hard      [claude-opus-5    v] [high   v]  (Codex を使わない)             │
+│ hard      [claude-opus-5    v] [high   v]  [(未設定)      v]              │
 │ standard  [claude-opus-5    v] [medium v]  [gpt-5.6-luna  v] [max    v]   │
 │ light     [claude-sonnet-5  v] [medium v]  [gpt-5.6-luna  v] [xhigh  v]   │
 │                                                                           │
@@ -113,10 +116,10 @@ GPT 側定義を別名に退避すれば疑似的に無効化できるが、設�
 ```
 
 - **対象**：`%USERPROFILE%\.claude` を固定で表示する。定義ファイルが 1 つでも無ければ、無いファイル名と docs/setup.md に配置手順があることを示して保存ボタンを無効にする。
-- **トグル**：チェックを外すと GPT モデルと effort の列を無効表示(灰色)にする。値は保持し、再びチェックを入れると元に戻る。
-- **プルダウン**：モデルと effort は入力可のコンボボックス(`DropDownStyle = DropDown`)にする。選択肢に無いモデル名を将来使えるようにするためである。認証ホームだけは選ぶだけにする(「認証ホームの切り替え」を参照)。
+- **トグル**：チェックを外すと GPT モデルと effort の列を無効表示(灰色)にする。hard を含む 3 行すべてが対象である。値は保持し、再びチェックを入れると元に戻る。
+- **プルダウン**：モデルと effort は入力可のコンボボックス(`DropDownStyle = DropDown`)にする。選択肢に無いモデル名を将来使えるようにするためである。GPT モデルの選択肢には、`choices.json` や `codex debug models` の内容によらず先頭に固定の「(未設定)」を加える。選ぶとその区分は `codex_model` を空にし、その行の GPT effort を無効にする。認証ホームだけは選ぶだけにする(「認証ホームの切り替え」を参照)。
 - **状態行**：`impl-light` の GPT 側定義から `codex_home` と `codex_sandbox` を読む。`codex_home` は選べるコンボボックス(`DropDownStyle = DropDownList`)にし、`codex_sandbox` は文字列で表示する。`codex --version` と `codex debug models` は、選択中の認証ホームを `CODEX_HOME` に渡して実行する。ホームを切り替えると引き直し、引いた結果はホームごとに持っておく。取得の間は「確認中...」と「取得中...」を表示し、結果が返った時点でそのホームがまだ選ばれているときだけ画面へ反映する。`codex` が無ければ「見つからない」と表示する。`GPT モデル一覧` は、GPT 側のモデルと effort の選択肢が `codex debug models` の目録と既定値のどちらから来ているかを表示する。ログイン状態(`codex login status`)は初版では表示しない。
-- **保存**：5 ファイルが揃っていて、未保存の変更か修復待ちがあるときだけボタンを押せる。修復待ちとは、`codex_enabled` の不正値と、選択中の値で揃えられる `codex_home` の食い違いである。検証に通れば 5 ファイル(Claude 側 3 つ、GPT 側 2 つ)を書き換え、値が変わっていないファイルには触れない。状態行は「未保存の変更があります」「変更はありません」「保存しました。書き換えたファイル: ...」「保存しました。変更はありません」のいずれかを常に示し、検証エラーと保存失敗は赤色で示す。照合に失敗した場合は保存せず、入力を保持する再読込を促すダイアログを出す。
+- **保存**：6 ファイルが揃っていて、未保存の変更か修復待ちがあるときだけボタンを押せる。修復待ちとは、`codex_enabled` の不正値と、選択中の値で揃えられる `codex_home` の食い違いである。検証に通れば 6 ファイル(Claude 側 3 つ、GPT 側 3 つ)を書き換え、値が変わっていないファイルには触れない。状態行は「未保存の変更があります」「変更はありません」「保存しました。書き換えたファイル: ...」「保存しました。変更はありません」のいずれかを常に示し、検証エラーと保存失敗は赤色で示す。照合に失敗した場合は保存せず、入力を保持する再読込を促すダイアログを出す。
 - **再読込**：ファイルから読み直す。未保存の変更があるときは変更項目を列挙し、「はい」で編集した項目だけ入力中の値を残して読み直し(外部でも変わっていた項目は入力中の値を優先して知らせる)、「いいえ」で入力を捨てて読み直し、「キャンセル」で何もしない。既定ボタンは「キャンセル」とする。未保存の変更がないときは確認ダイアログを出さずに読み直す。
 - **閉じる**：未保存の変更があるときは変更項目を列挙した確認ダイアログを出し、保存して閉じるか、変更を破棄して閉じるか、キャンセルするかを選ぶ。
 
@@ -173,6 +176,7 @@ Claude 側のモデルには相当する取得手段が無い。Claude Code に�
 - 値に含まれる `\` は `\\` に、`"` は `\"` にエスケープする。`fm_get` は引用符を外すだけでエスケープを戻さないため、この 2 文字を含む値を書くとスクリプトと読みがずれる。設定コンソールは値に使える文字を英数字と `.`、`_`、`-`、`/` に限っており、この 2 文字は入力できない。
 - 読み込んだ値と書き込む値が等しい行には書かない。等しさは引用符を外した後の値で判定する。そのため、値を変えていない行は引用符の付かない元の形のまま残る。
 - キーがフロントマターに無ければ、閉じの `---` の直前に `<キー>: <値>` の行を追加する。`codex_enabled` は既存の定義に無いため、この経路で追加される。
+- `codex_model` を「(未設定)」にして保存するとき、キーが元から無い定義にはキーを追加しない。キーが元からある定義には `codex_model: ""` を書く。既存の定義ファイルを不必要に書き換えないためである。
 - 本文(閉じの `---` より後ろ)には触れない。
 - 改行コード(LF または CRLF)と BOM の有無は、読み込んだファイルのものを保つ。
 - 書き込みは同じフォルダの一時ファイルに出してから `File.Replace` または移動で置き換える。途中で失敗しても元のファイルが壊れないようにするためである。
@@ -185,10 +189,10 @@ Claude 側のモデルには相当する取得手段が無い。Claude Code に�
 次のいずれかに当たる場合は保存せず、理由をダイアログで示す。
 
 - Claude 側の `model` または `effort` が空である。
-- GPT 側の `codex_model` が空である(トグルが有効のときのみ検査する)。
 - GPT 側の `codex_reasoning_effort` が `low`、`medium`、`high`、`xhigh`、`max`、`ultra` のいずれでもない。
 - `model`、`effort`、`codex_model` に、英数字と `.`、`_`、`-`、`/` 以外の文字がある。
 
+GPT 側の `codex_model` は、空でもエラーにしない。空はその区分で GPT 側を使わない設定として扱われ、トグルの有効・無効にかかわらず検査しない。
 値は二重引用符で囲んで書くため、`true` や `123` のような YAML の予約語と数値もそのまま保存できる。
 使える文字を絞るのは、`fm_get` がエスケープを戻さないためである。
 
@@ -197,8 +201,8 @@ Claude 側のモデルには相当する取得手段が無い。Claude Code に�
 ただし、書き込む場合は保存の手前で展開先のディレクトリがまだ実在するかを見る。
 選択肢は読み込み時に列挙したものであり、その後に消えたホームを書くと、次のサブエージェント起動が認証ホーム不足で止まるためである。
 
-入力を保持する再読込では、`codex_home` の外部変更を `impl-light` と `impl-standard` の定義ごとに見る。
-画面には `impl-light` の値を代表として出すが、保存では選択値を両定義へ書くため、`impl-standard` 側だけの外部変更を知らせずに上書きしないようにする。
+入力を保持する再読込では、`codex_home` の外部変更を `impl-hard`、`impl-light`、`impl-standard` の定義ごとに見る。
+画面には `impl-light` の値を代表として出すが、保存では選択値を 3 定義へ書くため、`impl-hard` や `impl-standard` 側だけの外部変更を知らせずに上書きしないようにする。
 
 Claude 側の `effort` は Claude Code が解釈する値であり、設定コンソールは空でないことと使える文字だけを検査する。
 モデルごとの対応表は選択肢を絞る補助であり、検査には使わない。対応表に無いモデルや、利用者が手で入れた値を拒まないためである。
@@ -238,6 +242,11 @@ esac
 `.claude/gpt-agents/impl-light.md` と `impl-standard.md` には `codex_enabled` を書かない。
 省略時が `true` であり、書かなくても現在の挙動が保たれるためである。
 
+`codex_model` が無いか空の定義も、同じ `die_missing` の経路で終了コード 3 にする。
+`codex_enabled` の判定より後、`codex_home` の検証より後に置く。
+`impl-hard` の出荷時定義は `codex_model` を書かず、設定コンソールの「(未設定)」もこの状態を書くため、この経路が既定の Claude 側フォールバックになる。
+設定コンソールは `codex_model` が空でも検証エラーにしないので、トグルの有効無効によらずこの経路で Claude 側へ渡せる。
+
 ## リポジトリ上の配置
 
 ```text
@@ -250,7 +259,7 @@ gui/
 │   ├─ app.manifest                  高 DPI 対応と対応 Windows の宣言
 │   ├─ Program.cs                    エントリポイント
 │   ├─ MainForm.cs                   画面の組み立てとイベント
-│   ├─ ConsoleSettings.cs            5 定義の読み込み、検証、保存
+│   ├─ ConsoleSettings.cs            6 ファイルの読み込み、検証、保存
 │   ├─ FrontMatterFile.cs            フロントマターの読み書き
 │   ├─ FrontMatterFileChangedException.cs  読み込み後の外部変更を表す例外
 │   ├─ CodexModelCatalog.cs          codex debug models の目録
@@ -309,9 +318,15 @@ bash tools/codex-agent.sh impl-light --effort low <<< "Reply with exactly: PONG-
 - **期待する結果**：「画面」の節のとおりに動く exe が `dotnet publish` で得られる。実際のユーザ定義側の 5 ファイルに対して、トグルの切り替えとモデル、effort の変更が保存され、再読込で読み戻せる。
 - **検証方法**：`dotnet build` と `dotnet publish` が成功する。発行した exe を起動し、値を変えて保存した後、対象ファイルの差分を `git diff --no-index` または目視で確認する。確認後は元の値に戻す。
 
+### 追記：`impl-hard` の GPT 側定義への対応
+
+段階 1〜3 の完了後、`impl-hard` にも GPT 側定義(`.claude/gpt-agents/impl-hard.md`)を追加し、対象ファイルを 6 ファイル、GPT 側の区分を 3 つに広げた。
+`impl-hard` の GPT モデルは既定で「(未設定)」であり、この状態では `codex_model` を書かず Claude 側だけで実装する。
+この節より前の各節は、この対応後の仕様を記載している。
+
 ## 既知の制約
 
 - 設定コンソールは Claude Code の起動中のセッションには影響しない。反映には再起動が要る。
 - 保存時の外部変更の検出には、ごく短い競合の余地が残る。照合を終えてから `File.Replace` で置き換えるまでの間に別のプロセスがそのファイルを保存すると、その変更を検出できない。照合から置換までを排他制御で囲むと、一時ファイルを経由した原子的な置き換えと両立しない。単一の利用者が 5 つのファイルを編集するこの用途では、この競合を許容する。
 - ユーザ定義側だけを対象にするため、利用先プロジェクトの `.claude/` に同名の定義があると、そちらが優先されて設定コンソールの変更が効かない。優先順位は [gpt-agents.md](gpt-agents.md) の「定義の探索」を参照。
-- `codex_enabled: false` は `impl-light` と `impl-standard` を Claude 側の実装に切り替えるだけであり、`codex-review` と `codex-subagent` には影響しない。これらは明示的に Codex へ依頼する定義であり、Claude 側が代行すると依頼の意味が変わるためである。
+- `codex_enabled: false` は `impl-hard`、`impl-light`、`impl-standard` を Claude 側の実装に切り替えるだけであり、`codex-review` と `codex-subagent` には影響しない。これらは明示的に Codex へ依頼する定義であり、Claude 側が代行すると依頼の意味が変わるためである。

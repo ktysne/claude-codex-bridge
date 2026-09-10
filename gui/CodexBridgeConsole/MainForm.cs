@@ -20,6 +20,12 @@ namespace CodexBridgeConsole
 
         private const float BaseFontSize = 10F;
 
+        // GPT モデルが未設定であることを表す選択肢の表示名。値としては空文字を意味する。
+        // モデル名に使える文字は英数字と . _ - / だけである(ConsoleSettings が保存時に検証する)ため、
+        // 括弧を含むこの表示名が実在のモデル名と衝突することはない。この不変条件があるので、
+        // 表示名と値の変換を文字列の一致だけで行える。
+        private const string UnsetGptModelText = "(未設定)";
+
         // agent-limit-checker の画面 (renderer/style.css) と同じ優先順で選ぶ。
         // 同じ利用者が並べて使う道具であり、見た目を揃える。
         // 先頭の Segoe UI は日本語の字を持たないが、日本語の部分は Windows の
@@ -44,6 +50,8 @@ namespace CodexBridgeConsole
         private CheckBox _codexEnabledCheckBox;
         private ComboBox _hardModelComboBox;
         private ComboBox _hardEffortComboBox;
+        private ComboBox _hardGptModelComboBox;
+        private ComboBox _hardGptEffortComboBox;
         private ComboBox _standardModelComboBox;
         private ComboBox _standardEffortComboBox;
         private ComboBox _standardGptModelComboBox;
@@ -135,7 +143,7 @@ namespace CodexBridgeConsole
 
             _codexEnabledCheckBox = new CheckBox
             {
-                Text = "GPT 系サブエージェント経路を有効にする (impl-light / impl-standard)",
+                Text = "GPT 系サブエージェント経路を有効にする (impl-hard / impl-standard / impl-light)",
                 AutoSize = true,
                 Margin = new Padding(3, 6, 3, 6)
             };
@@ -262,10 +270,13 @@ namespace CodexBridgeConsole
                 _settings.ImplLight.ClaudeEffort);
             int gptModelWidth = ComboBoxWidth(
                 _choices.GptModels,
+                UnsetGptModelText,
+                _settings.ImplHard.CodexModel,
                 _settings.ImplStandard.CodexModel,
                 _settings.ImplLight.CodexModel);
             int gptEffortWidth = ComboBoxWidth(
                 _choices.GptEfforts,
+                _settings.ImplHard.CodexReasoningEffort,
                 _settings.ImplStandard.CodexReasoningEffort,
                 _settings.ImplLight.CodexReasoningEffort);
 
@@ -278,11 +289,14 @@ namespace CodexBridgeConsole
             table.Controls.Add(CreateRowLabel("hard"), 0, 1);
             _hardModelComboBox = CreateComboBox(claudeModelWidth);
             _hardEffortComboBox = CreateComboBox(claudeEffortWidth);
+            _hardGptModelComboBox = CreateComboBox(gptModelWidth);
+            _hardGptEffortComboBox = CreateComboBox(gptEffortWidth);
             _hardModelComboBox.TextChanged += ClaudeModelTextChanged;
+            _hardGptModelComboBox.TextChanged += GptModelTextChanged;
             table.Controls.Add(_hardModelComboBox, 1, 1);
             table.Controls.Add(_hardEffortComboBox, 2, 1);
-            table.Controls.Add(CreateCenteredLabel("(Codex を使わない)"), 3, 1);
-            table.SetColumnSpan(table.Controls[table.Controls.Count - 1], 2);
+            table.Controls.Add(_hardGptModelComboBox, 3, 1);
+            table.Controls.Add(_hardGptEffortComboBox, 4, 1);
 
             table.Controls.Add(CreateRowLabel("standard"), 0, 2);
             _standardModelComboBox = CreateComboBox(claudeModelWidth);
@@ -604,12 +618,17 @@ namespace CodexBridgeConsole
                     _hardEffortComboBox,
                     _choices.ClaudeEffortsFor(_settings.ImplHard.ClaudeModel),
                     _settings.ImplHard.ClaudeEffort);
+                SetGptModelItems(_hardGptModelComboBox, _choices.GptModels, _settings.ImplHard.CodexModel);
+                SetComboItems(
+                    _hardGptEffortComboBox,
+                    _choices.GptEfforts,
+                    _settings.ImplHard.CodexReasoningEffort);
                 SetComboItems(_standardModelComboBox, _choices.ClaudeModels, _settings.ImplStandard.ClaudeModel);
                 SetComboItems(
                     _standardEffortComboBox,
                     _choices.ClaudeEffortsFor(_settings.ImplStandard.ClaudeModel),
                     _settings.ImplStandard.ClaudeEffort);
-                SetComboItems(_standardGptModelComboBox, _choices.GptModels, _settings.ImplStandard.CodexModel);
+                SetGptModelItems(_standardGptModelComboBox, _choices.GptModels, _settings.ImplStandard.CodexModel);
                 SetComboItems(
                     _standardGptEffortComboBox,
                     _choices.GptEfforts,
@@ -619,7 +638,7 @@ namespace CodexBridgeConsole
                     _lightEffortComboBox,
                     _choices.ClaudeEffortsFor(_settings.ImplLight.ClaudeModel),
                     _settings.ImplLight.ClaudeEffort);
-                SetComboItems(_lightGptModelComboBox, _choices.GptModels, _settings.ImplLight.CodexModel);
+                SetGptModelItems(_lightGptModelComboBox, _choices.GptModels, _settings.ImplLight.CodexModel);
                 SetComboItems(
                     _lightGptEffortComboBox,
                     _choices.GptEfforts,
@@ -684,6 +703,16 @@ namespace CodexBridgeConsole
             System.Collections.Generic.IReadOnlyList<string> choices,
             string currentValue)
         {
+            SetComboItems(comboBox, choices, currentValue, 0);
+        }
+
+        // 一覧に無い現在値は unlistedIndex の位置に足す。開いただけで別の値へ切り替わらないためである。
+        private static void SetComboItems(
+            ComboBox comboBox,
+            System.Collections.Generic.IReadOnlyList<string> choices,
+            string currentValue,
+            int unlistedIndex)
+        {
             comboBox.Items.Clear();
             for (int i = 0; i < choices.Count; i++)
             {
@@ -692,10 +721,51 @@ namespace CodexBridgeConsole
 
             if (!string.IsNullOrEmpty(currentValue) && comboBox.Items.IndexOf(currentValue) < 0)
             {
-                comboBox.Items.Insert(0, currentValue);
+                comboBox.Items.Insert(Math.Min(unlistedIndex, comboBox.Items.Count), currentValue);
             }
 
             comboBox.Text = currentValue ?? string.Empty;
+        }
+
+        // GPT モデルの選択肢は先頭を「(未設定)」で固定する。目録に切り替わっても、
+        // choices.json の既定値を使っても、GPT 側を使わない設定を選べる状態を保つためである。
+        private static void SetGptModelItems(
+            ComboBox comboBox,
+            IReadOnlyList<string> models,
+            string currentValue)
+        {
+            var items = new List<string> { UnsetGptModelText };
+            for (int i = 0; i < models.Count; i++)
+            {
+                if (!string.Equals(models[i], UnsetGptModelText, StringComparison.Ordinal))
+                {
+                    items.Add(models[i]);
+                }
+            }
+
+            // 一覧に無い現在値は「(未設定)」の次に置き、先頭の固定枠を押し出さない。
+            SetComboItems(comboBox, items, ToGptModelText(currentValue), 1);
+        }
+
+        // 定義ファイルの値から選択欄の表示名へ直す。空値と未設定は「(未設定)」である。
+        private static string ToGptModelText(string value)
+        {
+            return string.IsNullOrEmpty(value) ? UnsetGptModelText : value;
+        }
+
+        // 選択欄の表示名から定義ファイルへ書く値へ直す。「(未設定)」は空文字である。
+        // 利用者が同じ文字列を手で入力した場合も未設定として扱う。
+        private static string ToGptModelValue(string text)
+        {
+            return string.Equals(text, UnsetGptModelText, StringComparison.Ordinal)
+                ? string.Empty
+                : text;
+        }
+
+        // GPT モデルが選ばれている行かどうか。未設定の行は GPT 側を呼ばない。
+        private static bool IsGptModelSet(ComboBox modelComboBox)
+        {
+            return ToGptModelValue(modelComboBox.Text).Length > 0;
         }
 
         private void UpdateStatusDisplay()
@@ -733,16 +803,16 @@ namespace CodexBridgeConsole
             }
             else if (_settings.CodexEnabledMismatch)
             {
-                _missingFilesLabel.Text = "impl-light と impl-standard の codex_enabled が食い違っている。"
-                    + "両方が有効なときだけ有効として表示する。チェックを変えて保存すると両方に同じ値を書く。";
+                _missingFilesLabel.Text = "impl-hard、impl-standard、impl-light の codex_enabled が食い違っている。"
+                    + "3 定義すべてが有効なときだけ有効として表示する。チェックを変えて保存すると 3 定義に同じ値を書く。";
             }
             else if (_settings.CodexHomeMismatch)
             {
-                _missingFilesLabel.Text = "impl-light と impl-standard の codex_home が食い違っている。"
+                _missingFilesLabel.Text = "impl-hard、impl-standard、impl-light の codex_home が食い違っている。"
                     + "impl-light の値を選択中として表示する。"
                     + (_settings.NeedsCodexHomeAlignment
-                        ? "保存すると両方に選択中の値を書く。"
-                        : "一覧にある認証ホームを選んで保存すると両方が揃う。");
+                        ? "保存すると 3 定義に選択中の値を書く。"
+                        : "一覧にある認証ホームを選んで保存すると 3 定義が揃う。");
             }
             else
             {
@@ -791,23 +861,30 @@ namespace CodexBridgeConsole
         private void UpdateGptControlState()
         {
             bool enabled = _codexEnabledCheckBox.Checked;
+            _hardGptModelComboBox.Enabled = enabled;
             _standardGptModelComboBox.Enabled = enabled;
-            _standardGptEffortComboBox.Enabled = enabled;
             _lightGptModelComboBox.Enabled = enabled;
-            _lightGptEffortComboBox.Enabled = enabled;
+
+            // モデルが未設定の行は GPT 側を呼ばないため effort を使わない。値は保持したまま操作だけを止める。
+            // codex_enabled のチェックを外したときと同じ扱いである。
+            _hardGptEffortComboBox.Enabled = enabled && IsGptModelSet(_hardGptModelComboBox);
+            _standardGptEffortComboBox.Enabled = enabled && IsGptModelSet(_standardGptModelComboBox);
+            _lightGptEffortComboBox.Enabled = enabled && IsGptModelSet(_lightGptModelComboBox);
         }
 
         private void SyncSettingsFromControls()
         {
             _settings.ImplHard.ClaudeModel = _hardModelComboBox.Text;
             _settings.ImplHard.ClaudeEffort = _hardEffortComboBox.Text;
+            _settings.ImplHard.CodexModel = ToGptModelValue(_hardGptModelComboBox.Text);
+            _settings.ImplHard.CodexReasoningEffort = _hardGptEffortComboBox.Text;
             _settings.ImplStandard.ClaudeModel = _standardModelComboBox.Text;
             _settings.ImplStandard.ClaudeEffort = _standardEffortComboBox.Text;
-            _settings.ImplStandard.CodexModel = _standardGptModelComboBox.Text;
+            _settings.ImplStandard.CodexModel = ToGptModelValue(_standardGptModelComboBox.Text);
             _settings.ImplStandard.CodexReasoningEffort = _standardGptEffortComboBox.Text;
             _settings.ImplLight.ClaudeModel = _lightModelComboBox.Text;
             _settings.ImplLight.ClaudeEffort = _lightEffortComboBox.Text;
-            _settings.ImplLight.CodexModel = _lightGptModelComboBox.Text;
+            _settings.ImplLight.CodexModel = ToGptModelValue(_lightGptModelComboBox.Text);
             _settings.ImplLight.CodexReasoningEffort = _lightGptEffortComboBox.Text;
             _settings.CodexEnabled = _codexEnabledCheckBox.Checked;
             _settings.CodexHome = SelectedCodexHome();
@@ -833,7 +910,7 @@ namespace CodexBridgeConsole
                 return;
             }
 
-            // 2 定義の値が食い違っているときは、表示上の値が変わらなくても両方へ書き戻す必要がある。
+            // 3 定義の値が食い違っているときは、表示上の値が変わらなくてもすべてへ書き戻す必要がある。
             // 利用者がトグルを操作したことを保存側へ伝える。
             _settings.CodexEnabledExplicit = true;
             ControlValueChanged(sender, e);
@@ -1139,8 +1216,10 @@ namespace CodexBridgeConsole
             _loadingControls = true;
             try
             {
-                SetComboItems(_standardGptModelComboBox, models, _standardGptModelComboBox.Text);
-                SetComboItems(_lightGptModelComboBox, models, _lightGptModelComboBox.Text);
+                SetGptModelItems(_hardGptModelComboBox, models, ToGptModelValue(_hardGptModelComboBox.Text));
+                SetGptModelItems(_standardGptModelComboBox, models, ToGptModelValue(_standardGptModelComboBox.Text));
+                SetGptModelItems(_lightGptModelComboBox, models, ToGptModelValue(_lightGptModelComboBox.Text));
+                ApplyGptEffortChoices(_hardGptModelComboBox, _hardGptEffortComboBox);
                 ApplyGptEffortChoices(_standardGptModelComboBox, _standardGptEffortComboBox);
                 ApplyGptEffortChoices(_lightGptModelComboBox, _lightGptEffortComboBox);
             }
@@ -1247,19 +1326,21 @@ namespace CodexBridgeConsole
             }
 
             var modelComboBox = (ComboBox)sender;
-            ComboBox effortComboBox = modelComboBox == _standardGptModelComboBox
-                ? _standardGptEffortComboBox
-                : _lightGptEffortComboBox;
+            ComboBox effortComboBox = GptEffortComboBoxFor(modelComboBox);
 
             // 利用者がモデルを変えたときは、そのモデルが受け付けない effort を残さない。
             // 残すと、選べるように見えて Codex 側で弾かれる組み合わせを保存できてしまう。
             // 読み込み直後は値を変えない。開いただけで定義が書き換わるのを避けるためである。
-            IReadOnlyList<string> efforts = _codexModelCatalog.EffortsFor(modelComboBox.Text);
-            string effort = effortComboBox.Text;
-            if (efforts.Count > 0 && !Contains(efforts, effort))
+            // 未設定へ変えたときは effort を触らない。GPT 側を呼ばない行の値をここで書き換える理由が無い。
+            if (IsGptModelSet(modelComboBox))
             {
-                string defaultEffort = _codexModelCatalog.DefaultEffortFor(modelComboBox.Text);
-                effortComboBox.Text = string.IsNullOrEmpty(defaultEffort) ? efforts[0] : defaultEffort;
+                IReadOnlyList<string> efforts = _codexModelCatalog.EffortsFor(modelComboBox.Text);
+                string effort = effortComboBox.Text;
+                if (efforts.Count > 0 && !Contains(efforts, effort))
+                {
+                    string defaultEffort = _codexModelCatalog.DefaultEffortFor(modelComboBox.Text);
+                    effortComboBox.Text = string.IsNullOrEmpty(defaultEffort) ? efforts[0] : defaultEffort;
+                }
             }
 
             bool loading = _loadingControls;
@@ -1275,6 +1356,18 @@ namespace CodexBridgeConsole
 
             ResizeGptComboBoxes();
             AdjustWindowSize();
+        }
+
+        private ComboBox GptEffortComboBoxFor(ComboBox modelComboBox)
+        {
+            if (modelComboBox == _hardGptModelComboBox)
+            {
+                return _hardGptEffortComboBox;
+            }
+
+            return modelComboBox == _standardGptModelComboBox
+                ? _standardGptEffortComboBox
+                : _lightGptEffortComboBox;
         }
 
         private static bool Contains(IReadOnlyList<string> values, string value)
@@ -1298,19 +1391,25 @@ namespace CodexBridgeConsole
                 : _choices.GptModels;
             int modelWidth = ComboBoxWidth(
                 models,
+                UnsetGptModelText,
+                _hardGptModelComboBox.Text,
                 _standardGptModelComboBox.Text,
                 _lightGptModelComboBox.Text);
 
             var efforts = new List<string>();
+            CollectItems(efforts, _hardGptEffortComboBox);
             CollectItems(efforts, _standardGptEffortComboBox);
             CollectItems(efforts, _lightGptEffortComboBox);
             int effortWidth = ComboBoxWidth(
                 efforts,
+                _hardGptEffortComboBox.Text,
                 _standardGptEffortComboBox.Text,
                 _lightGptEffortComboBox.Text);
 
+            SetComboBoxWidth(_hardGptModelComboBox, modelWidth);
             SetComboBoxWidth(_standardGptModelComboBox, modelWidth);
             SetComboBoxWidth(_lightGptModelComboBox, modelWidth);
+            SetComboBoxWidth(_hardGptEffortComboBox, effortWidth);
             SetComboBoxWidth(_standardGptEffortComboBox, effortWidth);
             SetComboBoxWidth(_lightGptEffortComboBox, effortWidth);
         }
