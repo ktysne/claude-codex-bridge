@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -377,6 +377,13 @@ namespace CodexBridgeConsole
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Anchor = AnchorStyles.Left,
                 IntegralHeight = false,
+
+                // 行の高さを実際の高さから決めさせる。表形式の入れ物は、AutoSize でない子については
+                // コードから指定した大きさで行の高さを決める。選択専用(DropDownList)のコンボボックスは
+                // ハンドル作成後にネイティブ側で書体に合わせて高さが変わり、それは指定した大きさに
+                // 反映されないため、画面の拡大率によっては行が低いまま残り、下端が次の行に隠れる。
+                // 幅は MinimumSize で保つ(SetComboBoxWidth を参照)。
+                AutoSize = true,
                 Margin = new Padding(3, 3, 12, 3)
             };
             SetComboBoxWidth(_codexHomeComboBox, CodexHomeComboBoxWidth());
