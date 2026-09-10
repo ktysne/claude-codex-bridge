@@ -7,11 +7,14 @@ Codex CLI を Claude Code のサブエージェントとして呼び出すため
 
 - **パターン 1**：実装のサブエージェント委譲だけを使い、1 アカウントで足りる場合に選ぶ。
 - **パターン 2**：実装の委譲に加えてレビューや調査も Codex に依頼し、1 アカウントで運用する場合に選ぶ。
-- **パターン 3**：レビューを実装用から分けたい場合に、実装用とレビュー用の認証を分け、役割ごとにアカウントを固定する。メインで使うアカウントを既定ホーム `~/.codex` に置き、もう一方に役割名を付けたホームを与える。
+- **パターン 3**：サブエージェントへの委譲を通常利用やレビューから分けたい場合に、認証を分けて役割ごとにアカウントを固定する。通常利用とレビューに使うアカウントを既定ホーム `~/.codex` に置き、サブエージェント専用のアカウントに `~/.codex-subagent` を与える。
+
+ここでいう**通常利用**は Codex CLI の対話、VS Code や Chrome の Codex 拡張、Claude Code の Codex プラグインを指し、**サブエージェント**は GPT 側へ実装を委譲する `impl-light`、`impl-standard`、`codex-subagent` の 3 定義を指す。
+`codex-review` も Claude Code からはサブエージェントとして起動されるが、役割はレビューなので既定ホーム側のアカウントを使う。
 
 レートリミットを分散することだけを目的にアカウントを切り替える構成は採用しない。
 アカウント A が上限に達したらアカウント B へ回す、というローテーションは OpenAI の利用規約に抵触する恐れがあるためである。
-パターン 3 では、実装用とレビュー用を役割として分け、利用上限に応じて処理を別アカウントへ回さない。
+パターン 3 では、レビューとサブエージェントへの委譲を役割として分け、利用上限に応じて処理を別アカウントへ回さない。
 
 ## 共通手順
 
@@ -193,13 +196,11 @@ Claude Code の `Agent` ツールからも、4 つの `subagent_type` をそれ�
 
 ### 用途別にログインする
 
-メインで使うアカウントは既定ホーム `%USERPROFILE%\.codex` に置く。
+通常利用とレビューに使うアカウントは既定ホーム `%USERPROFILE%\.codex` に置く。
 Codex CLI の対話、VS Code や Chrome の Codex 拡張、Claude Code の Codex プラグインは既定ホームしか見ないため、そこを空けると未ログイン扱いになり、`~/.codex` が自動で再生成されるためである。
-もう一方のアカウントには、役割名を付けたホームを与える。
-メインをレビュー用に使うなら `%USERPROFILE%\.codex-subagent`(実装補助用)を、メインを実装補助用に使うなら `%USERPROFILE%\.codex-review`(レビュー用)を作る。
+サブエージェント専用のアカウントには `%USERPROFILE%\.codex-subagent` を与える。
 
-以下はメインをレビュー用に使う場合の手順である。
-既定ホームにメインのアカウントでログイン済みなら、もう一方のホームだけログインすればよい。
+既定ホームにログイン済みなら、`%USERPROFILE%\.codex-subagent` だけログインすればよい。
 
 ```powershell
 $env:CODEX_HOME="$env:USERPROFILE\.codex-subagent"
@@ -237,14 +238,14 @@ codex login status
 - `.claude/gpt-agents/codex-review.md`
 - `.claude/gpt-agents/codex-subagent.md`
 
-GPT 側定義の `codex_home` を、どちらの役割をメインにするかに応じて次の表のとおりに書き分ける。
+GPT 側定義の `codex_home` は次の表のとおりに書く。リポジトリの定義の既定値と同じである。
 
-| GPT 側定義 | メインがレビュー用(リポジトリ既定) | メインが実装補助用 |
-|---|---|---|
-| `.claude/gpt-agents/impl-light.md` | `~/.codex-subagent` | `~/.codex` |
-| `.claude/gpt-agents/impl-standard.md` | `~/.codex-subagent` | `~/.codex` |
-| `.claude/gpt-agents/codex-review.md` | `~/.codex` | `~/.codex-review` |
-| `.claude/gpt-agents/codex-subagent.md` | `~/.codex-subagent` | `~/.codex` |
+| GPT 側定義 | `codex_home` |
+|---|---|
+| `.claude/gpt-agents/impl-light.md` | `~/.codex-subagent` |
+| `.claude/gpt-agents/impl-standard.md` | `~/.codex-subagent` |
+| `.claude/gpt-agents/codex-review.md` | `~/.codex` |
+| `.claude/gpt-agents/codex-subagent.md` | `~/.codex-subagent` |
 
 モデル、effort、サンドボックスの値は変更しない。
 `codex_home` 以外のフロントマターは、リポジトリの定義をそのまま使う。
@@ -260,15 +261,14 @@ bash ~/.claude/tools/codex-agent.sh codex-review --effort low <<< "Reply with ex
 bash ~/.claude/tools/codex-agent.sh codex-subagent --effort low <<< "Reply with exactly: PONG-SUBAGENT"
 ```
 
-メインをレビュー用に使う配置では、`codex-review` の監査行に `codex_home=.../.codex` が出て、他の 3 定義の監査行に `codex_home=.../.codex-subagent` が出ることを確認する。
-メインを実装補助用にする配置では、この対応が入れ替わる。
+`codex-review` の監査行に `codex_home=.../.codex` が出て、他の 3 定義の監査行に `codex_home=.../.codex-subagent` が出ることを確認する。
 `codex-review` では `sandbox=read-only`、`codex-subagent` では `sandbox=workspace-write` が出ることを確認する。
 4 つすべての応答の末尾に `codex-agent: result=ok` が出ればよい。
 Claude Code の `Agent` ツールからも、4 つの `subagent_type` をそれぞれ指定して確認する。
 
 ## 設定に関する注意
 
-既定ホーム以外のホーム(`~/.codex-subagent` または `~/.codex-review`)を使う定義では、既定ホーム `~/.codex` の `config.toml` は読み込まれない。
+既定ホーム以外のホーム(`~/.codex-subagent`)を使う定義では、既定ホーム `~/.codex` の `config.toml` は読み込まれない。
 モデルと effort は `.claude/gpt-agents/` 側で指定するため、read-only で動く `codex-review` のホームは設定ファイルがなくても動く。
 既定ホームの `config.toml` をそのままコピーすると、フック、MCP サーバ、通知などの設定まで持ち込まれるため避ける。
 
@@ -290,6 +290,6 @@ trust_level = "trusted"
 Claude Code の Codex プラグイン(`codex:codex-rescue` など)は、この仕組みとは別に動く。
 プラグインはセッション共有の broker 経由で `codex app-server` を起動し、broker プロセスの環境変数を起動時に固定する。
 呼び出しごとに `CODEX_HOME` を切り替える用途には向かないため、用途別アカウント運用はこのリポジトリの定義で行う。
-プラグインが使うのは既定ホームのアカウント、つまりメインのアカウントである。
+プラグインが使うのは既定ホームのアカウント、つまり通常利用とレビューに使うアカウントである。
 
 定義ファイルのモデル、effort、GPT 系サブエージェント経路の有効状態を GUI から変える場合は、共通手順 7 の設定コンソールを使う。

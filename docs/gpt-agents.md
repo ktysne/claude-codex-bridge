@@ -6,8 +6,9 @@ Claude Code のサブエージェント `impl-light`、`impl-standard`、`codex-
 ## 目的
 
 1 アカウントで運用する場合は、4 定義すべてが既定の認証ホーム(`~/.codex`)を使う。
-2 アカウントで運用する場合は、メインで使うアカウントを既定ホーム(`~/.codex`)に置き、もう一方に役割名を付けたホームを与える。
-リポジトリの定義の既定値はメインをレビュー用に使う配置であり、`codex-review` が `~/.codex` を、実装用の 3 定義が `~/.codex-subagent` を使う。
+2 アカウントで運用する場合は、通常利用とレビューに使うアカウントを既定ホーム(`~/.codex`)に置き、サブエージェント専用のアカウントに `~/.codex-subagent` を与える。
+ここでいう**通常利用**は Codex CLI の対話、VS Code や Chrome の Codex 拡張、Claude Code の Codex プラグインを指し、**サブエージェント**は GPT 側へ実装を委譲する `impl-light`、`impl-standard`、`codex-subagent` の 3 定義を指す。
+`codex-review` も Claude Code からはサブエージェントとして起動されるが、役割はレビューなので既定ホーム側に置く。
 どの定義を配置するかは、実装用の委譲だけを使うパターンと、レビュー用も使うパターンで選べる。
 
 委譲の対象は `impl-light`、`impl-standard`、`codex-review`、`codex-subagent` の 4 つである。
@@ -120,17 +121,17 @@ Codex の版によって通知の出力先が変わるためである。
 ## 認証ホームの割り当て
 
 1 アカウントで使う場合は、4 定義の `codex_home` を `~/.codex` にする。
-2 アカウントで使う場合は、メインで使うアカウントが既定ホーム(`~/.codex`)を使い、もう一方が役割名を付けたホームを使う。
-メインを既定ホームに置くのは、Codex CLI の対話、VS Code や Chrome の Codex 拡張、Claude Code の Codex プラグインが既定ホームしか見ないためである。
+2 アカウントで使う場合は、通常利用とレビューに使うアカウントが既定ホーム(`~/.codex`)を使い、サブエージェント専用のアカウントが `~/.codex-subagent` を使う。
+通常利用のアカウントを既定ホームに置くのは、Codex CLI の対話、VS Code や Chrome の Codex 拡張、Claude Code の Codex プラグインが既定ホームしか見ないためである。
 既定ホームを空けるとこれらが未ログイン扱いになり、`~/.codex` が自動で再生成される。
-どちらの役割をメインにするかで、GPT 側の定義の `codex_home` を次の表のとおりに書き分ける。
+GPT 側の定義の `codex_home` は次の表のとおりに書く。
 
-| GPT 側の定義 | メインがレビュー用(リポジトリ既定) | メインが実装補助用 |
-|---|---|---|
-| `codex-review` | `~/.codex` | `~/.codex-review` |
-| `codex-subagent` | `~/.codex-subagent` | `~/.codex` |
-| `impl-light` | `~/.codex-subagent` | `~/.codex` |
-| `impl-standard` | `~/.codex-subagent` | `~/.codex` |
+| GPT 側の定義 | `codex_home` |
+|---|---|
+| `codex-review` | `~/.codex` |
+| `codex-subagent` | `~/.codex-subagent` |
+| `impl-light` | `~/.codex-subagent` |
+| `impl-standard` | `~/.codex-subagent` |
 
 これは各定義の役割を対応するアカウントへ固定する設定である。
 利用上限に達したアカウントから別のアカウントへ処理を回す切り替えではない。
