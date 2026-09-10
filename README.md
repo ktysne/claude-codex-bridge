@@ -72,7 +72,7 @@ Codex CLI は認証情報を `$CODEX_HOME/auth.json` に保存し、他の場所
 選んだパターンに必要な Claude 側定義、GPT 側定義、`tools/codex-agent.sh` を配置する。
 利用先の `CLAUDE.md` に、難易度で `impl-hard`、`impl-standard`、`impl-light` を選ぶ役割分担の節を追加する。
 Claude Code を再起動し、配置した定義だけを `Agent` ツールの `subagent_type` に指定して呼ぶ。
-定義のモデル、effort、GPT 経路の有効状態を GUI から変えるなら、`gui\build.bat` で設定コンソールを作る([docs/gui.md](docs/gui.md))。
+定義のモデル、effort、GPT 経路の有効状態、サブエージェントの認証ホームを GUI から変えるなら、`gui\build.bat` で設定コンソールを作る([docs/gui.md](docs/gui.md))。
 
 ## 守るべき前提
 
