@@ -11,6 +11,7 @@ namespace CodexBridgeConsole.Tests
         private const string ClaudeHardPath = "agents\\impl-hard.md";
         private const string ClaudeStandardPath = "agents\\impl-standard.md";
         private const string ClaudeLightPath = "agents\\impl-light.md";
+        private const string GptHardPath = "gpt-agents\\impl-hard.md";
         private const string GptStandardPath = "gpt-agents\\impl-standard.md";
         private const string GptLightPath = "gpt-agents\\impl-light.md";
 
@@ -19,6 +20,7 @@ namespace CodexBridgeConsole.Tests
             ClaudeHardPath,
             ClaudeStandardPath,
             ClaudeLightPath,
+            GptHardPath,
             GptStandardPath,
             GptLightPath
         };
@@ -34,6 +36,10 @@ namespace CodexBridgeConsole.Tests
 
                 Assert.Equal("claude-hard-model", settings.ImplHard.ClaudeModel);
                 Assert.Equal("high", settings.ImplHard.ClaudeEffort);
+
+                // hard の GPT 側はキーを持たない。未設定として読み、effort はスクリプトと同じ既定値を補う。
+                Assert.True(string.IsNullOrEmpty(settings.ImplHard.CodexModel));
+                Assert.Equal("medium", settings.ImplHard.CodexReasoningEffort);
                 Assert.Equal("claude-standard-model", settings.ImplStandard.ClaudeModel);
                 Assert.Equal("medium", settings.ImplStandard.ClaudeEffort);
                 Assert.Equal("codex-standard-model", settings.ImplStandard.CodexModel);
@@ -77,7 +83,7 @@ namespace CodexBridgeConsole.Tests
         }
 
         [Fact]
-        public void Save_DisablingCodexAddsFalseToBothCodexDefinitions()
+        public void Save_DisablingCodexAddsFalseToAllCodexDefinitions()
         {
             using (var directory = new TemporaryDirectory())
             {
@@ -88,8 +94,10 @@ namespace CodexBridgeConsole.Tests
                 ConsoleSettingsSaveResult result = settings.Save();
 
                 Assert.True(result.Succeeded);
+                Assert.Contains(GptHardPath, result.ChangedFiles);
                 Assert.Contains(GptStandardPath, result.ChangedFiles);
                 Assert.Contains(GptLightPath, result.ChangedFiles);
+                Assert.Contains("codex_enabled: \"false\"", ReadDefinition(directory, GptHardPath));
                 Assert.Contains("codex_enabled: \"false\"", ReadDefinition(directory, GptStandardPath));
                 Assert.Contains("codex_enabled: \"false\"", ReadDefinition(directory, GptLightPath));
             }
@@ -102,21 +110,22 @@ namespace CodexBridgeConsole.Tests
             {
                 WriteDefinitions(directory);
                 var settings = CreateSettings(directory);
+                byte[] hardBefore = File.ReadAllBytes(GetPath(directory, GptHardPath));
                 byte[] standardBefore = File.ReadAllBytes(GetPath(directory, GptStandardPath));
                 byte[] lightBefore = File.ReadAllBytes(GetPath(directory, GptLightPath));
 
                 ConsoleSettingsSaveResult result = settings.Save();
 
                 Assert.True(result.Succeeded);
-                Assert.DoesNotContain(GptStandardPath, result.ChangedFiles);
-                Assert.DoesNotContain(GptLightPath, result.ChangedFiles);
+                Assert.Empty(result.ChangedFiles);
+                Assert.Equal(hardBefore, File.ReadAllBytes(GetPath(directory, GptHardPath)));
                 Assert.Equal(standardBefore, File.ReadAllBytes(GetPath(directory, GptStandardPath)));
                 Assert.Equal(lightBefore, File.ReadAllBytes(GetPath(directory, GptLightPath)));
             }
         }
 
         [Fact]
-        public void Save_EnablingCodexChangesFalseToTrueInBothCodexDefinitions()
+        public void Save_EnablingCodexChangesFalseToTrueInAllCodexDefinitions()
         {
             using (var directory = new TemporaryDirectory())
             {
@@ -127,8 +136,10 @@ namespace CodexBridgeConsole.Tests
                 ConsoleSettingsSaveResult result = settings.Save();
 
                 Assert.True(result.Succeeded);
+                Assert.Contains(GptHardPath, result.ChangedFiles);
                 Assert.Contains(GptStandardPath, result.ChangedFiles);
                 Assert.Contains(GptLightPath, result.ChangedFiles);
+                Assert.Contains("codex_enabled: \"true\"", ReadDefinition(directory, GptHardPath));
                 Assert.Contains("codex_enabled: \"true\"", ReadDefinition(directory, GptStandardPath));
                 Assert.Contains("codex_enabled: \"true\"", ReadDefinition(directory, GptLightPath));
             }
@@ -175,7 +186,6 @@ namespace CodexBridgeConsole.Tests
         [Theory]
         [InlineData("claude-model")]
         [InlineData("claude-effort")]
-        [InlineData("codex-model")]
         [InlineData("codex-reasoning-effort")]
         public void Save_ReturnsReasonForInvalidSetting(string invalidSetting)
         {
@@ -193,10 +203,6 @@ namespace CodexBridgeConsole.Tests
                     case "claude-effort":
                         settings.ImplHard.ClaudeEffort = string.Empty;
                         expectedError = ClaudeHardPath + " の effort が空である";
-                        break;
-                    case "codex-model":
-                        settings.ImplStandard.CodexModel = string.Empty;
-                        expectedError = GptStandardPath + " の codex_model が空である";
                         break;
                     case "codex-reasoning-effort":
                         settings.ImplStandard.CodexReasoningEffort = "invalid";
@@ -289,7 +295,7 @@ namespace CodexBridgeConsole.Tests
                 settings.CodexEnabledExplicit = true;
 
                 Assert.Equal(
-                    new[] { "codex_enabled: 両定義へ「有効」を書き戻す" },
+                    new[] { "codex_enabled: 3 定義へ「有効」を書き戻す" },
                     settings.DescribeChanges());
             }
         }
@@ -991,7 +997,7 @@ namespace CodexBridgeConsole.Tests
         }
 
         [Fact]
-        public void Save_WritesSelectedCodexHomeToBothDefinitionsAndKeepsInlineComment()
+        public void Save_WritesSelectedCodexHomeToAllDefinitionsAndKeepsInlineComment()
         {
             using (var directory = new TemporaryDirectory())
             {
@@ -1009,6 +1015,7 @@ namespace CodexBridgeConsole.Tests
                 ConsoleSettingsSaveResult result = settings.Save();
 
                 Assert.True(result.Succeeded);
+                Assert.Contains(GptHardPath, result.ChangedFiles);
                 Assert.Contains(GptStandardPath, result.ChangedFiles);
                 Assert.Contains(GptLightPath, result.ChangedFiles);
                 Assert.Contains(
@@ -1017,6 +1024,9 @@ namespace CodexBridgeConsole.Tests
                 Assert.Contains(
                     "codex_home: \"~/.codex-subagent\"",
                     ReadDefinition(directory, GptStandardPath));
+                Assert.Contains(
+                    "codex_home: \"~/.codex-subagent\"",
+                    ReadDefinition(directory, GptHardPath));
 
                 // codex_home を持たない定義は書き換えない。
                 Assert.DoesNotContain(ClaudeHardPath, result.ChangedFiles);
@@ -1059,6 +1069,9 @@ namespace CodexBridgeConsole.Tests
             using (var directory = new TemporaryDirectory())
             {
                 WriteDefinitions(directory);
+                WriteDefinition(directory, GptHardPath, WithCodexHome(
+                    GptHardDefinition(null),
+                    "$USERPROFILE/.codex-missing"));
                 WriteDefinition(directory, GptStandardPath, WithCodexHome(
                     GptDefinition("codex-standard-model", "xhigh", null),
                     "$USERPROFILE/.codex-missing"));
@@ -1181,6 +1194,137 @@ namespace CodexBridgeConsole.Tests
             }
         }
 
+        [Fact]
+        public void Load_ReportsMissingGptHardDefinitionAndDisablesSaving()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                File.Delete(GetPath(directory, GptHardPath));
+
+                var settings = CreateSettings(directory);
+
+                Assert.Equal(new[] { GptHardPath }, settings.MissingFiles);
+                Assert.False(settings.CanSave);
+            }
+        }
+
+        [Fact]
+        public void Save_DoesNotAddCodexModelKeyToHardDefinitionThatLacksIt()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                byte[] hardBefore = File.ReadAllBytes(GetPath(directory, GptHardPath));
+                var settings = CreateSettings(directory);
+
+                Assert.True(string.IsNullOrEmpty(settings.ImplHard.CodexModel));
+
+                // 画面は未設定を空文字として書き戻す。キーの無い定義にキーを足してはならない。
+                settings.ImplHard.CodexModel = string.Empty;
+                Assert.False(settings.HasChanges);
+
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.True(result.Succeeded);
+                Assert.DoesNotContain(GptHardPath, result.ChangedFiles);
+                Assert.Equal(hardBefore, File.ReadAllBytes(GetPath(directory, GptHardPath)));
+                Assert.DoesNotContain("codex_model", ReadDefinition(directory, GptHardPath));
+            }
+        }
+
+        [Fact]
+        public void Save_WritesEmptyCodexModelWhenTheDefinitionHasTheKey()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                var settings = CreateSettings(directory);
+
+                settings.ImplStandard.CodexModel = string.Empty;
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.True(result.Succeeded);
+                Assert.Contains(GptStandardPath, result.ChangedFiles);
+
+                // tools/codex-agent.sh は値が空の codex_model を「GPT 側を使わない」として読む。
+                Assert.Contains("codex_model: \"\"", ReadDefinition(directory, GptStandardPath));
+
+                settings.Reload();
+                Assert.True(string.IsNullOrEmpty(settings.ImplStandard.CodexModel));
+            }
+        }
+
+        [Fact]
+        public void Validate_AcceptsEmptyCodexModelWhileCodexIsEnabled()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                var settings = CreateSettings(directory);
+
+                // 区分ごとに GPT 経路の有無を切り替える手段であり、経路そのものの有効無効とは別である。
+                Assert.True(settings.CodexEnabled);
+                settings.ImplStandard.CodexModel = string.Empty;
+
+                Assert.Empty(settings.Validate());
+            }
+        }
+
+        [Fact]
+        public void Save_AlignsCodexEnabledAcrossTheThreeGptDefinitions()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                WriteDefinition(directory, GptHardPath, GptHardDefinition(false));
+                var settings = CreateSettings(directory);
+
+                Assert.True(settings.CodexEnabledMismatch);
+                Assert.False(settings.CodexEnabled);
+
+                // 表示上の値が変わらない操作でも、明示すれば 3 定義へ書き戻す。
+                settings.CodexEnabledExplicit = true;
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.True(result.Succeeded);
+                Assert.Contains(GptStandardPath, result.ChangedFiles);
+                Assert.Contains(GptLightPath, result.ChangedFiles);
+                Assert.Contains("codex_enabled: false\n", ReadDefinition(directory, GptHardPath));
+                Assert.Contains("codex_enabled: \"false\"", ReadDefinition(directory, GptStandardPath));
+                Assert.Contains("codex_enabled: \"false\"", ReadDefinition(directory, GptLightPath));
+                Assert.False(settings.CodexEnabledMismatch);
+                Assert.False(settings.NeedsSave);
+            }
+        }
+
+        [Fact]
+        public void Save_AlignsCodexHomeAcrossTheThreeGptDefinitions()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                WriteDefinition(directory, GptHardPath, WithCodexHome(
+                    GptHardDefinition(null),
+                    "~/.codex-subagent"));
+                var settings = CreateSettings(directory);
+
+                // 表示する値は impl-light の側とする。
+                Assert.Equal("~/.codex", settings.CodexHome);
+                Assert.True(settings.CodexHomeMismatch);
+                Assert.True(settings.NeedsCodexHomeAlignment);
+                Assert.True(settings.NeedsSave);
+
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.True(result.Succeeded);
+                Assert.Equal(new[] { GptHardPath }, result.ChangedFiles);
+                Assert.Contains("codex_home: \"~/.codex\"", ReadDefinition(directory, GptHardPath));
+                Assert.False(settings.CodexHomeMismatch);
+                Assert.False(settings.NeedsSave);
+            }
+        }
+
         private static string WithCodexHome(string definition, string codexHome)
         {
             return definition.Replace("codex_home: ~/.codex\n", "codex_home: " + codexHome + "\n");
@@ -1242,12 +1386,35 @@ namespace CodexBridgeConsole.Tests
                 ClaudeDefinition("impl-light", "claude-light-model", "low"));
             WriteDefinition(
                 directory,
+                GptHardPath,
+                GptHardDefinition(codexEnabled));
+            WriteDefinition(
+                directory,
                 GptStandardPath,
                 GptDefinition("codex-standard-model", "xhigh", codexEnabled));
             WriteDefinition(
                 directory,
                 GptLightPath,
                 GptDefinition("codex-light-model", "high", codexEnabled));
+        }
+
+        // 実際の .claude/gpt-agents/impl-hard.md と同じく codex_model と codex_reasoning_effort を持たない。
+        // キーが無い状態が「GPT 側を使わない」の既定である。
+        private static string GptHardDefinition(bool? codexEnabled)
+        {
+            return "---\n"
+                + "codex_home: ~/.codex\n"
+                + "codex_sandbox: workspace-write\n"
+                + FormatCodexEnabledLine(codexEnabled)
+                + "---\n"
+                + "GPT 経路の本文を1行置く。\n";
+        }
+
+        private static string FormatCodexEnabledLine(bool? codexEnabled)
+        {
+            return codexEnabled.HasValue
+                ? "codex_enabled: " + (codexEnabled.Value ? "true" : "false") + "\n"
+                : string.Empty;
         }
 
         private static string ClaudeDefinition(string name, string model, string effort)
@@ -1289,15 +1456,12 @@ namespace CodexBridgeConsole.Tests
 
         private static string GptDefinition(string model, string reasoningEffort, bool? codexEnabled)
         {
-            string enabled = codexEnabled.HasValue
-                ? "codex_enabled: " + (codexEnabled.Value ? "true" : "false") + "\n"
-                : string.Empty;
             return "---\n"
                 + "codex_home: ~/.codex\n"
                 + "codex_model: " + model + "\n"
                 + "codex_reasoning_effort: " + reasoningEffort + "\n"
                 + "codex_sandbox: workspace-write\n"
-                + enabled
+                + FormatCodexEnabledLine(codexEnabled)
                 + "---\n"
                 + "GPT 経路の本文を1行置く。\n";
         }
