@@ -5,7 +5,7 @@
 ## このプロジェクトが扱うもの
 
 Claude Code から Codex CLI を、用途別のサブエージェントとして呼び出す仕組みを整備する。
-レビュー用と実装補助用で ChatGPT アカウントを分け、`CODEX_HOME` を分離して認証を切り替える。
+通常利用とレビュー用、サブエージェント用で ChatGPT アカウントを分け、`CODEX_HOME` を分離して認証を切り替える。
 全体像は [README.md](README.md)、サブエージェントの構成と設計上の制約は [docs/gpt-agents.md](docs/gpt-agents.md) を参照。
 定義ファイルを GUI から書き換える設定コンソール(`gui/`、Windows Forms、.NET Framework 4.8)も含む。使い方は [docs/gui.md](docs/gui.md)、設計は [docs/gui-console-design.md](docs/gui-console-design.md) を参照。
 
@@ -26,9 +26,10 @@ Claude Code から Codex CLI を、用途別のサブエージェントとして
 
 ## 守るべき設計原則
 
-- 用途固定の原則: アカウント A はレビュー専用、アカウント B は実装補助専用とする。利用上限の回避を目的にアカウントを切り替える構成(枠が尽きたら別アカウントへ回す、など)は導入しない。OpenAI の利用規約が禁じる rate limit の回避と解釈される余地があるためである。現在は 1 アカウント段階であり、既定ホーム(`~/.codex`)を対話と 4 定義(`impl-light`、`impl-standard`、`codex-review`、`codex-subagent`)のすべてに使う。用途別アカウントに分けた時点で、`codex-review` は `~/.codex-review` へ、他の 3 定義は `~/.codex-subagent` へ移す。
+- 用途固定の原則: アカウント A は通常利用とレビュー、アカウント B はサブエージェント専用とする。利用上限の回避を目的にアカウントを切り替える構成(枠が尽きたら別アカウントへ回す、など)は導入しない。OpenAI の利用規約が禁じる rate limit の回避と解釈される余地があるためである。ここでいう**通常利用**とは、Codex CLI の対話、VS Code や Chrome の Codex 拡張、Claude Code の Codex プラグイン(`codex:codex-rescue` など)を指す。**サブエージェント**とは、GPT 側へ実装を委譲する 3 定義(`impl-light`、`impl-standard`、`codex-subagent`)を指す。`codex-review` も Claude Code からはサブエージェントとして起動されるが、役割はレビューなのでアカウント A に置く。この原則が固定するのは 4 定義とアカウントの対応であり、既定ホーム側での通常利用は対象外である。
+- 認証ホームの配置: アカウント A を既定ホーム `~/.codex` に置き、アカウント B に `~/.codex-subagent` を与える。`codex-review` は `~/.codex` を、他の 3 定義(`impl-light`、`impl-standard`、`codex-subagent`)は `~/.codex-subagent` を使う。アカウント A を既定ホームに置くのは、通常利用の入口が既定ホームしか見ないためである。既定ホームを空けると通常利用が未ログイン扱いになり、`~/.codex` が自動で再生成される。
 - 認証の分離: `codex` を呼ぶときは必ず `CODEX_HOME` を明示する。既定の `~/.codex` に暗黙に依存する呼び出しを書かない。
-- 権限の固定: レビュー用は `--sandbox read-only` を外さない。実装補助用でも `--dangerously-bypass-approvals-and-sandbox` は使わない。設定コンソールからも `codex_sandbox` と `codex_home` は編集させない。
+- 権限の固定: レビュー用は `--sandbox read-only` を外さない。実装補助用でも `--dangerously-bypass-approvals-and-sandbox` は使わない。設定コンソールからも `codex_sandbox` は編集させない。`codex_home` は設定コンソールから変えられるが、`%USERPROFILE%` 直下に実在する `.codex*` ディレクトリから選ぶだけで、任意のパスは入力させない。
 - 認証情報の非コミット: `auth.json`、トークン、アカウント ID をリポジトリに入れない。ドキュメントの例には実値を書かない。
 - 作業ツリーの分離: 書き込み可能な Codex 呼び出しは、Claude Code と別の worktree で行う。例外として、`impl-light` と `impl-standard` が委譲する GPT 側の実行は、メインセッションが同じファイルを同時に編集しない前提で同一 worktree に書く。
 
@@ -40,7 +41,8 @@ Claude Code から Codex CLI を、用途別のサブエージェントとして
 
 ```bash
 codex --version
-CODEX_HOME="$USERPROFILE/.codex" codex login status  # 現段階は 4 定義とも既定ホームを使う
+CODEX_HOME="$USERPROFILE/.codex" codex login status  # 通常利用とレビュー(codex-review)
+CODEX_HOME="$USERPROFILE/.codex-subagent" codex login status  # サブエージェント(impl-light、impl-standard、codex-subagent)
 bash tools/codex-agent.sh impl-light --effort low <<< "Reply with exactly: PONG-LUNA"  # 実モデルを起動し利用枠を消費する
 bash tools/codex-agent.sh codex-review --effort low <<< "Reply with exactly: PONG-REVIEW"  # 同上
 dotnet build gui/CodexBridgeConsole.sln -c Release  # 設定コンソール

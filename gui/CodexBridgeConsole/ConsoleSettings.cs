@@ -37,6 +37,9 @@ namespace CodexBridgeConsole
 
         private readonly Dictionary<string, FrontMatterFile> _files =
             new Dictionary<string, FrontMatterFile>(StringComparer.OrdinalIgnoreCase);
+        private readonly string _homeDirectory;
+        private string _codexHome;
+        private string _loadedCodexHome;
         private AgentSettings _loadedImplHard;
         private AgentSettings _loadedImplStandard;
         private AgentSettings _loadedImplLight;
@@ -44,12 +47,20 @@ namespace CodexBridgeConsole
         private bool _saveInterrupted;
 
         public ConsoleSettings()
-            : this(null)
+            : this(null, null)
         {
         }
 
         public ConsoleSettings(string rootDirectory)
+            : this(rootDirectory, null)
         {
+        }
+
+        // homeDirectory は codex_home の ~ を展開する先であり、認証ホームの一覧を探す親でもある。
+        // 省略時は %USERPROFILE% を使う。実在のホームに依存せず動かせるよう、外から差し替えられるようにしている。
+        public ConsoleSettings(string rootDirectory, string homeDirectory)
+        {
+            _homeDirectory = string.IsNullOrEmpty(homeDirectory) ? GetUserProfile() : homeDirectory;
             RootDirectory = Path.GetFullPath(
                 string.IsNullOrEmpty(rootDirectory) ? GetDefaultRootDirectory() : rootDirectory);
             Reload();
@@ -73,7 +84,30 @@ namespace CodexBridgeConsole
         // 表示上の値が変わらなくても両方へ書き戻せるようにするためである。
         public bool CodexEnabledExplicit { get; set; }
 
-        public string CodexHome { get; private set; }
+        // 選択中の認証ホーム。impl-light と impl-standard の codex_home を 1 つの設定として扱う。
+        // 値の形は定義ファイルと同じ ~/<ディレクトリ名> である。
+        public string CodexHome
+        {
+            get { return _codexHome; }
+
+            set
+            {
+                _codexHome = value;
+                ExpandedCodexHome = ExpandCodexHome(value);
+                CodexHomeExists = !string.IsNullOrEmpty(ExpandedCodexHome)
+                    && Directory.Exists(ExpandedCodexHome);
+                CodexHomeIsListed = IsListedCodexHome(value);
+            }
+        }
+
+        // ホームディレクトリ直下に実在する .codex で始まるディレクトリを ~/<名前> の形で並べたもの。
+        public IReadOnlyList<string> CodexHomeChoices { get; private set; }
+
+        // 選択中の値が一覧にあるかどうか。一覧に無い値は表示するだけで、保存では書き換えない。
+        public bool CodexHomeIsListed { get; private set; }
+
+        // impl-light と impl-standard の codex_home が食い違うかどうか。
+        public bool CodexHomeMismatch { get; private set; }
 
         public string ExpandedCodexHome { get; private set; }
 
@@ -94,11 +128,18 @@ namespace CodexBridgeConsole
             get { return MissingFiles.Count == 0 && UnreadableFiles.Count == 0; }
         }
 
-        // codex_enabled の不正値は、利用者が何も変えなくても保存で修復する。
+        // codex_enabled の不正値と codex_home の食い違いは、利用者が何も変えなくても保存で直す。
         // 修復待ちは未保存の変更ではないが、保存する意味がある状態として区別する。
         public bool HasPendingRepairs
         {
-            get { return CodexEnabledInvalidFiles.Count > 0; }
+            get { return CodexEnabledInvalidFiles.Count > 0 || NeedsCodexHomeAlignment; }
+        }
+
+        // 食い違った codex_home を選択中の値で揃えられる状態。
+        // 一覧に無い値は書き換えないため、その場合は揃えられない。
+        public bool NeedsCodexHomeAlignment
+        {
+            get { return CodexHomeMismatch && CodexHomeIsListed; }
         }
 
         // 保存ボタンを押す意味があるかどうか。未保存の変更か、修復待ちのどちらかがあるときに真になる。
@@ -154,6 +195,15 @@ namespace CodexBridgeConsole
                 _loadedImplLight,
                 ImplLight,
                 GetRelativePath(DefinitionKind.GptLight));
+
+            if (!string.Equals(_loadedCodexHome, CodexHome, StringComparison.Ordinal))
+            {
+                changes.Add(
+                    "codex_home: "
+                    + FormatValue(_loadedCodexHome)
+                    + " → "
+                    + FormatValue(CodexHome));
+            }
 
             if (CodexEnabled != _loadedCodexEnabled)
             {
@@ -244,11 +294,14 @@ namespace CodexBridgeConsole
             AgentSettings previousLight = _loadedImplLight.Clone();
             bool editedCodexEnabled = CodexEnabled;
             bool codexEnabledEdited = CodexEnabledExplicit || CodexEnabled != _loadedCodexEnabled;
+            string editedCodexHome = CodexHome;
+            string previousCodexHome = _loadedCodexHome;
 
             // codex_enabled は 2 定義の集約値を画面に出すが、外部変更の検出は定義ごとに行う。
             // 集約値だけを比べると、片方だけが外部で変わった場合を見逃す。
             bool? previousStandardEnabled = ReadFileCodexEnabled(DefinitionKind.GptStandard);
             bool? previousLightEnabled = ReadFileCodexEnabled(DefinitionKind.GptLight);
+            string previousStandardCodexHome = ReadFileCodexHome(DefinitionKind.GptStandard);
 
             Reload();
 
@@ -258,6 +311,20 @@ namespace CodexBridgeConsole
             RestoreClaudeEdits(ImplLight, editedLight, previousLight, GetRelativePath(DefinitionKind.ClaudeLight), conflicts);
             RestoreGptEdits(ImplStandard, editedStandard, previousStandard, GetRelativePath(DefinitionKind.GptStandard), conflicts);
             RestoreGptEdits(ImplLight, editedLight, previousLight, GetRelativePath(DefinitionKind.GptLight), conflicts);
+
+            // codex_home は impl-light の値を代表として表示するため、競合もその定義名で知らせる。
+            CodexHome = RestoreEdit(
+                CodexHome,
+                editedCodexHome,
+                previousCodexHome,
+                GetRelativePath(DefinitionKind.GptLight),
+                CodexHomeKey,
+                conflicts);
+
+            // impl-standard 側の外部変更は代表値との比較では見えないため、定義ごとに見る。
+            // 保存では選択値を両定義へ書くので、知らせずに上書きしてはならない。
+            AddCodexHomeConflict(
+                conflicts, DefinitionKind.GptStandard, previousStandardCodexHome, editedCodexHome, previousCodexHome);
 
             if (codexEnabledEdited)
             {
@@ -270,6 +337,32 @@ namespace CodexBridgeConsole
             }
 
             return ReadOnly(conflicts);
+        }
+
+        // 定義の codex_home が外部で変わり、入力中の値とも違うときだけ競合として知らせる。
+        // 入力中の値が読み込み時から変わっていなければ、外部変更はそのまま反映されるので知らせない。
+        private void AddCodexHomeConflict(
+            List<string> conflicts,
+            DefinitionKind kind,
+            string previous,
+            string edited,
+            string previousSelected)
+        {
+            if (string.Equals(edited, previousSelected, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            string reloaded = ReadFileCodexHome(kind);
+            if (previous != null
+                && reloaded != null
+                && !string.Equals(reloaded, previous, StringComparison.Ordinal)
+                && !string.Equals(reloaded, edited, StringComparison.Ordinal))
+            {
+                conflicts.Add(
+                    GetRelativePath(kind) + " の " + CodexHomeKey + ": 外部で " + FormatValue(reloaded)
+                    + " に変わったが、入力中の " + FormatValue(edited) + " を優先する");
+            }
         }
 
         // 定義の codex_enabled が外部で変わり、入力中の値とも違うときだけ競合として知らせる。
@@ -412,6 +505,8 @@ namespace CodexBridgeConsole
             CodexEnabled = lightEnabled && standardEnabled;
             CodexEnabledMismatch = hasLight && hasStandard && lightEnabled != standardEnabled;
 
+            // 選択肢は CodexHome より先に決める。CodexHome の設定子が一覧との照合を行うためである。
+            CodexHomeChoices = EnumerateCodexHomes(_homeDirectory);
             if (hasLight)
             {
                 CodexHome = gptLight.GetValue(CodexHomeKey);
@@ -423,9 +518,7 @@ namespace CodexBridgeConsole
                 CodexSandbox = null;
             }
 
-            ExpandedCodexHome = ExpandCodexHome(CodexHome);
-            CodexHomeExists = !string.IsNullOrEmpty(ExpandedCodexHome)
-                && Directory.Exists(ExpandedCodexHome);
+            RefreshCodexHomeMismatch();
 
             ReadGptSettings(ImplStandard, DefinitionKind.GptStandard);
             ReadGptSettings(ImplLight, DefinitionKind.GptLight);
@@ -481,6 +574,13 @@ namespace CodexBridgeConsole
                 GetRelativePath(DefinitionKind.GptLight),
                 errors);
 
+            // 選択肢は読み込み時に列挙したものなので、保存の手前で認証ホームがまだ実在するかを見る。
+            // 消えたホームを書くと、次のサブエージェント起動が認証ホーム不足で止まる。
+            if (ShouldWriteCodexHome() && !Directory.Exists(ExpandedCodexHome))
+            {
+                errors.Add("認証ホームが存在しない: " + FormatValue(CodexHome));
+            }
+
             return ReadOnly(errors);
         }
 
@@ -532,6 +632,7 @@ namespace CodexBridgeConsole
 
             _saveInterrupted = false;
             RefreshCodexEnabledMismatch();
+            RefreshCodexHomeMismatch();
             LastValidationErrors = ReadOnly(new List<string>());
             SaveLoadedValues();
             return new ConsoleSettingsSaveResult(
@@ -661,6 +762,12 @@ namespace CodexBridgeConsole
         {
             FrontMatterFile file = GetFile(kind);
 
+            // codex_home は 2 定義を 1 つの設定として扱うため、選択中の値を両方へ書く。
+            if (ShouldWriteCodexHome())
+            {
+                file.SetValue(CodexHomeKey, CodexHome);
+            }
+
             // トグルを操作していないときは codex_enabled に触れない。
             // 2 定義の値が食い違っている場合に、片方を黙って書き換えないためである。
             // 不正値が書かれている定義は、保存のたびに正しい値へ直す。
@@ -693,6 +800,22 @@ namespace CodexBridgeConsole
             {
                 file.SetValue("codex_reasoning_effort", settings.CodexReasoningEffort);
             }
+        }
+
+        // 一覧に無い値は書き換えない。$USERPROFILE 形式や未設定など、
+        // 設定コンソールが組み立てていない値を勝手に別の形へ直さないためである。
+        // 一覧の値は EnumerateCodexHomes が \ と " を含まないディレクトリ名だけから組み立てるため、
+        // 二重引用符で囲んで書いても tools/codex-agent.sh の fm_get が同じ値として読む。
+        private bool ShouldWriteCodexHome()
+        {
+            if (!CodexHomeIsListed)
+            {
+                return false;
+            }
+
+            // 食い違っているときは、選択中の値を変えていなくても両定義を揃える。
+            return CodexHomeMismatch
+                || !string.Equals(CodexHome, _loadedCodexHome, StringComparison.Ordinal);
         }
 
         private static void SetCodexEnabled(FrontMatterFile file, bool enabled)
@@ -738,6 +861,86 @@ namespace CodexBridgeConsole
             }
 
             CodexEnabledInvalidFiles = ReadOnly(invalidCodexEnabled);
+        }
+
+        // 保存で codex_home を揃えた場合に、警告の表示を残さないため読み直す。
+        // 画面に出す値は impl-light の側であり、impl-standard がそれと違えば食い違いとする。
+        private void RefreshCodexHomeMismatch()
+        {
+            string light = ReadFileCodexHome(DefinitionKind.GptLight);
+            string standard = ReadFileCodexHome(DefinitionKind.GptStandard);
+            CodexHomeMismatch = light != null
+                && standard != null
+                && !string.Equals(light, standard, StringComparison.Ordinal);
+        }
+
+        // 定義ごとの codex_home。ファイルが無いときは null を返し、キーが無いときは空文字を返す。
+        // キーの有無を値の違いとして扱わないと、片方だけ codex_home を持つ状態を見逃す。
+        private string ReadFileCodexHome(DefinitionKind kind)
+        {
+            FrontMatterFile file;
+            if (!_files.TryGetValue(GetRelativePath(kind), out file))
+            {
+                return null;
+            }
+
+            return file.GetValue(CodexHomeKey) ?? string.Empty;
+        }
+
+        private bool IsListedCodexHome(string value)
+        {
+            if (string.IsNullOrEmpty(value) || CodexHomeChoices == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < CodexHomeChoices.Count; i++)
+            {
+                if (string.Equals(CodexHomeChoices[i], value, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        // ホームディレクトリ直下の .codex で始まるディレクトリを名前順に並べ、~/<名前> の形で返す。
+        // 名前に英数字と . _ - / 以外を含むものは除く。二重引用符で囲んで書いた値を
+        // tools/codex-agent.sh の fm_get が同じ値として読めない場合があるためである。
+        private static IReadOnlyList<string> EnumerateCodexHomes(string homeDirectory)
+        {
+            var names = new List<string>();
+            if (!string.IsNullOrEmpty(homeDirectory) && Directory.Exists(homeDirectory))
+            {
+                try
+                {
+                    foreach (string path in Directory.GetDirectories(homeDirectory))
+                    {
+                        string name = Path.GetFileName(path);
+                        if (name.StartsWith(".codex", StringComparison.OrdinalIgnoreCase)
+                            && IsSafeScalar(name))
+                        {
+                            names.Add(name);
+                        }
+                    }
+                }
+                catch (Exception exception) when (
+                    exception is IOException || exception is UnauthorizedAccessException)
+                {
+                    // 一覧を取れない環境でも画面は開く。定義に書かれた値は一覧に無い値として表示される。
+                    names.Clear();
+                }
+            }
+
+            names.Sort(StringComparer.Ordinal);
+            var choices = new List<string>(names.Count);
+            for (int i = 0; i < names.Count; i++)
+            {
+                choices.Add("~/" + names[i]);
+            }
+
+            return ReadOnly(choices);
         }
 
         private FrontMatterFile GetFile(DefinitionKind kind)
@@ -872,6 +1075,7 @@ namespace CodexBridgeConsole
             _loadedImplStandard = ImplStandard.Clone();
             _loadedImplLight = ImplLight.Clone();
             _loadedCodexEnabled = CodexEnabled;
+            _loadedCodexHome = CodexHome;
             CodexEnabledExplicit = false;
             _saveInterrupted = false;
         }
@@ -926,14 +1130,14 @@ namespace CodexBridgeConsole
             return userProfile;
         }
 
-        private static string ExpandCodexHome(string value)
+        private string ExpandCodexHome(string value)
         {
             if (string.IsNullOrEmpty(value))
             {
                 return null;
             }
 
-            string userProfile = GetUserProfile();
+            string userProfile = _homeDirectory;
             string expanded = value;
             if (string.Equals(expanded, "~", StringComparison.Ordinal))
             {

@@ -7,11 +7,14 @@ Codex CLI を Claude Code のサブエージェントとして呼び出すため
 
 - **パターン 1**：実装のサブエージェント委譲だけを使い、1 アカウントで足りる場合に選ぶ。
 - **パターン 2**：実装の委譲に加えてレビューや調査も Codex に依頼し、1 アカウントで運用する場合に選ぶ。
-- **パターン 3**：レビューを実装用から分けたい場合に、実装用とレビュー用の認証を分け、役割ごとにアカウントを固定する。
+- **パターン 3**：サブエージェントへの委譲を通常利用やレビューから分けたい場合に、認証を分けて役割ごとにアカウントを固定する。通常利用とレビューに使うアカウントを既定ホーム `~/.codex` に置き、サブエージェント専用のアカウントに `~/.codex-subagent` を与える。
+
+ここでいう**通常利用**は Codex CLI の対話、VS Code や Chrome の Codex 拡張、Claude Code の Codex プラグインを指し、**サブエージェント**は GPT 側へ実装を委譲する `impl-light`、`impl-standard`、`codex-subagent` の 3 定義を指す。
+`codex-review` も Claude Code からはサブエージェントとして起動されるが、役割はレビューなので既定ホーム側のアカウントを使う。
 
 レートリミットを分散することだけを目的にアカウントを切り替える構成は採用しない。
 アカウント A が上限に達したらアカウント B へ回す、というローテーションは OpenAI の利用規約に抵触する恐れがあるためである。
-パターン 3 では、実装用とレビュー用を役割として分け、利用上限に応じて処理を別アカウントへ回さない。
+パターン 3 では、レビューとサブエージェントへの委譲を役割として分け、利用上限に応じて処理を別アカウントへ回さない。
 
 ## 共通手順
 
@@ -118,7 +121,7 @@ Claude Code はサブエージェント定義を呼び出せるものとして�
 
 ### 7. 設定コンソールを導入する(任意)
 
-配置した定義のモデル、effort、GPT 経路の有効状態を GUI から変えるなら、設定コンソールを導入する。
+配置した定義のモデル、effort、GPT 経路の有効状態、サブエージェントの認証ホームを GUI から変えるなら、設定コンソールを導入する。
 `gui\build.bat` をダブルクリックすると `gui\dist\CodexBridgeConsole.exe` ができる。
 ビルドには .NET SDK が要る。
 以後は exe をダブルクリックして起動し、手順 3 で配置したユーザ定義側の 5 ファイルを編集する。
@@ -130,7 +133,7 @@ Claude Code はサブエージェント定義を呼び出せるものとして�
 ### 使う定義
 
 1 アカウントで実装のサブエージェント委譲だけを使う。
-`codex_home` は、次のうち 2 つの GPT 側定義で `~/.codex` のままにする。
+リポジトリの GPT 側定義は 2 アカウント運用の値で書かれているため、次のうち 2 つの GPT 側定義の `codex_home` を `~/.codex` に書き換える。
 
 - `.claude/agents/impl-hard.md`
 - `.claude/agents/impl-light.md`
@@ -158,7 +161,7 @@ Claude Code の `Agent` ツールからも `subagent_type: impl-light` と `suba
 ### 使う定義
 
 1 アカウントで実装の委譲、レビュー、実装補助をすべて使う。
-`codex_home` は、次のうち 4 つの GPT 側定義で `~/.codex` のままにする。
+リポジトリの GPT 側定義は 2 アカウント運用の値で書かれているため、次のうち `impl-light`、`impl-standard`、`codex-subagent` の 3 つの `codex_home` を `~/.codex` に書き換える(`codex-review` は既に `~/.codex` である)。
 
 - `.claude/agents/impl-hard.md`
 - `.claude/agents/impl-light.md`
@@ -193,21 +196,33 @@ Claude Code の `Agent` ツールからも、4 つの `subagent_type` をそれ�
 
 ### 用途別にログインする
 
-実装用とレビュー用の `CODEX_HOME` を `%USERPROFILE%` 配下に作り、それぞれ別のアカウントでログインする。
-ブラウザ認証では、実装用とレビュー用に対応するアカウントを選ぶ。
+通常利用とレビューに使うアカウントは既定ホーム `%USERPROFILE%\.codex` に置く。
+Codex CLI の対話、VS Code や Chrome の Codex 拡張、Claude Code の Codex プラグインは既定ホームしか見ないため、そこを空けると未ログイン扱いになり、`~/.codex` が自動で再生成されるためである。
+サブエージェント専用のアカウントには `%USERPROFILE%\.codex-subagent` を与える。
+
+既定ホームにログイン済みなら、`%USERPROFILE%\.codex-subagent` だけログインすればよい。
 
 ```powershell
 $env:CODEX_HOME="$env:USERPROFILE\.codex-subagent"
 codex login
 codex login status
 
-$env:CODEX_HOME="$env:USERPROFILE\.codex-review"
-codex login
+$env:CODEX_HOME="$env:USERPROFILE\.codex"
 codex login status
 ```
 
 両方の `codex login status` がログイン済みの状態を示すことを確認する。
 2 つのホームに同じアカウントでログインしないよう、ブラウザのアカウント選択を確認する。
+
+既定ホームのアカウントを入れ替えるときは、既定ホームで `codex logout` してから `codex login` する。
+`config.toml`、フック、プラグインなどの設定は `auth.json` と別のファイルにあるため、ログインし直してもそのまま残る。
+
+```powershell
+$env:CODEX_HOME="$env:USERPROFILE\.codex"
+codex logout
+codex login
+codex login status
+```
 
 ### 使う定義
 
@@ -223,13 +238,13 @@ codex login status
 - `.claude/gpt-agents/codex-review.md`
 - `.claude/gpt-agents/codex-subagent.md`
 
-GPT 側定義の `codex_home` を、次の表のとおりに書き分ける。
+GPT 側定義の `codex_home` は次の表のとおりに書く。リポジトリの定義の既定値と同じである。
 
 | GPT 側定義 | `codex_home` |
 |---|---|
 | `.claude/gpt-agents/impl-light.md` | `~/.codex-subagent` |
 | `.claude/gpt-agents/impl-standard.md` | `~/.codex-subagent` |
-| `.claude/gpt-agents/codex-review.md` | `~/.codex-review` |
+| `.claude/gpt-agents/codex-review.md` | `~/.codex` |
 | `.claude/gpt-agents/codex-subagent.md` | `~/.codex-subagent` |
 
 モデル、effort、サンドボックスの値は変更しない。
@@ -246,21 +261,35 @@ bash ~/.claude/tools/codex-agent.sh codex-review --effort low <<< "Reply with ex
 bash ~/.claude/tools/codex-agent.sh codex-subagent --effort low <<< "Reply with exactly: PONG-SUBAGENT"
 ```
 
-実装用の 3 定義の監査行に `codex_home=.../.codex-subagent` が出ることを確認する。
-レビュー用の `codex-review` の監査行に `codex_home=.../.codex-review` が出ることを確認する。
+`codex-review` の監査行に `codex_home=.../.codex` が出て、他の 3 定義の監査行に `codex_home=.../.codex-subagent` が出ることを確認する。
 `codex-review` では `sandbox=read-only`、`codex-subagent` では `sandbox=workspace-write` が出ることを確認する。
 4 つすべての応答の末尾に `codex-agent: result=ok` が出ればよい。
 Claude Code の `Agent` ツールからも、4 つの `subagent_type` をそれぞれ指定して確認する。
 
 ## 設定に関する注意
 
-`CODEX_HOME` を分けると、既定ホーム `~/.codex` の `config.toml` は読み込まれない。
-モデルと effort は `.claude/gpt-agents/` 側で指定するため、各 `CODEX_HOME` に設定ファイルがなくても動く。
-追加設定が必要な場合だけ、用途ごとのホームに個別に設定する。
+既定ホーム以外のホーム(`~/.codex-subagent`)を使う定義では、既定ホーム `~/.codex` の `config.toml` は読み込まれない。
+モデルと effort は `.claude/gpt-agents/` 側で指定するため、read-only で動く `codex-review` のホームは設定ファイルがなくても動く。
 既定ホームの `config.toml` をそのままコピーすると、フック、MCP サーバ、通知などの設定まで持ち込まれるため避ける。
+
+Windows のサンドボックスは `CODEX_HOME` ごとに設定される。
+書き込みを行う定義(`impl-light`、`impl-standard`、`codex-subagent`)が使うホームでは、この設定が既定ホームから引き継がれない。
+Codex v0.153.4 では、`[windows]` の `sandbox` 設定が無いホームで `--sandbox workspace-write` を指定すると、起動時の見出しに `sandbox: read-only` と出て書き込みが拒否されることを確認している。
+見出しの `sandbox:` 行が `read-only` になっていたら、この設定の不足を疑う。
+既定ホームの `config.toml` から `[windows]` の `sandbox` の値を写し、作業ディレクトリの信頼設定と合わせて、そのホームの `config.toml` に最小限だけ書く。
+信頼設定のパスは、Codex を動かすプロジェクト(または worktree)の絶対パスを小文字で書く。既定ホームの `config.toml` にある `[projects.'...']` の書き方に合わせる。
+
+```toml
+[windows]
+sandbox = "elevated"  # 既定ホームの config.toml と同じ値にする
+
+[projects.'<プロジェクトの絶対パス>']  # 例: 'd:\projects\my-repo'
+trust_level = "trusted"
+```
 
 Claude Code の Codex プラグイン(`codex:codex-rescue` など)は、この仕組みとは別に動く。
 プラグインはセッション共有の broker 経由で `codex app-server` を起動し、broker プロセスの環境変数を起動時に固定する。
 呼び出しごとに `CODEX_HOME` を切り替える用途には向かないため、用途別アカウント運用はこのリポジトリの定義で行う。
+プラグインが使うのは既定ホームのアカウント、つまり通常利用とレビューに使うアカウントである。
 
-定義ファイルのモデル、effort、GPT 系サブエージェント経路の有効状態を GUI から変える場合は、共通手順 7 の設定コンソールを使う。
+定義ファイルのモデル、effort、GPT 系サブエージェント経路の有効状態、サブエージェントの認証ホームを GUI から変える場合は、共通手順 7 の設定コンソールを使う。

@@ -1,14 +1,18 @@
 # claude-codex-bridge
 
 Claude Code から Codex CLI を、用途別のサブエージェントとして呼び出すための定義と手順をまとめたリポジトリである。
-1 アカウント運用と、レビュー用と実装補助用で ChatGPT アカウントを分ける 2 アカウント運用の両方に対応する。
+1 アカウント運用と、用途別に ChatGPT アカウントを分ける 2 アカウント運用の両方に対応する。
 アカウントを分ける場合は、`CODEX_HOME` を分離して認証を切り替える。
+分けるときは、通常利用とレビューに使うアカウントを既定ホーム `~/.codex` に置き、サブエージェント専用のアカウントに `~/.codex-subagent` を与える。
+ここでいう**通常利用**は Codex CLI の対話、VS Code や Chrome の Codex 拡張、Claude Code の Codex プラグインを指し、**サブエージェント**は GPT 側へ実装を委譲する `impl-light`、`impl-standard`、`codex-subagent` の 3 定義を指す。
+`codex-review` も Claude Code からはサブエージェントとして起動されるが、役割はレビューなので既定ホーム側のアカウントを使う。
+通常利用の入口は既定ホームしか見ないため、そこを空けると未ログイン扱いになるためである。
 
 用途に応じて、次の 3 パターンから選ぶ。
 
 - **パターン 1**：1 アカウントで `impl-light` と `impl-standard` だけを使う。
 - **パターン 2**：1 アカウントで実装用とレビュー用の 4 定義を使う。
-- **パターン 3**：実装用とレビュー用で 2 アカウントを使い、役割ごとに `CODEX_HOME` を固定する。
+- **パターン 3**：通常利用とレビューに使うアカウントと、サブエージェント専用のアカウントの 2 つを使い、役割ごとに `CODEX_HOME` を固定する。前者が既定ホーム `~/.codex` を使う。
 
 ## 構成
 
@@ -24,11 +28,11 @@ Claude Code(メインセッション)
 │   ├─ impl-light / impl-standard
 │   └─ codex-review / codex-subagent
 │       └─ CODEX_HOME=~/.codex
-└─ パターン 3(2 アカウント、役割別)
-    ├─ impl-light / impl-standard / codex-subagent
-    │   └─ CODEX_HOME=~/.codex-subagent
-    └─ codex-review
-        └─ CODEX_HOME=~/.codex-review
+└─ パターン 3(2 アカウント、役割別。通常利用とレビューを既定ホームに置く)
+    ├─ codex-review
+    │   └─ CODEX_HOME=~/.codex
+    └─ impl-light / impl-standard / codex-subagent
+        └─ CODEX_HOME=~/.codex-subagent
 ```
 
 各定義は Claude 側の `.claude/agents/<name>.md` から `~/.claude/tools/codex-agent.sh` を呼び出し、スクリプトが `.claude/gpt-agents/<name>.md` を読んで `codex exec` を組み立てる。
@@ -68,7 +72,7 @@ Codex CLI は認証情報を `$CODEX_HOME/auth.json` に保存し、他の場所
 選んだパターンに必要な Claude 側定義、GPT 側定義、`tools/codex-agent.sh` を配置する。
 利用先の `CLAUDE.md` に、難易度で `impl-hard`、`impl-standard`、`impl-light` を選ぶ役割分担の節を追加する。
 Claude Code を再起動し、配置した定義だけを `Agent` ツールの `subagent_type` に指定して呼ぶ。
-定義のモデル、effort、GPT 経路の有効状態を GUI から変えるなら、`gui\build.bat` で設定コンソールを作る([docs/gui.md](docs/gui.md))。
+定義のモデル、effort、GPT 経路の有効状態、サブエージェントの認証ホームを GUI から変えるなら、`gui\build.bat` で設定コンソールを作る([docs/gui.md](docs/gui.md))。
 
 ## 守るべき前提
 

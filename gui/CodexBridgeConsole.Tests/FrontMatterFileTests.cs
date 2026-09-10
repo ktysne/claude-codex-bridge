@@ -447,7 +447,7 @@ namespace CodexBridgeConsole.Tests
                 string path = directory.WriteFile(
                     "impl-light.md",
                     "---\n" +
-                    "codex_home: ~/.codex  # 1 アカウント運用の既定値。2 アカウント運用では ~/.codex-subagent に変える\n" +
+                    "codex_home: ~/.codex-subagent  # サブエージェント専用アカウント\n" +
                     "codex_model: gpt-5.6-luna\n" +
                     "codex_reasoning_effort: xhigh\n" +
                     "codex_sandbox: workspace-write\n" +
@@ -460,7 +460,7 @@ namespace CodexBridgeConsole.Tests
 
                 Assert.Equal(
                     "---\n" +
-                    "codex_home: ~/.codex  # 1 アカウント運用の既定値。2 アカウント運用では ~/.codex-subagent に変える\n" +
+                    "codex_home: ~/.codex-subagent  # サブエージェント専用アカウント\n" +
                     "codex_model: gpt-5.6-luna\n" +
                     "codex_reasoning_effort: xhigh\n" +
                     "codex_sandbox: workspace-write\n" +
