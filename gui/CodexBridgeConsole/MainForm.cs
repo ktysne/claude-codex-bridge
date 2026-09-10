@@ -37,7 +37,8 @@ namespace CodexBridgeConsole
 
         private readonly ConsoleSettings _settings;
         private readonly Choices _choices;
-        private Label _codexHomeLabel;
+        private ComboBox _codexHomeComboBox;
+        private Label _codexSandboxLabel;
         private Label _codexVersionLabel;
         private Label _codexCatalogLabel;
         private CheckBox _codexEnabledCheckBox;
@@ -62,6 +63,18 @@ namespace CodexBridgeConsole
 
         // codex debug models から取れた目録。取れなかった間は null で、_choices の既定値を使う。
         private CodexModelCatalog _codexModelCatalog;
+
+        // 認証ホームの選択欄に並べた項目の値。表示は注記を添えることがあるため、値を別に持つ。
+        private readonly List<string> _codexHomeValues = new List<string>();
+
+        // 認証ホームごとの取得結果。切り替えて戻したときに同じ問い合わせを繰り返さない。
+        private readonly Dictionary<string, string> _codexVersionByHome =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, CatalogResult> _codexCatalogByHome =
+            new Dictionary<string, CatalogResult>(StringComparer.OrdinalIgnoreCase);
+
+        // 取得を始めたときのホーム。結果を画面へ反映してよいのは、それがまだ選ばれているときだけである。
+        private string _currentCodexHomeKey = string.Empty;
 
         private string _codexVersionText = "確認中...";
 
@@ -304,40 +317,103 @@ namespace CodexBridgeConsole
             {
                 ColumnCount = 1,
                 RowCount = 3,
-                Width = width,
-                Height = SingleLineHeight() * 3 + 12,
+
+                // 認証ホームの行はコンボボックスを持つため、1 行分の高さに収まらない。
+                // 高さは中身に決めさせる。
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                MinimumSize = new Size(width, 0),
                 Margin = new Padding(3, 6, 3, 6),
                 Padding = new Padding(0)
             };
-            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 33.33F));
-            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 33.33F));
-            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 33.33F));
+            for (int i = 0; i < 3; i++)
+            {
+                panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            }
 
-            _codexHomeLabel = new Label
-            {
-                AutoSize = false,
-                Dock = DockStyle.Fill,
-                TextAlign = ContentAlignment.MiddleLeft,
-                Margin = new Padding(3, 0, 3, 0)
-            };
-            _codexVersionLabel = new Label
-            {
-                AutoSize = false,
-                Dock = DockStyle.Fill,
-                TextAlign = ContentAlignment.MiddleLeft,
-                Margin = new Padding(3, 0, 3, 0)
-            };
-            _codexCatalogLabel = new Label
-            {
-                AutoSize = false,
-                Dock = DockStyle.Fill,
-                TextAlign = ContentAlignment.MiddleLeft,
-                Margin = new Padding(3, 0, 3, 0)
-            };
-            panel.Controls.Add(_codexHomeLabel, 0, 0);
+            _codexVersionLabel = CreateStatusLabel(width);
+            _codexCatalogLabel = CreateStatusLabel(width);
+            panel.Controls.Add(BuildCodexHomePanel(), 0, 0);
             panel.Controls.Add(_codexVersionLabel, 0, 1);
             panel.Controls.Add(_codexCatalogLabel, 0, 2);
             return panel;
+        }
+
+        private Label CreateStatusLabel(int width)
+        {
+            return new Label
+            {
+                AutoSize = false,
+                AutoEllipsis = true,
+                Width = width,
+                Height = SingleLineHeight(),
+                TextAlign = ContentAlignment.MiddleLeft,
+                Margin = new Padding(3, 0, 3, 0)
+            };
+        }
+
+        // 認証ホームは選んで切り替える。codex_sandbox は表示だけにし、GUI から緩められる経路を作らない。
+        private Control BuildCodexHomePanel()
+        {
+            var panel = new TableLayoutPanel
+            {
+                ColumnCount = 3,
+                RowCount = 1,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Margin = new Padding(0),
+                Padding = new Padding(0)
+            };
+            for (int i = 0; i < 3; i++)
+            {
+                panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            }
+
+            panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            _codexHomeComboBox = new ComboBox
+            {
+                // 任意のパスは入力させない。実在する認証ホームだけを選ばせるためである。
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Anchor = AnchorStyles.Left,
+                IntegralHeight = false,
+                Margin = new Padding(3, 3, 12, 3)
+            };
+            SetComboBoxWidth(_codexHomeComboBox, CodexHomeComboBoxWidth());
+            _codexHomeComboBox.SelectedIndexChanged += CodexHomeComboBox_SelectedIndexChanged;
+
+            _codexSandboxLabel = new Label
+            {
+                AutoSize = true,
+                Anchor = AnchorStyles.None,
+                Margin = new Padding(3)
+            };
+
+            panel.Controls.Add(CreateCenteredLabel("codex_home:"), 0, 0);
+            panel.Controls.Add(_codexHomeComboBox, 1, 0);
+            panel.Controls.Add(_codexSandboxLabel, 2, 0);
+            return panel;
+        }
+
+        // 一覧の値と、注記を添えた現在値のどちらも収まる幅にする。
+        private int CodexHomeComboBoxWidth()
+        {
+            var values = new List<string>(_settings.CodexHomeChoices);
+            values.Add(FormatUnlistedCodexHome(_settings.CodexHome));
+            return ComboBoxWidth(values);
+        }
+
+        // 一覧に無い値は、なぜ選択肢として並ばないのかが分かるよう注記を添える。
+        private string FormatUnlistedCodexHome(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return "(未設定)";
+            }
+
+            return _settings.CodexHomeExists
+                ? value + "  (一覧に無い)"
+                : value + "  (存在しない)";
         }
 
         private Control BuildButtonPanel(int width)
@@ -542,6 +618,7 @@ namespace CodexBridgeConsole
                     _choices.GptEfforts,
                     _settings.ImplLight.CodexReasoningEffort);
                 _codexEnabledCheckBox.Checked = _settings.CodexEnabled;
+                LoadCodexHomeItems();
             }
             finally
             {
@@ -552,12 +629,47 @@ namespace CodexBridgeConsole
             // 当てないと、再読込のたびに GPT 側が既定の選択肢へ戻る。
             if (_codexModelCatalog != null)
             {
-                ApplyCodexModelCatalog();
+                ApplyGptChoices();
             }
 
             UpdateStatusDisplay();
             UpdateGptControlState();
             UpdateControlState();
+
+            // 読み直しで認証ホームが変わっていることがある。表示中の取得結果を持ち越さない。
+            RefreshCodexHomeInfo();
+        }
+
+        private void LoadCodexHomeItems()
+        {
+            _codexHomeValues.Clear();
+            _codexHomeComboBox.Items.Clear();
+            string current = _settings.CodexHome;
+
+            // 一覧に無い現在値は先頭に足して選択状態にする。開いただけで別のホームへ切り替わらないためである。
+            if (!_settings.CodexHomeIsListed)
+            {
+                _codexHomeValues.Add(current);
+                _codexHomeComboBox.Items.Add(FormatUnlistedCodexHome(current));
+            }
+
+            IReadOnlyList<string> choices = _settings.CodexHomeChoices;
+            for (int i = 0; i < choices.Count; i++)
+            {
+                _codexHomeValues.Add(choices[i]);
+                _codexHomeComboBox.Items.Add(choices[i]);
+            }
+
+            _codexHomeComboBox.SelectedIndex = _codexHomeValues.IndexOf(current);
+            SetComboBoxWidth(_codexHomeComboBox, CodexHomeComboBoxWidth());
+        }
+
+        private string SelectedCodexHome()
+        {
+            int index = _codexHomeComboBox.SelectedIndex;
+            return index >= 0 && index < _codexHomeValues.Count
+                ? _codexHomeValues[index]
+                : _settings.CodexHome;
         }
 
         private static void SetComboItems(
@@ -581,23 +693,9 @@ namespace CodexBridgeConsole
 
         private void UpdateStatusDisplay()
         {
-            // 存在するときは何も添えない。存在しないときだけ示す。
-            // 認証ホームが無いことは、ログインが済んでいない合図であるためである。
-            string home = _settings.CodexHome;
-            string homeNote = string.Empty;
-            if (string.IsNullOrEmpty(home))
-            {
-                homeNote = " (未設定)";
-            }
-            else if (!_settings.CodexHomeExists)
-            {
-                homeNote = " (存在しない)";
-            }
-
-            _codexHomeLabel.Text = "codex_home: " + (home ?? "(未設定)")
-                + homeNote + "    codex_sandbox: "
-                + (_settings.CodexSandbox ?? "(未設定)");
-            // バージョンの取得は起動時の 1 回だけなので、再読込では取得済みの結果を出し直す。
+            // 認証ホームは選択欄が値と注記を示すため、ここでは sandbox だけを出す。
+            _codexSandboxLabel.Text = "codex_sandbox: " + (_settings.CodexSandbox ?? "(未設定)");
+            // バージョンの取得は認証ホームごとに 1 回だけなので、再読込では取得済みの結果を出し直す。
             _codexVersionLabel.Text = "codex --version: " + _codexVersionText;
             // 目録の取得も起動時の 1 回だけなので、再読込では取得済みの結果を出し直す。
             _codexCatalogLabel.Text = "GPT モデル一覧: " + _codexCatalogText;
@@ -631,6 +729,14 @@ namespace CodexBridgeConsole
                 _missingFilesLabel.Text = "impl-light と impl-standard の codex_enabled が食い違っている。"
                     + "両方が有効なときだけ有効として表示する。チェックを変えて保存すると両方に同じ値を書く。";
             }
+            else if (_settings.CodexHomeMismatch)
+            {
+                _missingFilesLabel.Text = "impl-light と impl-standard の codex_home が食い違っている。"
+                    + "impl-light の値を選択中として表示する。"
+                    + (_settings.NeedsCodexHomeAlignment
+                        ? "保存すると両方に選択中の値を書く。"
+                        : "一覧にある認証ホームを選んで保存すると両方が揃う。");
+            }
             else
             {
                 _missingFilesLabel.Text = string.Empty;
@@ -644,9 +750,20 @@ namespace CodexBridgeConsole
         // 未保存の変更が無いときの状態行。修復待ちがあるときは、ボタンが押せる理由を示す。
         private string IdleStatusText()
         {
-            return _settings.HasPendingRepairs
-                ? "保存すると codex_enabled の不正値を直します。"
-                : "変更はありません。";
+            var reasons = new List<string>();
+            if (_settings.CodexEnabledInvalidFiles.Count > 0)
+            {
+                reasons.Add("codex_enabled の不正値を直します");
+            }
+
+            if (_settings.NeedsCodexHomeAlignment)
+            {
+                reasons.Add("codex_home を選択中の値で揃えます");
+            }
+
+            return reasons.Count == 0
+                ? "変更はありません。"
+                : "保存すると " + string.Join("、", reasons.ToArray()) + "。";
         }
 
         // 状態行の文字色は失敗のときだけ警告色にする。成功と未保存は通常色で区別しない。
@@ -686,6 +803,20 @@ namespace CodexBridgeConsole
             _settings.ImplLight.CodexModel = _lightGptModelComboBox.Text;
             _settings.ImplLight.CodexReasoningEffort = _lightGptEffortComboBox.Text;
             _settings.CodexEnabled = _codexEnabledCheckBox.Checked;
+            _settings.CodexHome = SelectedCodexHome();
+        }
+
+        private void CodexHomeComboBox_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            if (_loadingControls)
+            {
+                return;
+            }
+
+            ControlValueChanged(sender, e);
+
+            // 認証ホームを変えると codex の応答も変わる。前のホームの結果を出したままにしない。
+            RefreshCodexHomeInfo();
         }
 
         private void CodexEnabledCheckBox_CheckedChanged(object sender, EventArgs e)
@@ -916,38 +1047,70 @@ namespace CodexBridgeConsole
             }
 
             _codexVersionStarted = true;
-            LoadCodexVersionAsync();
-            LoadCodexModelCatalogAsync();
+            RefreshCodexHomeInfo();
         }
 
-        // codex debug models の取得は画面の表示を待たせない。
-        // 取得できないときは _choices の既定値のままにする。
-        private async void LoadCodexModelCatalogAsync()
+        // 選択中の認証ホームで codex --version と codex debug models を引き直す。
+        // 一度引いたホームの結果は持っておき、切り替えて戻したときに引き直さない。
+        private void RefreshCodexHomeInfo()
         {
-            // CODEX_HOME は必ず明示する。既定の ~/.codex への暗黙依存を作らないためである。
-            string codexHome = _settings.ExpandedCodexHome;
-            if (string.IsNullOrEmpty(codexHome))
+            // 画面が出る前は codex を起動しない。起動の待ちで表示が遅れないようにするためである。
+            if (!_codexVersionStarted)
             {
-                // codexHome が空だと CodexModelCatalog.Load は必ず null を返すため、起動もしない。
-                SetCodexCatalogText("認証ホーム未設定のため取得しない。既定値を使用");
                 return;
             }
 
+            string codexHome = _settings.ExpandedCodexHome ?? string.Empty;
+            _currentCodexHomeKey = codexHome;
+            LoadCodexVersionAsync(codexHome);
+            LoadCodexModelCatalogAsync(codexHome);
+        }
+
+        // codex debug models の取得は画面の表示を待たせない。
+        // 取得できないときは _choices の既定値へ戻す。
+        private async void LoadCodexModelCatalogAsync(string codexHome)
+        {
+            CatalogResult cached;
+            if (_codexCatalogByHome.TryGetValue(codexHome, out cached))
+            {
+                ApplyCatalogResult(cached);
+                return;
+            }
+
+            SetCodexCatalogText("取得中...");
+            if (codexHome.Length == 0)
+            {
+                // codexHome が空だと CodexModelCatalog.Load は必ず null を返すため、起動もしない。
+                var unset = new CatalogResult(null, "認証ホーム未設定のため取得しない。既定値を使用");
+                _codexCatalogByHome[codexHome] = unset;
+                ApplyCatalogResult(unset);
+                return;
+            }
+
+            // CODEX_HOME は必ず明示する。既定の ~/.codex への暗黙依存を作らないためである。
             CodexModelCatalog catalog = await Task.Run(() => CodexModelCatalog.Load(codexHome));
             if (IsDisposed || Disposing)
             {
                 return;
             }
 
-            if (catalog == null)
-            {
-                SetCodexCatalogText("取得できないため既定値を使用");
-                return;
-            }
+            var result = new CatalogResult(
+                catalog,
+                catalog == null ? "取得できないため既定値を使用" : "codex debug models から取得");
+            _codexCatalogByHome[codexHome] = result;
 
-            SetCodexCatalogText("codex debug models から取得");
-            _codexModelCatalog = catalog;
-            ApplyCodexModelCatalog();
+            // 取得の間に別のホームへ切り替わっていたら、そちらの表示を上書きしない。
+            if (string.Equals(_currentCodexHomeKey, codexHome, StringComparison.OrdinalIgnoreCase))
+            {
+                ApplyCatalogResult(result);
+            }
+        }
+
+        private void ApplyCatalogResult(CatalogResult result)
+        {
+            SetCodexCatalogText(result.Text);
+            _codexModelCatalog = result.Catalog;
+            ApplyGptChoices();
         }
 
         // 取得結果は保持し、再読込では UpdateStatusDisplay が同じ文言を出し直す。
@@ -957,20 +1120,20 @@ namespace CodexBridgeConsole
             _codexCatalogLabel.Text = "GPT モデル一覧: " + text;
         }
 
-        private void ApplyCodexModelCatalog()
+        // GPT 側の選択肢を目録から組み直す。目録が無いときは _choices の既定値を使う。
+        // 入力中の値は選択肢に無くても残す。開いただけで定義が書き換わるのを避けるためである。
+        private void ApplyGptChoices()
         {
+            IReadOnlyList<string> models = _codexModelCatalog != null
+                ? _codexModelCatalog.Models
+                : _choices.GptModels;
+
             bool loading = _loadingControls;
             _loadingControls = true;
             try
             {
-                SetComboItems(
-                    _standardGptModelComboBox,
-                    _codexModelCatalog.Models,
-                    _standardGptModelComboBox.Text);
-                SetComboItems(
-                    _lightGptModelComboBox,
-                    _codexModelCatalog.Models,
-                    _lightGptModelComboBox.Text);
+                SetComboItems(_standardGptModelComboBox, models, _standardGptModelComboBox.Text);
+                SetComboItems(_lightGptModelComboBox, models, _lightGptModelComboBox.Text);
                 ApplyGptEffortChoices(_standardGptModelComboBox, _standardGptEffortComboBox);
                 ApplyGptEffortChoices(_lightGptModelComboBox, _lightGptEffortComboBox);
             }
@@ -986,7 +1149,9 @@ namespace CodexBridgeConsole
         // effort の選べる値はモデルごとに違う。目録が知らないモデルには既定の一覧を残す。
         private void ApplyGptEffortChoices(ComboBox modelComboBox, ComboBox effortComboBox)
         {
-            IReadOnlyList<string> efforts = _codexModelCatalog.EffortsFor(modelComboBox.Text);
+            IReadOnlyList<string> efforts = _codexModelCatalog != null
+                ? _codexModelCatalog.EffortsFor(modelComboBox.Text)
+                : _choices.GptEfforts;
             if (efforts.Count == 0)
             {
                 efforts = _choices.GptEfforts;
@@ -1159,18 +1324,37 @@ namespace CodexBridgeConsole
             comboBox.Width = width;
         }
 
-        private async void LoadCodexVersionAsync()
+        private async void LoadCodexVersionAsync(string codexHome)
         {
+            string cached;
+            if (_codexVersionByHome.TryGetValue(codexHome, out cached))
+            {
+                SetCodexVersionText(cached);
+                return;
+            }
+
+            SetCodexVersionText("確認中...");
+
             // CODEX_HOME は必ず明示する。既定の ~/.codex への暗黙依存を作らないためである。
-            string codexHome = _settings.ExpandedCodexHome;
             string version = await Task.Run(() => GetCodexVersion(codexHome));
             if (IsDisposed || Disposing)
             {
                 return;
             }
 
-            _codexVersionText = version;
-            _codexVersionLabel.Text = "codex --version: " + version;
+            _codexVersionByHome[codexHome] = version;
+
+            // 取得の間に別のホームへ切り替わっていたら、そちらの表示を上書きしない。
+            if (string.Equals(_currentCodexHomeKey, codexHome, StringComparison.OrdinalIgnoreCase))
+            {
+                SetCodexVersionText(version);
+            }
+        }
+
+        private void SetCodexVersionText(string text)
+        {
+            _codexVersionText = text;
+            _codexVersionLabel.Text = "codex --version: " + text;
         }
 
         private static void KillProcessTree(Process process)
@@ -1307,6 +1491,21 @@ namespace CodexBridgeConsole
             {
                 e.Cancel = true;
             }
+        }
+
+        // 認証ホーム 1 つ分の目録の取得結果。取れなかったことも結果として持つ。
+        // 持たないと、取れないホームへ切り替えるたびに codex を起動し直すことになる。
+        private sealed class CatalogResult
+        {
+            public CatalogResult(CodexModelCatalog catalog, string text)
+            {
+                Catalog = catalog;
+                Text = text;
+            }
+
+            public CodexModelCatalog Catalog { get; private set; }
+
+            public string Text { get; private set; }
         }
     }
 }
