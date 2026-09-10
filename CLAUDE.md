@@ -31,7 +31,7 @@ Claude Code から Codex CLI を、用途別のサブエージェントとして
 - 認証の分離: `codex` を呼ぶときは必ず `CODEX_HOME` を明示する。既定の `~/.codex` に暗黙に依存する呼び出しを書かない。
 - 権限の固定: レビュー用は `--sandbox read-only` を外さない。実装補助用でも `--dangerously-bypass-approvals-and-sandbox` は使わない。設定コンソールからも `codex_sandbox` は編集させない。`codex_home` は設定コンソールから変えられるが、`%USERPROFILE%` 直下に実在する `.codex*` ディレクトリから選ぶだけで、任意のパスは入力させない。
 - 認証情報の非コミット: `auth.json`、トークン、アカウント ID をリポジトリに入れない。ドキュメントの例には実値を書かない。
-- 作業ツリーの分離: 書き込み可能な Codex 呼び出しは、Claude Code と別の worktree で行う。例外として、`impl-light` と `impl-standard` が委譲する GPT 側の実行は、メインセッションが同じファイルを同時に編集しない前提で同一 worktree に書く。
+- 作業ツリーの分離: 書き込み可能な Codex 呼び出しは、Claude Code と別の worktree で行う。例外として、`impl-hard`、`impl-light`、`impl-standard` が委譲する GPT 側の実行は、メインセッションが同じファイルを同時に編集しない前提で同一 worktree に書く。
 
 ## CLAUDE.md と AGENTS.md の同期
 
