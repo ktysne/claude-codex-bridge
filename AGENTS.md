@@ -51,7 +51,7 @@ dotnet build gui/CodexBridgeConsole.sln -c Release  # 設定コンソール
 dotnet test gui/CodexBridgeConsole.sln -c Release
 ```
 
-エージェント定義(`.claude/agents/*.md`)を変更した場合、Claude Code のセッションを再起動しないと反映されない。
+エージェント定義(`.claude/agents/*.md`)の変更は、そのディレクトリがセッション開始時から在れば数秒で次の委譲に反映される。再起動が要る条件は [docs/setup.md](docs/setup.md) の共通手順 6 にある。
 
 ## 相互レビュー
 
