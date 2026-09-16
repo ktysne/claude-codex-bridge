@@ -43,6 +43,43 @@ Codex 側のモデル、effort、認証ホームは `.claude/gpt-agents/` の定
 Codex CLI は認証情報を `$CODEX_HOME/auth.json` に保存し、他の場所を参照しない。
 そのため `CODEX_HOME` を分けるだけで、アカウントごとの認証、設定、セッションログが完全に分離される。
 
+## Codex を呼ぶ 3 つの系統
+
+Claude Code から Codex を呼ぶ入口は、このリポジトリのほかに 2 つある。
+どれもレビューと呼べる機能を持つため、用途を決めておかないと毎回選び直すことになる。
+
+| 系統 | 役割 | 入口 | 使う認証ホーム |
+|---|---|---|---|
+| claude-codex-bridge(このリポジトリ) | `CODEX_HOME` とサンドボックスを定義ファイルで固定して `codex exec` を起動する層。実装の委譲と、レビュー依頼の転送を担う | `Agent` ツールの `impl-hard`、`impl-light`、`impl-standard`、`codex-review`、`codex-subagent`。または `bash ~/.claude/tools/codex-agent.sh <定義名>` | `.claude/gpt-agents/<定義名>.md` の `codex_home` |
+| ai-cross-review | 差分を取り出してレビュアーへ渡し、指摘と対応の往復を PR に記録する CLI | `npm run review:codex`、`npm run review:claude`、`node tools/cross-review.js subagent` | bridge 経由で起動できたときは bridge と同じ。直接起動へ戻ったときは、環境の `CODEX_HOME` (未設定なら既定ホーム) |
+| 公式プラグイン `codex@openai-codex` | Codex を救援役として呼ぶ。セッション共有の broker 経由で `codex app-server` を起動する | `/codex:rescue`、`Agent` ツールの `codex:codex-rescue`、`/codex:review`、Stop フックのレビューゲート | 既定ホーム `~/.codex`。broker の起動時に固定される |
+
+用途は次のように割り当てる。
+
+- **差分のレビュー**：ai-cross-review を使う。指摘、対応、妥当性確認の往復が PR に残る。Codex 側は bridge 経由で起動できたときに限り、認証ホームとサンドボックスが定義ファイルで固定される。経由できる条件は [docs/cross-review.md](docs/cross-review.md) の「codex の起動は bridge を経由する」にあり、実際にどちらで動いたかは実行時の通知と `.cross-review/` に残るメタ情報の `via` でわかる。
+- **実装の委譲**：bridge の `impl-hard`、`impl-light`、`impl-standard` を使う。難易度で選ぶ規則は [docs/setup.md](docs/setup.md) の共通手順 5 にある。
+- **単発のレビュー依頼と調査**：bridge の `codex-review` と `codex-subagent` を使う。ai-cross-review が Codex を起動するときも同じ 2 定義を使い、`--fix` 無しなら `codex-review`、`--fix` 付きなら `codex-subagent` を選ぶ。
+- **救援**：公式プラグインを使う。行き詰まった実装の引き取りや、別実装での診断は bridge に無い。
+
+公式プラグインを救援に限るのは、製品の制限ではなくこのリポジトリの運用方針である。
+プラグインは broker プロセスの環境変数を起動時に固定するため、呼び出しごとに `CODEX_HOME` を切り替えられない。
+用途別にアカウントを分ける運用は bridge の定義ファイルで行い、プラグインは既定ホームのアカウントで使う。
+
+### Stop レビューゲートの扱い
+
+公式プラグインは、セッションの停止時に Codex のレビューを挟む Stop フックを持つ。
+このフックはワークスペースごとの設定 `stopReviewGate` が真のときだけレビューを起動し、偽なら何もせずに戻る。
+既定は偽であり、プラグインを入れただけでは停止のたびにレビューが走ることはない。
+
+現在の状態は `/codex:setup` の出力にある `review gate:` の行でわかる。
+ゲートを使わない運用にするなら、そのワークスペースで次を実行して `disabled` を確認する。
+
+```text
+/codex:setup --disable-review-gate
+```
+
+ゲートの既定値と設定の持ち方は、プラグイン 1.0.6 で確認した。
+
 ## ファイル
 
 | パス | 役割 |
