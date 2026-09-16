@@ -9,6 +9,29 @@
 # 依頼文は標準入力から読む。引数に埋め込むと引用符の扱いで壊れやすいためである。
 # 呼び出し側はヒアドキュメントで渡す。
 #
+# 標準出力(Codex を起動する場合):
+#   codex-agent: agent=... model=... effort=... sandbox=... codex_home=... workdir=...   監査行
+#   codex-agent: run=<実行 ID> pid=<ラッパーの PID> started=<UTC の ISO 8601>            Codex の起動前に出す
+#   codex-agent: log=<ログのパス>                                                         Codex の起動前に出す
+#   <最終報告>(失敗時はログの末尾と根拠の行)
+#   codex-agent: result=...
+# run= と log= の行を起動前に出すのは、呼び出し側がバックグラウンドへ移ったあとも、
+# 実行中にログの場所と止める対象を特定できるようにするためである。
+# 実行 ID はログファイル名から拡張子を除いたものである。
+# PID は Git Bash では /proc/$$/winpid の Windows の PID、読めない環境では $$ である。
+# ラッパーは停止のシグナルを受けて子を止める処理を持たない。
+# Claude Code の Bash ツールがバックグラウンドのコマンドを止めても、ラッパーにシグナルが届かないためである。
+# Windows で止めるときは、この pid を taskkill /T /F で止めたあと、
+# コマンドラインに <実行 ID>.last(-o に渡す最終報告の受け皿)を含む Codex 側のプロセスも止める。
+# Git Bash が Git Bash 系のプログラム(npm のシムの sh など)を起動すると Windows 上の親子関係が途切れ、
+# ラッパーの pid への taskkill /T だけでは Codex まで届かないためである。手順は docs/gpt-agents.md の「既知の制約」にある。
+#
+# 実行ログ(~/.claude/codex-agent/logs/<実行 ID>.log):
+#   1 行目は run= の行と同じ内容である。
+#   Codex の標準エラーは実行中から行ごとに追記する。続けて、終了後に Codex の標準出力を追記する。
+#   最後の行は標準出力へ出すのと同じ result= の行である。ログだけで完了と結果を判定できるようにするためである。
+#   Codex の起動前に止まる経路(終了コード 2、3、試験用フック)ではログを作らない。
+#
 # 終了コード:
 #   0   Codex が正常に終了した
 #   2   引数、定義ファイルの内容、環境の不備でスクリプトが起動しなかった
@@ -40,6 +63,10 @@ usage() {
                     (low|medium|high|xhigh|max|ultra)
 
 依頼文は標準入力から読む。
+
+標準出力は、監査行、run= の行、log= の行、最終報告、result= の行の順である。
+run= の行と log= の行は Codex の起動前に出す。
+実行中の委譲を止める手順は docs/gpt-agents.md の「既知の制約」にある。
 
 終了コード:
   0   Codex が正常に終了した
@@ -272,18 +299,35 @@ chmod 700 "$log_dir" 2>/dev/null || true
 # 残し続けると 1 回あたり数百 KB が溜まるため、古いものを落とす。
 find "$log_dir" -maxdepth 1 -type f -name '*.log' -mtime +7 -delete 2>/dev/null || true
 
-log_base="$log_dir/$agent_name-$(date +%Y%m%d-%H%M%S)-$$"
+# 実行 ID はログファイル名から拡張子を除いたものにする。run= の行と log= の行を突き合わせられるようにするためである。
+run_id="$agent_name-$(date +%Y%m%d-%H%M%S)-$$"
+log_base="$log_dir/$run_id"
 log_file="$log_base.log"
 out_file="$(mktemp)"
-err_file="$(mktemp)"
-err_filtered="$(mktemp)"
 last_msg_file="$log_base.last"
-# 先に作って権限を落とす。あとの書き込みは truncate なので、この権限が残る。
+# 先に作って権限を落とす。あとの書き込みは truncate か追記なので、この権限が残る。
 : >"$log_file" || die "実行ログを作れない: $log_file"
 : >"$last_msg_file" || die "最終報告の受け皿を作れない: $last_msg_file"
 chmod 600 "$log_file" "$last_msg_file" 2>/dev/null || true
 # ログ本体だけを残す。他は標準出力へ出すかログへ写した時点で役目を終える。
-trap 'rm -f "$out_file" "$err_file" "$err_filtered" "$last_msg_file"' EXIT
+trap 'rm -f "$out_file" "$last_msg_file"' EXIT
+
+# 止める対象を特定できるよう、Git Bash では Windows の PID を出す。
+# taskkill が受け付けるのは Windows の PID であり、$$ は Git Bash 内の番号で一致しないためである。
+run_pid="$$"
+if [ -r "/proc/$$/winpid" ]; then
+  winpid="$(cat "/proc/$$/winpid" 2>/dev/null)"
+  case "$winpid" in
+    ''|*[!0-9]*) ;;
+    *) run_pid="$winpid" ;;
+  esac
+fi
+run_line="codex-agent: run=$run_id pid=$run_pid started=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+printf '%s\n' "$run_line" >>"$log_file"
+
+# Codex の起動前に出す。実行中に呼び出し側がログの場所と止める対象を知るための行である。
+printf '%s\n' "$run_line"
+printf 'codex-agent: log=%s\n' "$(to_windows_path "$log_file")"
 
 # 失敗時と、最終報告を取り出せない場合に出すログの行数。
 tail_lines=40
@@ -296,6 +340,22 @@ end_newline() {
     printf '\n'
   fi
   return 0
+}
+
+# result 行を標準出力とログの末尾の両方へ出して終わる。
+# ログの最後の行を標準出力の最後の行と同じにし、ログだけで完了と結果を判定できるようにする。
+# finish <result の値> <終了コード>
+finish() {
+  printf 'codex-agent: result=%s\n' "$1"
+  printf 'codex-agent: result=%s\n' "$1" >>"$log_file"
+  exit "$2"
+}
+
+# ログから先頭の run= の行を除いた本文を出す。
+# 失敗時に標準出力へ出す末尾と、失敗の判定の対象には run= の行を含めない。
+# 前者は標準出力に run= の行を 2 回出さないため、後者は実行 ID や PID の数字が判定の語(429 など)に一致しうるためである。
+log_body() {
+  tail -n +2 "$log_file"
 }
 
 # --output-last-message は Codex の版によって無い。無い版ではログの末尾を報告の代わりに出す。
@@ -324,17 +384,23 @@ fi
 # 承認方針は never に固定する。このスクリプトは非対話の委譲専用で承認を返す相手がいないため、
 # 呼び出し側の config.toml が on-request 等でも承認待ちで止まらないようにする。
 # -c approval_policy=never は codex_args に入れず、この起動行に直接書く。
-# ai-cross-review の cross-review.js は、codex exec の起動行の文字列にこの指定がある場合に限って
-# bridge 経由を選ぶ。配列の中身までは追わないため、配列へ移すと直接起動へ戻ってしまう。
-CODEX_HOME="$codex_home" codex exec -c approval_policy=never "${codex_args[@]}" - <<<"$prompt" >"$out_file" 2>"$err_file"
-codex_status=$?
+# ai-cross-review の cross-review.js は、codex exec の起動行の文字列(\ で続けた行を含む論理行)に
+# この指定がある場合に限って bridge 経由を選ぶ。配列の中身までは追わないため、配列へ移すと直接起動へ戻ってしまう。
+#
+# 標準エラーはパイプで受け、実行中から行ごとにログへ追記する。実行中にログの末尾で経過を読めるようにするためである。
+# WARNING で始まる行と hook: で始まる行は、ログへ書く時点で除く。
+# grep --line-buffered は、1 行ごとに書き出してログへの反映を遅らせないために付ける。
+# 標準出力(最終回答)は一時ファイルに受け、終了後にログへ追記する。
+# プロセス置換でなくパイプラインにするのは、書き込み側の終了を待ってから次へ進むためである。
+# Codex の終了コードは PIPESTATUS の先頭から取る。grep の終了コード(除いた結果が空なら 1)は使わない。
+CODEX_HOME="$codex_home" codex exec -c approval_policy=never "${codex_args[@]}" - <<<"$prompt" 2>&1 >"$out_file" \
+  | grep --line-buffered -v -e '^WARNING' -e '^hook:' >>"$log_file"
+codex_status="${PIPESTATUS[0]}"
 
-# 標準エラーからはフックと警告の行だけを除く。
-grep -v -e '^WARNING' -e '^hook:' "$err_file" >"$err_filtered"
-# 経過(標準エラー)と最終回答(標準出力)を、従来どおりの順でログへ写す。
-{ cat "$err_filtered"; cat "$out_file"; } >"$log_file"
-
-printf 'codex-agent: log=%s\n' "$(to_windows_path "$log_file")"
+# 経過(標準エラー)に続けて最終回答(標準出力)をログへ写す。
+cat "$out_file" >>"$log_file"
+# 最終回答が改行で終わらなくても、あとで追記する result= の行が独立した行になるようにする。
+end_newline "$log_file" >>"$log_file"
 
 if [ "$codex_status" -eq 0 ]; then
   if [ -s "$last_msg_file" ]; then
@@ -345,14 +411,14 @@ if [ "$codex_status" -eq 0 ]; then
     tail -n "$tail_lines" "$out_file"
     end_newline "$out_file"
   fi
-  printf 'codex-agent: result=ok\n'
-  exit 0
+  finish ok 0
 fi
 
 # 失敗したときは原因を追えるようにする。ログの末尾だけを出す。
 # 全文を出すと、肥大を避けるためにログへ移した意味がなくなる。
-tail -n "$tail_lines" "$log_file"
-end_newline "$log_file"
+# この時点のログにはまだ result= の行が無いため、標準出力の result= の行は最後の 1 回だけになる。
+# ログは直前に改行で終わる形に揃えてあるため、続く行が繋がらない。
+log_body | tail -n "$tail_lines"
 
 # 判定の対象は、失敗を告げる行と出力の末尾に絞る。
 # ログには Codex が読んだファイルの中身も流れるため、全文を対象にすると
@@ -363,8 +429,8 @@ end_newline "$log_file"
 # 抽出と末尾で同じ行が二重に入るため、重複は落とす。
 evidence="$(
   {
-    grep -iE '^[[:space:]]*(ERROR|stream error)' "$log_file"
-    tail -n 10 "$log_file"
+    log_body | grep -iE '^[[:space:]]*(ERROR|stream error)'
+    log_body | tail -n 10
   } 2>/dev/null | awk '!seen[$0]++'
 )"
 
@@ -384,8 +450,7 @@ emit_evidence() {
 matched="$(printf '%s\n' "$evidence" | grep -iE 'usage limit|rate limit|too many requests|\b429\b' | head -n 3)"
 if [ -n "$matched" ]; then
   emit_evidence 'rate-limit' "$matched"
-  printf 'codex-agent: result=rate-limited\n'
-  exit 75
+  finish rate-limited 75
 fi
 
 # 利用上限のほかにも、呼び出し側では直せない GPT 側の事情で実行できないことがある。
@@ -395,17 +460,15 @@ fi
 matched="$(printf '%s\n' "$evidence" | grep -iE 'at capacity' | head -n 3)"
 if [ -n "$matched" ]; then
   emit_evidence 'unavailable' "$matched"
-  printf 'codex-agent: result=unavailable\n'
-  exit 75
+  finish unavailable 75
 fi
 
-printf 'codex-agent: result=failed exit=%s\n' "$codex_status"
 # Codex 自身の 75 は、GPT 側が使えないことを示す 75 と区別できないため 1 に写像する。
-# 元の値は直前の result 行に残している。
+# 元の値は result 行に残す。
 if [ "$codex_status" -eq 75 ]; then
-  exit 1
+  finish "failed exit=$codex_status" 1
 fi
-exit "$codex_status"
+finish "failed exit=$codex_status" "$codex_status"
 }
 
 # main の後ろにコードを置かない。この行までを読み終えてから実行が始まる。
