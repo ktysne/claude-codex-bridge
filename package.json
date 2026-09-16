@@ -9,6 +9,8 @@
     "review:claude": "node tools/cross-review.js claude",
     "sync:cross-review": "node tools/cross-review.sync.js",
     "sync:cross-review:dry": "node tools/cross-review.sync.js --dry-run",
-    "sync:cross-review:check": "node tools/cross-review.sync.js --check"
+    "sync:cross-review:check": "node tools/cross-review.sync.js --check",
+    "test:codex-agent": "bash tools/test/codex-agent.test.sh",
+    "test": "npm run test:codex-agent && npm run --if-present test:metrics"
   }
 }

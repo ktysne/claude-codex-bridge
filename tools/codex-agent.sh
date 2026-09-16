@@ -300,10 +300,13 @@ end_newline() {
 
 # --output-last-message は Codex の版によって無い。無い版ではログの末尾を報告の代わりに出す。
 # 認証ホームはこの確認でも明示する。codex を呼ぶ経路に既定の ~/.codex への暗黙依存を残さない。
+# ヘルプは変数に受けてから調べる。pipefail の下で grep -q へパイプすると、一致した時点で grep が終わり、
+# 残りを書こうとした codex が SIGPIPE で失敗して、有る版でも無い版と判定されることがあるためである。
 output_last_message=0
-if CODEX_HOME="$codex_home" codex exec --help 2>/dev/null | grep -q -- '--output-last-message'; then
-  output_last_message=1
-fi
+codex_help="$(CODEX_HOME="$codex_home" codex exec --help 2>/dev/null)"
+case "$codex_help" in
+  *--output-last-message*) output_last_message=1 ;;
+esac
 
 codex_args=(
   --skip-git-repo-check
