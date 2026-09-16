@@ -310,7 +310,6 @@ codex_args=(
   --sandbox "$codex_sandbox"
   -m "$codex_model"
   -c "model_reasoning_effort=\"$codex_effort\""
-  -c approval_policy=never
   -C "$workdir"
 )
 if [ "$output_last_message" -eq 1 ]; then
@@ -320,9 +319,11 @@ fi
 # 認証ホームは常に明示する。既定の ~/.codex への暗黙依存を作らない。
 # --dangerously-bypass-approvals-and-sandbox は付けない。
 # 承認方針は never に固定する。このスクリプトは非対話の委譲専用で承認を返す相手がいないため、
-# 呼び出し側の config.toml が on-request 等でも承認待ちで止まらないようにする
-# (ai-cross-review の cross-review.js は、この明示があるスクリプトに限って bridge 経由を選ぶ)。
-CODEX_HOME="$codex_home" codex exec "${codex_args[@]}" - <<<"$prompt" >"$out_file" 2>"$err_file"
+# 呼び出し側の config.toml が on-request 等でも承認待ちで止まらないようにする。
+# -c approval_policy=never は codex_args に入れず、この起動行に直接書く。
+# ai-cross-review の cross-review.js は、codex exec の起動行の文字列にこの指定がある場合に限って
+# bridge 経由を選ぶ。配列の中身までは追わないため、配列へ移すと直接起動へ戻ってしまう。
+CODEX_HOME="$codex_home" codex exec -c approval_policy=never "${codex_args[@]}" - <<<"$prompt" >"$out_file" 2>"$err_file"
 codex_status=$?
 
 # 標準エラーからはフックと警告の行だけを除く。
