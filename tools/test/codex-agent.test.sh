@@ -181,6 +181,9 @@ FAKE
 #   sleep                   stderr を出したあとに待つ秒数
 #   help_delay              exec --help で --output-last-message の行を出したあと、残りを出す前に待つ秒数
 #   exit_code               終了コード(既定 0)
+#   native_wait             stderr を出したあと、Windows の ping.exe をこの回数で exec して待つ
+#                           npm のシム(sh スクリプトが node.exe を exec する形)と同じプロセスの形を作る
+# exec のときは、自分の PID を exec.pid に、Windows の PID が読めれば exec.winpid に書く。
 kind=other
 last_arg=""
 [ $# -gt 0 ] && last_arg="${!#}"
@@ -206,6 +209,10 @@ case "$kind" in
     exit 0
     ;;
   exec)
+    printf '%s\n' "$$" >"$FAKE_DIR/exec.pid"
+    if [ -r "/proc/$$/winpid" ]; then
+      cat "/proc/$$/winpid" >"$FAKE_DIR/exec.winpid"
+    fi
     cat >"$FAKE_DIR/exec.stdin.$$"
     cp "$FAKE_DIR/exec.stdin.$$" "$FAKE_DIR/exec.stdin"
     out=""
@@ -219,6 +226,9 @@ case "$kind" in
     fi
     [ -f "$FAKE_DIR/stdout" ] && cat "$FAKE_DIR/stdout"
     [ -f "$FAKE_DIR/stderr" ] && cat "$FAKE_DIR/stderr" >&2
+    if [ -f "$FAKE_DIR/native_wait" ]; then
+      exec "$(cat "$FAKE_DIR/ping_exe")" -n "$(cat "$FAKE_DIR/native_wait")" 127.0.0.1 >/dev/null
+    fi
     [ -f "$FAKE_DIR/sleep" ] && sleep "$(cat "$FAKE_DIR/sleep")"
     code=0
     [ -f "$FAKE_DIR/exit_code" ] && code="$(cat "$FAKE_DIR/exit_code")"
@@ -306,6 +316,90 @@ check_log_path() {
 
 only_log_file() {
   ls "$(logs_dir)"/*.log 2>/dev/null | head -n 1
+}
+
+# 標準出力の log= の行が指すログのパス。
+out_log_path() {
+  sed -n 's/^codex-agent: log=//p' "$1" | head -n 1
+}
+
+# ラッパーをバックグラウンドで起動する。標準出力と標準エラーの行き先、PATH などは run_wrapper と同じである。
+# 起動したサブシェルの PID を BG_PID に入れる。終了は finish_bg_wrapper で待つ。
+start_bg_wrapper() {
+  local path="$root/bin:/usr/bin:/bin"
+  (
+    cd "$root/work" || exit 99
+    export USERPROFILE="$root/home" HOME="$root/home" PATH="$path" TMPDIR="$root/tmp"
+    printf '%s' "$REQ" | "$BASH_BIN" "$WRAPPER" "$@" >"$root/out" 2>"$root/err"
+  ) &
+  BG_PID=$!
+}
+
+finish_bg_wrapper() {
+  wait "$BG_PID"
+  RC=$?
+  check_log_path "$root/out"
+}
+
+# 条件が成り立つまで 0.1 秒おきに確かめる。上限を過ぎたら 1 を返す。
+# wait_until <上限の秒数> <コマンド...>
+wait_until() {
+  local limit=$(( $1 * 10 )) i=0
+  shift
+  while ! "$@"; do
+    i=$((i + 1))
+    [ "$i" -lt "$limit" ] || return 1
+    sleep 0.1
+  done
+  return 0
+}
+
+# 実行中のラッパーの標準出力に log= の行が出て、そのログに印の行が書かれている。
+running_log_has() {
+  local log
+  log="$(out_log_path "$root/out")"
+  [ -n "$log" ] && [ -f "$log" ] && grep -Fq -- "$1" "$log"
+}
+
+# 実行中の観測に使う偽 codex の振る舞い。印の行を stderr に出したあと待つ。
+set_running_fake() {
+  fake_set stderr 'WARNING: 警告の行
+hook: フックの行
+経過: 実行中の印
+'
+  fake_set last_message '報告
+'
+  fake_set sleep "$1"
+}
+
+# 完了後のログの最後の行が標準出力の最後の行(result= の行)と一致し、
+# 標準出力の result= の行と run= の行がそれぞれちょうど 1 回である。
+expect_log_ends_with_result() {
+  local log last
+  last="$(last_out_line)"
+  case "$last" in
+    "codex-agent: result="*) ;;
+    *) fail "標準出力の最後の行が result= の行でない: [$last]" ;;
+  esac
+  expect_eq "標準出力の result= の行数" "1" "$(grep -c '^codex-agent: result=' "$root/out")"
+  expect_eq "標準出力の run= の行数" "1" "$(grep -c '^codex-agent: run=' "$root/out")"
+  log="$(out_log_path "$root/out")"
+  if [ -z "$log" ] || [ ! -f "$log" ]; then
+    fail "log= の行が指すログが無い: [$log]"
+    return
+  fi
+  expect_eq "ログの最後の行" "$last" "$(tail -n 1 "$log")"
+  expect_eq "ログの result= の行数" "1" "$(grep -c '^codex-agent: result=' "$log")"
+  expect_eq "ログの 1 行目" "$(sed -n 2p "$root/out")" "$(sed -n 1p "$log")"
+}
+
+# Windows のプロセスとして残っているか。tasklist の CSV 出力で PID の列を照合する。
+win_pid_alive() {
+  tasklist //FI "PID eq $1" //NH //FO CSV 2>/dev/null | grep -Fq "\"$1\""
+}
+
+win_pid_gone() {
+  ! win_pid_alive "$1"
 }
 
 # ---------------------------------------------------------------------------
@@ -397,7 +491,7 @@ hook: フックの行
 '
   run_wrapper "$AGENT"
   expect_rc 0
-  expect_eq "標準出力の行数" "5" "$(wc -l <"$root/out" | tr -d ' ')"
+  expect_eq "標準出力の行数" "6" "$(wc -l <"$root/out" | tr -d ' ')"
   local l1
   l1="$(sed -n 1p "$root/out")"
   case "$l1" in
@@ -405,12 +499,16 @@ hook: フックの行
     *) fail "1 行目が監査行でない: [$l1]" ;;
   esac
   case "$(sed -n 2p "$root/out")" in
-    "codex-agent: log="*) ;;
-    *) fail "2 行目が log= の行でない: [$(sed -n 2p "$root/out")]" ;;
+    "codex-agent: run=$AGENT-"*" pid="*" started="*) ;;
+    *) fail "2 行目が run= の行でない: [$(sed -n 2p "$root/out")]" ;;
   esac
-  expect_eq "3 行目" "最終報告の1行目" "$(sed -n 3p "$root/out")"
-  expect_eq "4 行目" "最終報告の2行目" "$(sed -n 4p "$root/out")"
-  expect_eq "5 行目" "codex-agent: result=ok" "$(sed -n 5p "$root/out")"
+  case "$(sed -n 3p "$root/out")" in
+    "codex-agent: log="*) ;;
+    *) fail "3 行目が log= の行でない: [$(sed -n 3p "$root/out")]" ;;
+  esac
+  expect_eq "4 行目" "最終報告の1行目" "$(sed -n 4p "$root/out")"
+  expect_eq "5 行目" "最終報告の2行目" "$(sed -n 5p "$root/out")"
+  expect_eq "6 行目" "codex-agent: result=ok" "$(sed -n 6p "$root/out")"
   expect_out_no_match "経過: 考えている"
   expect_out_no_match "FAKE-STDOUT-MARK"
   if grep -Fq "経過: 考えている" "$root/err"; then
@@ -423,6 +521,9 @@ hook: フックの行
   else
     grep -Fq "経過: 考えている" "$log" || fail "ログに経過(stderr)が無い"
     grep -Fq "FAKE-STDOUT-MARK" "$log" || fail "ログに codex の stdout が無い"
+    if grep -qE '^(WARNING|hook:)' "$log"; then
+      fail "ログに WARNING か hook: の行が残っている"
+    fi
     expect_eq "log= の値" "$(norm_path "$log")" "$(norm_path "$(sed -n 's/^codex-agent: log=//p' "$root/out")")"
   fi
 }
@@ -443,7 +544,7 @@ t_no_output_last_message() {
     for i in $(seq 11 50); do printf 'stdout-line-%s\n' "$i"; done
     printf 'codex-agent: result=ok\n'
   } >"$root/expected_tail"
-  tail -n +3 "$root/out" >"$root/actual_tail"
+  tail -n +4 "$root/out" >"$root/actual_tail"
   if ! cmp -s "$root/expected_tail" "$root/actual_tail"; then
     fail "報告が標準出力の末尾 40 行になっていない: 実際の先頭=[$(head -n 2 "$root/actual_tail" | tr '\n' ' ')] 行数=$(wc -l <"$root/actual_tail" | tr -d ' ')"
   fi
@@ -468,7 +569,7 @@ t_empty_last_message() {
   run_wrapper "$AGENT"
   expect_rc 0
   exec_args | grep -Fxq -- '-o' || fail "-o が渡っていない"
-  expect_eq "3 行目" "report-from-stdout" "$(sed -n 3p "$root/out")"
+  expect_eq "4 行目" "report-from-stdout" "$(sed -n 4p "$root/out")"
   expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
 }
 
@@ -797,16 +898,214 @@ hook: フックの行
   cp "$root/out1" "$root/out"
 }
 
-t_log_prune() {
-  mkdir -p "$(logs_dir)"
-  : >"$(logs_dir)/old-9days.log"
-  : >"$(logs_dir)/recent-6days.log"
-  touch -d '9 days ago' "$(logs_dir)/old-9days.log"
-  touch -d '6 days ago' "$(logs_dir)/recent-6days.log"
+# 実行中(偽 codex が stderr を出したあと待っている間)に、標準出力へ run= と log= の行が出ている。
+# 完了の前に確かめたことは、標準出力にまだ result= の行が無いことで裏付ける。
+t_running_out_lines() {
+  set_running_fake 3
+  start_bg_wrapper "$AGENT"
+  if ! wait_until 10 running_log_has '経過: 実行中の印'; then
+    fail "実行中のログに印の行が現れない"
+    finish_bg_wrapper
+    return
+  fi
+  if grep -q '^codex-agent: result=' "$root/out"; then
+    fail "確かめる前にラッパーが終わっていた(偽 codex の待ちが短い)"
+  fi
+  cp "$root/out" "$root/out.running"
+  local run_line log_line run_id pid started log_name
+  run_line="$(sed -n 2p "$root/out.running")"
+  log_line="$(sed -n 3p "$root/out.running")"
+  case "$(sed -n 1p "$root/out.running")" in
+    "codex-agent: agent=$AGENT "*) ;;
+    *) fail "実行中の 1 行目が監査行でない: [$(sed -n 1p "$root/out.running")]" ;;
+  esac
+  case "$run_line" in
+    "codex-agent: run="*) ;;
+    *) fail "実行中の 2 行目が run= の行でない: [$run_line]" ;;
+  esac
+  case "$log_line" in
+    "codex-agent: log="*) ;;
+    *) fail "実行中の 3 行目が log= の行でない: [$log_line]" ;;
+  esac
+  run_id="$(printf '%s\n' "$run_line" | sed -n 's/^codex-agent: run=\([^ ]*\) pid=[^ ]* started=[^ ]*$/\1/p')"
+  pid="$(printf '%s\n' "$run_line" | sed -n 's/^codex-agent: run=[^ ]* pid=\([^ ]*\) started=[^ ]*$/\1/p')"
+  started="$(printf '%s\n' "$run_line" | sed -n 's/^codex-agent: run=[^ ]* pid=[^ ]* started=\([^ ]*\)$/\1/p')"
+  log_name="$(basename "${log_line#codex-agent: log=}")"
+  [ -n "$run_id" ] || fail "run= の行から実行 ID を読めない: [$run_line]"
+  expect_eq "実行 ID とログのファイル名" "$run_id.log" "$log_name"
+  case "$run_id" in
+    "$AGENT-"[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]-*) ;;
+    *) fail "実行 ID が <agent>-<YYYYmmdd-HHMMSS>-<PID> の形でない: [$run_id]" ;;
+  esac
+  case "$pid" in
+    ''|*[!0-9]*) fail "pid= の値が数字でない: [$pid]" ;;
+  esac
+  printf '%s\n' "$started" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' \
+    || fail "started= が UTC の ISO 8601 形式でない: [$started]"
+  finish_bg_wrapper
+  expect_rc 0
+}
+
+# 実行中のログに、偽 codex の stderr の行が既に書かれ、先頭行が run= の行で、WARNING 行と hook 行が無い。
+t_running_log() {
+  set_running_fake 3
+  start_bg_wrapper "$AGENT"
+  if ! wait_until 10 running_log_has '経過: 実行中の印'; then
+    fail "実行中のログに印の行が現れない"
+    finish_bg_wrapper
+    return
+  fi
+  local log
+  log="$(out_log_path "$root/out")"
+  cp "$log" "$root/log.running"
+  if grep -q '^codex-agent: result=' "$root/out"; then
+    fail "確かめる前にラッパーが終わっていた(偽 codex の待ちが短い)"
+  fi
+  expect_eq "実行中のログの 1 行目" "$(sed -n 2p "$root/out")" "$(sed -n 1p "$root/log.running")"
+  case "$(sed -n 1p "$root/log.running")" in
+    "codex-agent: run="*) ;;
+    *) fail "実行中のログの 1 行目が run= の行でない: [$(sed -n 1p "$root/log.running")]" ;;
+  esac
+  if grep -qE '^(WARNING|hook:)' "$root/log.running"; then
+    fail "実行中のログに WARNING か hook: の行が書かれている"
+  fi
+  if grep -q '^codex-agent: result=' "$root/log.running"; then
+    fail "実行中のログに result= の行がある"
+  fi
+  finish_bg_wrapper
+  expect_rc 0
+}
+
+t_log_result_ok() {
+  fake_set last_message '報告
+'
+  fake_set stderr '経過の行
+'
   run_wrapper "$AGENT"
   expect_rc 0
-  [ ! -e "$(logs_dir)/old-9days.log" ] || fail "9 日前のログが消えていない"
-  [ -e "$(logs_dir)/recent-6days.log" ] || fail "6 日前のログが消えている"
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
+  expect_log_ends_with_result
+}
+
+t_log_result_rate_limited() {
+  fake_set stderr "ERROR: You've hit your usage limit.
+"
+  fake_set exit_code 1
+  run_wrapper "$AGENT"
+  expect_rc 75
+  expect_eq "最後の行" "codex-agent: result=rate-limited" "$(last_out_line)"
+  expect_log_ends_with_result
+}
+
+# 最終回答が改行で終わらない失敗でも、ログの result= の行は独立した行になる。
+t_log_result_failed() {
+  fake_set stderr 'ERROR: something went wrong
+'
+  fake_set stdout '改行で終わらない出力'
+  fake_set exit_code 1
+  run_wrapper "$AGENT"
+  expect_rc 1
+  expect_eq "最後の行" "codex-agent: result=failed exit=1" "$(last_out_line)"
+  expect_out_line "改行で終わらない出力"
+  expect_log_ends_with_result
+}
+
+# Windows で、コマンドラインに <実行 ID>.last を含むプロセス(-o で最終報告の受け皿を受け取る Codex 側)の PID を 1 行ずつ出す。
+# 実行 ID は環境変数で渡す。コマンドラインに実行 ID を書くと、問い合わせた PowerShell 自身が一致するためである。
+win_codex_side_pids() {
+  RUN_ID="$1" powershell -NoProfile -NonInteractive -Command \
+    'Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like ("*" + $env:RUN_ID + ".last*") } | ForEach-Object { $_.ProcessId }' \
+    2>/dev/null | tr -d '\r'
+}
+
+# Windows で、指定した PID の直接の子の PID を 1 行ずつ出す。
+win_child_pids() {
+  powershell -NoProfile -NonInteractive -Command \
+    "Get-CimInstance Win32_Process -Filter 'ParentProcessId=$1' | ForEach-Object { \$_.ProcessId }" \
+    2>/dev/null | tr -d '\r'
+}
+
+# 中断の手順を確かめる。docs/gpt-agents.md の「既知の制約」に書いた手順と同じ順で止める。
+#   1. run= の行の pid を taskkill /T /F で止める。ラッパーが result= の行を書かないようにするためである。
+#   2. コマンドラインに実行 ID を含む Codex 側のプロセスを taskkill /T /F で止める。
+# 2 が要るのは、Git Bash が Git Bash 系のプログラム(npm のシムの sh など)を exec すると、
+# 中継のプロセスが終わって Windows 上の親子関係が途切れ、1 の taskkill /T が Codex まで届かないためである。
+# 偽 codex は npm のシムと同じ形(bash スクリプトが Windows の実行ファイルを exec する)をとる。
+# Windows の Git Bash に限る。他の環境では PID の体系と停止の手段が違うため確かめない。
+t_kill_by_run_pid() {
+  local ping_exe=""
+  ping_exe="$(command -v PING.EXE 2>/dev/null || command -v ping.exe 2>/dev/null)"
+  if [ ! -r "/proc/$$/winpid" ] || ! command -v taskkill >/dev/null 2>&1 || ! command -v tasklist >/dev/null 2>&1 \
+    || ! command -v powershell >/dev/null 2>&1 || [ -z "$ping_exe" ]; then
+    skip "/proc/<pid>/winpid、taskkill、tasklist、powershell、ping.exe のいずれかが無い(Windows の Git Bash 以外)"
+    return
+  fi
+  fake_set stderr 'WARNING: 警告の行
+経過: 実行中の印
+'
+  fake_set ping_exe "$ping_exe"
+  fake_set native_wait 30
+  start_bg_wrapper "$AGENT"
+  if ! wait_until 10 running_log_has '経過: 実行中の印' || [ ! -s "$root/fake/exec.winpid" ]; then
+    fail "偽 codex の起動を確かめられない"
+    [ -s "$root/fake/exec.winpid" ] && taskkill //T //F //PID "$(tr -d '\r\n' <"$root/fake/exec.winpid")" >/dev/null 2>&1
+    finish_bg_wrapper
+    return
+  fi
+  local pid run_id fake_pid children side p
+  pid="$(sed -n 's/^codex-agent: run=[^ ]* pid=\([0-9][0-9]*\) started=.*$/\1/p' "$root/out")"
+  run_id="$(sed -n 's/^codex-agent: run=\([^ ]*\) pid=.*$/\1/p' "$root/out")"
+  fake_pid="$(tr -d '\r\n' <"$root/fake/exec.winpid")"
+  children="$(win_child_pids "$fake_pid")"
+  if [ -z "$pid" ] || [ -z "$run_id" ]; then
+    fail "run= の行から pid か実行 ID を読めない"
+    taskkill //T //F //PID "$fake_pid" >/dev/null 2>&1
+    finish_bg_wrapper
+    return
+  fi
+  win_pid_alive "$fake_pid" || fail "停止の前に偽 codex(PID $fake_pid)が見つからない"
+  [ -n "$children" ] || fail "停止の前に偽 codex の子(ping.exe)が見つからない"
+
+  taskkill //T //F //PID "$pid" >"$root/taskkill.out" 2>&1 || fail "ラッパーの taskkill が失敗した"
+  wait_until 5 win_pid_gone "$pid" || fail "taskkill のあともラッパー(PID $pid)が残っている"
+
+  side="$(win_codex_side_pids "$run_id")"
+  printf '%s\n' "$side" | grep -Fxq -- "$fake_pid" \
+    || fail "実行 ID で探した Codex 側のプロセスに偽 codex(PID $fake_pid)が無い: [$(printf '%s' "$side" | tr '\n' ' ')]"
+  for p in $side; do
+    taskkill //T //F //PID "$p" >>"$root/taskkill.out" 2>&1
+  done
+  for p in $fake_pid $children; do
+    if ! wait_until 5 win_pid_gone "$p"; then
+      fail "手順のあとも Codex 側のプロセス(PID $p)が残っている"
+      taskkill //T //F //PID "$p" >/dev/null 2>&1
+    fi
+  done
+  finish_bg_wrapper
+  if grep -q '^codex-agent: result=' "$root/out"; then
+    fail "止めたラッパーが標準出力に result= の行を出している"
+  fi
+  if grep -q '^codex-agent: result=' "$(out_log_path "$root/out")"; then
+    fail "止めたラッパーのログに result= の行がある"
+  fi
+}
+
+# .last と .out は、強制終了で EXIT の trap が動かなかった実行の残りであり、.log と同じ規則で落とす。
+t_log_prune() {
+  mkdir -p "$(logs_dir)"
+  local ext
+  for ext in log last out; do
+    : >"$(logs_dir)/old-9days.$ext"
+    : >"$(logs_dir)/recent-6days.$ext"
+    touch -d '9 days ago' "$(logs_dir)/old-9days.$ext"
+    touch -d '6 days ago' "$(logs_dir)/recent-6days.$ext"
+  done
+  run_wrapper "$AGENT"
+  expect_rc 0
+  for ext in log last out; do
+    [ ! -e "$(logs_dir)/old-9days.$ext" ] || fail "9 日前の .$ext が消えていない"
+    [ -e "$(logs_dir)/recent-6days.$ext" ] || fail "6 日前の .$ext が消えている"
+  done
 }
 
 t_no_leftover_temp() {
@@ -822,6 +1121,9 @@ t_no_leftover_temp() {
   local left
   left="$(ls "$(logs_dir)"/*.last 2>/dev/null)"
   [ -z "$left" ] || fail "*.last が残っている: $left"
+  left="$(ls "$(logs_dir)"/*.out 2>/dev/null)"
+  [ -z "$left" ] || fail "*.out が残っている: $left"
+  expect_eq "ログファイルの数" "2" "$(ls "$(logs_dir)"/*.log 2>/dev/null | wc -l | tr -d ' ')"
   left="$(ls -A "$root/tmp" 2>/dev/null)"
   [ -z "$left" ] || fail "TMPDIR に一時ファイルが残っている: $left"
 }
@@ -966,7 +1268,7 @@ run_case "起動引数: effort の既定は medium、sandbox の既定は read-o
 run_case "起動引数: -C <dir> の値が渡る" t_args_workdir
 run_case "依頼文: 役割文、---、## 依頼、依頼文の順で渡る" t_prompt_with_role
 run_case "依頼文: 役割文が無い定義では依頼文だけが渡る" t_prompt_without_role
-run_case "成功時の出力: 監査行、log=、最終報告、result=ok の順で、経過はログにだけ残る" t_success_output
+run_case "成功時の出力: 監査行、run=、log=、最終報告、result=ok の順で、経過はログにだけ残る" t_success_output
 run_case "--output-last-message が無い版: -o を渡さず標準出力の末尾 40 行を報告にする" t_no_output_last_message
 run_case "--output-last-message の判定: ヘルプの途中で読み手が終わっても有る版と判定する" t_help_detect_late_writer
 run_case "最終報告が空: 標準出力の末尾を報告にする" t_empty_last_message
@@ -1003,8 +1305,14 @@ run_case "フロントマター: 行末コメントを除く" t_fm_trailing_comm
 run_case "フロントマター: ダブルクォートを除く" t_fm_double_quotes
 run_case "フロントマター: シングルクォートを除く" t_fm_single_quotes
 run_case "ログ: 同時起動でログ名が衝突せず、WARNING と hook: の行を除く" t_log_concurrent
-run_case "ログ: 9 日前のログを消し、6 日前のログを残す" t_log_prune
-run_case "一時ファイル: 成功と失敗のあとに *.last と一時ファイルが残らない" t_no_leftover_temp
+run_case "実行中の出力: Codex の実行中に run= と log= の行が出ており、実行 ID と started= の形が正しい" t_running_out_lines
+run_case "実行中のログ: 先頭が run= の行で、stderr の行が既に書かれ、WARNING と hook: の行が無い" t_running_log
+run_case "完了後のログ(成功): 最後の行が標準出力の result=ok と一致し、result= は 1 回" t_log_result_ok
+run_case "完了後のログ(利用上限): 最後の行が標準出力の result=rate-limited と一致し、result= は 1 回" t_log_result_rate_limited
+run_case "完了後のログ(通常の失敗): 最後の行が標準出力の result=failed と一致し、result= と run= は 1 回" t_log_result_failed
+run_case "停止: run= の pid と実行 ID を含む Codex 側を taskkill /T /F で止めると、偽 codex まで止まり result= が残らない" t_kill_by_run_pid
+run_case "ログ: 9 日前の .log、.last、.out を消し、6 日前のものを残す" t_log_prune
+run_case "一時ファイル: 成功と失敗のあとに *.last、*.out、TMPDIR の一時ファイルが残らず、ログは残る" t_no_leftover_temp
 run_case "ログの権限: ログファイル 600、ログ置き場 700" t_log_permissions
 run_case "試験用フック: CODEX_AGENT_SIMULATE_RATE_LIMIT" t_simulate_rate_limit
 run_case "試験用フック: CODEX_AGENT_SIMULATE_UNAVAILABLE" t_simulate_unavailable
