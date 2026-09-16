@@ -319,6 +319,11 @@ t_args_basic() {
   expect_eq "approval_policy=never の回数" "1" "$(exec_args | grep -Fxc 'approval_policy=never')"
   expect_arg_pair -c 'approval_policy=never'
   expect_eq "最後の引数" "-" "$(exec_args | tail -n 1)"
+  # 権限の固定(CLAUDE.md)。必須の引数があるかだけを見ると、権限を緩める引数が足されても通ってしまう。
+  expect_eq "--sandbox の回数" "1" "$(exec_args | grep -Fxc -- '--sandbox')"
+  if exec_args | grep -Fxq -- '--dangerously-bypass-approvals-and-sandbox'; then
+    fail "--dangerously-bypass-approvals-and-sandbox が渡っている"
+  fi
 }
 
 t_args_effort_override() {
@@ -849,6 +854,38 @@ t_cross_review_contract() {
   expect_eq "scriptPinsApprovalNever の戻り値" "true" "$result"
 }
 
+# リポジトリに置く GPT 側の定義(出荷既定値)が、CLAUDE.md の「認証ホームの配置」と「権限の固定」に従う。
+# codex-review だけが通常利用のアカウント(~/.codex)で read-only に動き、残る 4 定義はサブエージェント専用の
+# アカウント(~/.codex-subagent)で書き込み可能に動く。
+# 設定コンソールが書き換えるのはユーザ側の定義なので、リポジトリ側の値はここで固定してよい。
+# 値の取り出し方はラッパーの fm_get と揃える(行末コメントと引用符を除く)。
+shipped_fm_get() {
+  sed 's/\r$//' "$1" \
+    | awk 'NR == 1 { if ($0 != "---") exit; next } $0 == "---" { exit } { print }' \
+    | sed -n "s/^$2:[[:space:]]*//p" | head -n 1 \
+    | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+          -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
+}
+
+t_shipped_definitions() {
+  local name def want_home want_sandbox
+  while read -r name want_home want_sandbox; do
+    def="$repo_root/.claude/gpt-agents/$name.md"
+    if [ ! -f "$def" ]; then
+      fail "定義が無い: $def"
+      continue
+    fi
+    expect_eq "$name の codex_home" "$want_home" "$(shipped_fm_get "$def" codex_home)"
+    expect_eq "$name の codex_sandbox" "$want_sandbox" "$(shipped_fm_get "$def" codex_sandbox)"
+  done <<'TABLE'
+codex-review ~/.codex read-only
+codex-subagent ~/.codex-subagent workspace-write
+impl-hard ~/.codex-subagent workspace-write
+impl-light ~/.codex-subagent workspace-write
+impl-standard ~/.codex-subagent workspace-write
+TABLE
+}
+
 t_real_home_untouched() {
   local dir="$REAL_HOME/.claude/codex-agent/logs" found
   found="$(ls -A "$dir" 2>/dev/null | grep -F -- "$AGENT")"
@@ -945,6 +982,7 @@ run_case "試験用フック: CODEX_AGENT_SIMULATE_RATE_LIMIT" t_simulate_rate_l
 run_case "試験用フック: CODEX_AGENT_SIMULATE_UNAVAILABLE" t_simulate_unavailable
 run_case "-h: 終了コード 0 で用法を出す" t_help
 run_case "ai-cross-review との契約: scriptPinsApprovalNever が true を返す" t_cross_review_contract
+run_case "出荷既定の定義: 5 定義の codex_home と codex_sandbox が CLAUDE.md の対応に従う" t_shipped_definitions
 run_case "環境の分離: 実ホームのログ置き場にテスト用のログが無い" t_real_home_untouched
 
 printf '# 合計 %d 件: 成功 %d、失敗 %d、SKIP %d\n' "$N" "$PASSED" "$FAILED" "$SKIPPED"
