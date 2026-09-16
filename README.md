@@ -63,6 +63,7 @@ Codex CLI は認証情報を `$CODEX_HOME/auth.json` に保存し、他の場所
 | `gui/build.bat` | 設定コンソールをビルドし、`gui/dist/CodexBridgeConsole.exe` を作る。ダブルクリックで実行できる |
 | `gui/start.bat` | 設定コンソールを起動する。exe が無ければ先にビルドする |
 | `docs/gpt-agents.md` | GPT 系サブエージェントの構成と、フォールバックの条件 |
+| `docs/gpt-agent-log-review-2026-09-16.md` | セッション記録から測った運用の状態と、そこから直した内容。次に測るときの基準値 |
 | `docs/setup.md` | アカウントのログインからサブエージェント有効化までの手順 |
 | `docs/gui.md` | 設定コンソールの使い方 |
 | `docs/gui-console-design.md` | 定義ファイルを GUI から書き換える設定コンソール(Windows)の設計。実装済み |
