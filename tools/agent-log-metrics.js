@@ -34,10 +34,15 @@
 //     拒否、結果不明、未起動である。
 //   - 分類には、子が codex-agent.sh を起動した Bash の呼び出しのうち最後のものの結果を使う。
 //     子は失敗や上限の後に起動し直すことがあり、委譲の行き先を決めたのは最後の起動だからである。
-//     子が複数ある委譲では、すべての子の起動を時刻と記録順で並べて最後のものを使う。
+//     子が複数ある委譲では、すべての子の起動を時刻で並べて最後のものを使う。記録順はファイルを読んだ順で
+//     記録どうしの前後を表さないため、時刻を読めない起動があるときと、最後の時刻に別の子の起動が並ぶときは
+//     結果不明とする。
 //   - 拒否は、tool_result に is_error が付き、本文が `Exit code` で始まらず、`codex-agent: ` の行も
 //     含まないもので判定する。拒否の文言は拒否した仕組みごとに違い、版によっても変わるため、
 //     本文の文言では判定しない。
+//   - 起動の結果は、退避された出力、result 行、バックグラウンドへの移行の順に見る。退避された出力の本文は
+//     冒頭の抜粋で、最終報告が引用した result 行が入りうるため、本文の result 行では確定しない。
+//     result 行をバックグラウンドの文言より先に見るのは、最終報告の本文がその文言に触れていることがあるためである。
 //   - 起動がバックグラウンドへ移った場合と、出力が退避された場合は、その起動を追跡する。
 //     手がかりは、バックグラウンドの ID と出力ファイルのパス、退避先のパスである。
 //     同じ子の記録で後に現れる tool_use のうち、入力が手がかりを含むもの(種類は問わない)を
@@ -223,9 +228,14 @@ function trackingClues(t) {
 // codex-agent.sh を起動した Bash の tool_result 1 件を、委譲の結果の分類へ写す。
 function classifyInvocation(c) {
   const t = textOf(c);
-  if (/moved to the background/.test(t)) return 'unknown';
+  // 退避された出力は冒頭の抜粋しか本文に無く、抜粋には最終報告が引用した result 行が入ることがある。
+  // 本文の result 行では確定せず、退避先を読んだ結果で確定する。
+  if (/<persisted-output>/.test(t)) return 'unknown';
+  // ラッパーは result 行を出力の最後に出すので、退避されていない本文の result 行は確定した結果である。
+  // バックグラウンドの文言より先に見るのは、最終報告の本文がその文言に触れていることがあるためである。
   const fromLine = outcomeFromResultLine(t);
   if (fromLine) return fromLine;
+  if (/moved to the background|Command running in background with ID:/.test(t)) return 'unknown';
   if (/^Exit code \d+/.test(t)) return 'gptFailed';
   // 拒否は文言でなく構造で見分ける。文言は拒否した仕組みごとに違うためである。
   if (c.is_error === true && !/^Exit code/.test(t) && !/codex-agent: /.test(t)) return 'denied';
@@ -235,18 +245,20 @@ function classifyInvocation(c) {
 const OUTCOME_KEYS = ['gptRan', 'notConfigured', 'gptUnavailable', 'gptFailed', 'denied', 'unknown', 'notInvoked'];
 
 // 委譲に属するすべての子の起動から最後のものを選び、その分類を返す。
-// 時刻で並べ、同じ時刻は記録順で決める。時刻を読めない起動が混ざる場合は記録順だけで並べる。
+// 起動が 1 つの子の記録に収まるなら、記録順の最後が最後の起動である。
+// 別の子の記録にまたがるときは時刻で決める。記録順はファイルを読んだ順でしかなく、記録どうしの前後を表さない。
+// 時刻を読めない起動があるときと、最後の時刻に別の記録の起動が並ぶときは、順序を確定できないので結果不明とする。
 function lastInvocationOutcome(subs) {
-  const all = subs.flatMap((s) => s.invocations);
+  const all = subs.flatMap((s, file) => s.invocations.map((inv) => ({ ...inv, file })));
   if (all.length === 0) return 'notInvoked';
+  const lastBySeq = (list) => list.reduce((a, b) => (b.seq > a.seq ? b : a)).outcome;
+  if (new Set(all.map((inv) => inv.file)).size === 1) return lastBySeq(all);
   const times = all.map((inv) => (typeof inv.ts === 'string' ? Date.parse(inv.ts) : NaN));
-  const byTime = times.every((t) => !Number.isNaN(t));
-  let best = 0;
-  for (let i = 1; i < all.length; i += 1) {
-    const later = byTime && times[i] !== times[best] ? times[i] > times[best] : all[i].seq > all[best].seq;
-    if (later) best = i;
-  }
-  return all[best].outcome;
+  if (times.some((t) => Number.isNaN(t))) return 'unknown';
+  const latest = Math.max(...times);
+  const tied = all.filter((inv, i) => times[i] === latest);
+  if (new Set(tied.map((inv) => inv.file)).size > 1) return 'unknown';
+  return lastBySeq(tied);
 }
 
 // start 以上 endExclusive 未満を期間とする。文字列で比べると、
