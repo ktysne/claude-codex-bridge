@@ -32,7 +32,7 @@ Claude Code から Codex CLI を、用途別のサブエージェントとして
 - 認証の分離: `codex` を呼ぶときは必ず `CODEX_HOME` を明示する。既定の `~/.codex` に暗黙に依存する呼び出しを書かない。
 - 権限の固定: レビュー用は `--sandbox read-only` を外さない。実装補助用でも `--dangerously-bypass-approvals-and-sandbox` は使わない。設定コンソールからも `codex_sandbox` は編集させない。`codex_home` は設定コンソールから変えられるが、`%USERPROFILE%` 直下に実在する `.codex*` ディレクトリから選ぶだけで、任意のパスは入力させない。
 - 認証情報の非コミット: `auth.json`、トークン、アカウント ID をリポジトリに入れない。ドキュメントの例には実値を書かない。
-- 委譲の検証: `codex-review` と `codex-subagent` の報告は、Codex を起動できた場合は `codex-agent: agent=` の監査行と `codex-agent: result=` の行、起動する前に止まった場合は `codex-agent:` の理由行を含む。どれも含まない報告は Codex を経由していないため、受け取らずに委譲をやり直す。ただし、冒頭に「進行中」と書かれ `codex-agent: run=` の行を含む報告は、Codex の実行中にターンを終えた未完了の報告である(`impl-hard`、`impl-light`、`impl-standard` の報告も同じ)。完了の報告としては受け取らず、委譲をやり直す理由にもしない。そのまま委譲をやり直すと、同じ作業ツリーに 2 つの Codex が書き込むおそれがあるためである。やり直す前に、`run=` の行の実行が終わったか止まったかを、[docs/gpt-agents.md](docs/gpt-agents.md) の既知の制約の手順で確かめる。
+- 委譲の検証: `codex-review` と `codex-subagent` の報告は、Codex を起動できた場合は `codex-agent: agent=` の監査行と `codex-agent: result=` の行、起動する前に止まった場合は `codex-agent:` の理由行を含む。どれも含まない報告は Codex を経由していないため、受け取らずに委譲をやり直す。ただし、冒頭に「進行中」と書かれた報告は、Codex の実行中にターンを終えた未完了の報告である(`impl-hard`、`impl-light`、`impl-standard` の報告も同じ)。`codex-agent: run=` の行の有無は問わない。古いラッパーは実行中にこの行を出さないためである。完了の報告としては受け取らず、委譲をやり直す理由にもしない。そのまま委譲をやり直すと、同じ作業ツリーに 2 つの Codex が書き込むおそれがあるためである。やり直す前に、その実行が終わったか止まったかを、[docs/gpt-agents.md](docs/gpt-agents.md) の既知の制約の手順で確かめる。
 - 作業ツリーの分離: 書き込み可能な Codex 呼び出しは、Claude Code と別の worktree で行う。例外として、`impl-hard`、`impl-light`、`impl-standard` が委譲する GPT 側の実行は、メインセッションが同じファイルを同時に編集しない前提で同一 worktree に書く。
 
 ## CLAUDE.md と AGENTS.md の同期

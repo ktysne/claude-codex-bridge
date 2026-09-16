@@ -297,20 +297,24 @@ mkdir -p "$log_dir" || die "実行ログの置き場を作れない: $log_dir"
 # POSIX 権限が効く環境ではさらに本人だけが読める形に落とす。多重防御である。
 chmod 700 "$log_dir" 2>/dev/null || true
 # 残し続けると 1 回あたり数百 KB が溜まるため、古いものを落とす。
-find "$log_dir" -maxdepth 1 -type f -name '*.log' -mtime +7 -delete 2>/dev/null || true
+# .last と .out は通常は終了時に消すが、taskkill /F などで強制終了されると EXIT の trap が動かずに残るため、同じ規則で落とす。
+find "$log_dir" -maxdepth 1 -type f \( -name '*.log' -o -name '*.last' -o -name '*.out' \) -mtime +7 -delete 2>/dev/null || true
 
 # 実行 ID はログファイル名から拡張子を除いたものにする。run= の行と log= の行を突き合わせられるようにするためである。
 run_id="$agent_name-$(date +%Y%m%d-%H%M%S)-$$"
 log_base="$log_dir/$run_id"
 log_file="$log_base.log"
-out_file="$(mktemp)"
+# Codex の標準出力(最終回答)の受け皿。共有の一時ディレクトリではなくログ置き場に置く。
+# 強制終了で残っても、実行 ID から特定して消せるうえ、古いものは上の削除で落ちるためである。
+out_file="$log_base.out"
 last_msg_file="$log_base.last"
+# ログ本体だけを残す。他は標準出力へ出すかログへ写した時点で役目を終える。
+trap 'rm -f "$out_file" "$last_msg_file"' EXIT
 # 先に作って権限を落とす。あとの書き込みは truncate か追記なので、この権限が残る。
 : >"$log_file" || die "実行ログを作れない: $log_file"
 : >"$last_msg_file" || die "最終報告の受け皿を作れない: $last_msg_file"
-chmod 600 "$log_file" "$last_msg_file" 2>/dev/null || true
-# ログ本体だけを残す。他は標準出力へ出すかログへ写した時点で役目を終える。
-trap 'rm -f "$out_file" "$last_msg_file"' EXIT
+: >"$out_file" || die "標準出力の受け皿を作れない: $out_file"
+chmod 600 "$log_file" "$last_msg_file" "$out_file" 2>/dev/null || true
 
 # 止める対象を特定できるよう、Git Bash では Windows の PID を出す。
 # taskkill が受け付けるのは Windows の PID であり、$$ は Git Bash 内の番号で一致しないためである。
@@ -390,7 +394,7 @@ fi
 # 標準エラーはパイプで受け、実行中から行ごとにログへ追記する。実行中にログの末尾で経過を読めるようにするためである。
 # WARNING で始まる行と hook: で始まる行は、ログへ書く時点で除く。
 # grep --line-buffered は、1 行ごとに書き出してログへの反映を遅らせないために付ける。
-# 標準出力(最終回答)は一時ファイルに受け、終了後にログへ追記する。
+# 標準出力(最終回答)はログ置き場の <実行 ID>.out に受け、終了後にログへ追記する。
 # プロセス置換でなくパイプラインにするのは、書き込み側の終了を待ってから次へ進むためである。
 # Codex の終了コードは PIPESTATUS の先頭から取る。grep の終了コード(除いた結果が空なら 1)は使わない。
 CODEX_HOME="$codex_home" codex exec -c approval_policy=never "${codex_args[@]}" - <<<"$prompt" 2>&1 >"$out_file" \

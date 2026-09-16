@@ -1090,16 +1090,22 @@ t_kill_by_run_pid() {
   fi
 }
 
+# .last と .out は、強制終了で EXIT の trap が動かなかった実行の残りであり、.log と同じ規則で落とす。
 t_log_prune() {
   mkdir -p "$(logs_dir)"
-  : >"$(logs_dir)/old-9days.log"
-  : >"$(logs_dir)/recent-6days.log"
-  touch -d '9 days ago' "$(logs_dir)/old-9days.log"
-  touch -d '6 days ago' "$(logs_dir)/recent-6days.log"
+  local ext
+  for ext in log last out; do
+    : >"$(logs_dir)/old-9days.$ext"
+    : >"$(logs_dir)/recent-6days.$ext"
+    touch -d '9 days ago' "$(logs_dir)/old-9days.$ext"
+    touch -d '6 days ago' "$(logs_dir)/recent-6days.$ext"
+  done
   run_wrapper "$AGENT"
   expect_rc 0
-  [ ! -e "$(logs_dir)/old-9days.log" ] || fail "9 日前のログが消えていない"
-  [ -e "$(logs_dir)/recent-6days.log" ] || fail "6 日前のログが消えている"
+  for ext in log last out; do
+    [ ! -e "$(logs_dir)/old-9days.$ext" ] || fail "9 日前の .$ext が消えていない"
+    [ -e "$(logs_dir)/recent-6days.$ext" ] || fail "6 日前の .$ext が消えている"
+  done
 }
 
 t_no_leftover_temp() {
@@ -1115,6 +1121,9 @@ t_no_leftover_temp() {
   local left
   left="$(ls "$(logs_dir)"/*.last 2>/dev/null)"
   [ -z "$left" ] || fail "*.last が残っている: $left"
+  left="$(ls "$(logs_dir)"/*.out 2>/dev/null)"
+  [ -z "$left" ] || fail "*.out が残っている: $left"
+  expect_eq "ログファイルの数" "2" "$(ls "$(logs_dir)"/*.log 2>/dev/null | wc -l | tr -d ' ')"
   left="$(ls -A "$root/tmp" 2>/dev/null)"
   [ -z "$left" ] || fail "TMPDIR に一時ファイルが残っている: $left"
 }
@@ -1302,8 +1311,8 @@ run_case "完了後のログ(成功): 最後の行が標準出力の result=ok �
 run_case "完了後のログ(利用上限): 最後の行が標準出力の result=rate-limited と一致し、result= は 1 回" t_log_result_rate_limited
 run_case "完了後のログ(通常の失敗): 最後の行が標準出力の result=failed と一致し、result= と run= は 1 回" t_log_result_failed
 run_case "停止: run= の pid と実行 ID を含む Codex 側を taskkill /T /F で止めると、偽 codex まで止まり result= が残らない" t_kill_by_run_pid
-run_case "ログ: 9 日前のログを消し、6 日前のログを残す" t_log_prune
-run_case "一時ファイル: 成功と失敗のあとに *.last と一時ファイルが残らない" t_no_leftover_temp
+run_case "ログ: 9 日前の .log、.last、.out を消し、6 日前のものを残す" t_log_prune
+run_case "一時ファイル: 成功と失敗のあとに *.last、*.out、TMPDIR の一時ファイルが残らず、ログは残る" t_no_leftover_temp
 run_case "ログの権限: ログファイル 600、ログ置き場 700" t_log_permissions
 run_case "試験用フック: CODEX_AGENT_SIMULATE_RATE_LIMIT" t_simulate_rate_limit
 run_case "試験用フック: CODEX_AGENT_SIMULATE_UNAVAILABLE" t_simulate_unavailable
