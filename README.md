@@ -58,7 +58,6 @@ Codex CLI は認証情報を `$CODEX_HOME/auth.json` に保存し、他の場所
 | `.claude/gpt-agents/impl-light.md` | 小規模実装用 GPT 側定義。Codex のモデル、effort、認証ホーム、サンドボックス、役割文を持つ |
 | `.claude/gpt-agents/impl-standard.md` | 一般実装用 GPT 側定義。Codex のモデル、effort、認証ホーム、サンドボックス、役割文を持つ |
 | `tools/codex-agent.sh` | GPT 側の定義を読んで `codex exec` を組み立てるスクリプト |
-| `tools/agent-log-metrics.js` | Claude Code のセッション記録から、GPT 系サブエージェントの運用の指標を数えるスクリプト |
 | `gui/` | 定義ファイルを GUI から書き換える設定コンソール(Windows、.NET Framework 4.8)の一式 |
 | `gui/build.bat` | 設定コンソールをビルドし、`gui/dist/CodexBridgeConsole.exe` を作る。ダブルクリックで実行できる |
 | `gui/start.bat` | 設定コンソールを起動する。exe が無ければ先にビルドする |
