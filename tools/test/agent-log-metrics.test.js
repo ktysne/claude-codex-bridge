@@ -85,6 +85,7 @@ function outcomesOf(values) {
 }
 
 const INVOKE = "bash ~/.claude/tools/codex-agent.sh impl-standard <<'EOF'\n依頼文\nEOF";
+const CLAUDE_DESIGNATION = '委譲: Claude 側で実装';
 
 // 起動の Bash 1 件。isError を与えると tool_result に is_error を付ける。
 // result を省くと tool_result を記録に残さない。
@@ -102,8 +103,8 @@ function invokeEvent(timestamp, id, result, isError) {
 // children は [toolUseId, events] の並びで、同じ toolUseId を複数回書くと子が複数ある委譲になる。
 function writeDelegations(root, calls, children) {
   const sessionDir = path.join(root, 'project', 'session-outcomes');
-  const parentFile = writeJsonl(logPath(sessionDir, 'session.jsonl'), calls.map(([id, type]) => (
-    agentEvent('2026-09-10T10:00:00.000Z', id, type, `依頼 ${id}`)
+  const parentFile = writeJsonl(logPath(sessionDir, 'session.jsonl'), calls.map(([id, type, prompt = `依頼 ${id}`]) => (
+    agentEvent('2026-09-10T10:00:00.000Z', id, type, prompt)
   )));
   const files = [parentFile];
   children.forEach(([toolUseId, rows], i) => {
@@ -164,6 +165,58 @@ test('collect は委譲ごとの結果を最後の起動で 7 つの分類に分
     assert.deepEqual(metrics.byAgent['impl-hard'].outcomes, outcomesOf({ gptFailed: 2, unknown: 1 }));
     assert.equal(metrics.byAgent['impl-standard'].unlinked, 1);
     assertOutcomeInvariants(metrics.byAgent);
+  });
+});
+
+test('collect は委譲を止める指定を最初の空でない行だけで判定する', () => {
+  // 先頭空行と CRLF は指定として扱い、後続行やコードブロックの引用は扱わない。
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [
+        ['designated-not-invoked', 'impl-standard', `${CLAUDE_DESIGNATION}\n理由: Claude 側で実装するため`],
+        ['designated-ran', 'impl-standard', `  ${CLAUDE_DESIGNATION}  \r\n理由: Claude 側で実装するため`],
+        ['leading-empty-designated', 'impl-standard', `\r\n \r\n  ${CLAUDE_DESIGNATION}  \r\n理由: Claude 側で実装するため`],
+        ['second-line-only', 'impl-standard', `実装内容の説明\r\n${CLAUDE_DESIGNATION}\r\n理由: 引用`],
+        ['code-block-only', 'impl-standard', `実装内容の説明\n\`\`\`text\n${CLAUDE_DESIGNATION}\n\`\`\`\n理由: 引用`],
+        ['unlinked-designated', 'impl-standard', `${CLAUDE_DESIGNATION}\n理由: 紐付け不明の例`],
+      ],
+      [
+        ['designated-not-invoked', [bashEvent({
+          timestamp: '2026-09-10T10:01:00.000Z',
+          id: 'not-invoked',
+          command: 'echo Claude 側で実装した',
+        })]],
+        ['designated-ran', [invokeEvent('2026-09-10T10:02:00.000Z', 'ran', 'codex-agent: result=ok')]],
+        ['leading-empty-designated', [bashEvent({
+          timestamp: '2026-09-10T10:03:00.000Z',
+          id: 'leading-empty',
+          command: 'echo Claude 側で実装した',
+        })]],
+        ['second-line-only', [bashEvent({
+          timestamp: '2026-09-10T10:04:00.000Z',
+          id: 'second-line',
+          command: 'echo 引用を実行しない',
+        })]],
+        ['code-block-only', [bashEvent({
+          timestamp: '2026-09-10T10:05:00.000Z',
+          id: 'code-block',
+          command: 'echo 引用を実行しない',
+        })]],
+      ],
+    );
+
+    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+
+    assert.deepEqual(metrics.byAgent['impl-standard'], {
+      calls: 6,
+      noCodex: 4,
+      committed: 0,
+      unlinked: 1,
+      designated: 4,
+      designatedNotInvoked: 2,
+      outcomes: outcomesOf({ gptRan: 1, notInvoked: 4 }),
+    });
   });
 });
 
@@ -412,12 +465,15 @@ test('collect は手がかりを含まない読み取りや is_error の結果�
   });
 });
 
-test('--json の委譲の内訳は各定義に outcomes を含む', () => {
+test('--json の委譲の内訳は各定義に outcomes と指定のキーを含む', () => {
   // JSON を読む利用者が結果の内訳を取り出せることを、CLI を通して確かめる。
   withTempDir((root) => {
     writeDelegations(
       root,
-      [['json-1', 'impl-standard'], ['json-2', 'impl-light']],
+      [
+        ['json-1', 'impl-standard', `${CLAUDE_DESIGNATION}\n理由: JSON の指定を確認する`],
+        ['json-2', 'impl-light'],
+      ],
       [
         ['json-1', [invokeEvent('2026-09-10T10:01:00.000Z', 'j1', 'codex-agent: result=ok')]],
         ['json-2', [invokeEvent('2026-09-10T10:01:00.000Z', 'j2', 'denied', true)]],
@@ -438,6 +494,39 @@ test('--json の委譲の内訳は各定義に outcomes を含む', () => {
     const summary = JSON.parse(result.stdout);
     assert.deepEqual(summary.委譲の内訳['impl-standard'].outcomes, outcomesOf({ gptRan: 1 }));
     assert.deepEqual(summary.委譲の内訳['impl-light'].outcomes, outcomesOf({ denied: 1 }));
+    assert.equal(summary.委譲の内訳['impl-standard'].designated, 1);
+    assert.equal(summary.委譲の内訳['impl-standard'].designatedNotInvoked, 0);
+    assert.equal(summary.委譲の内訳['impl-light'].designated, 0);
+    assert.equal(summary.委譲の内訳['impl-light'].designatedNotInvoked, 0);
+  });
+});
+
+test('テキスト出力は委譲の結果の後ろに委譲を止める指定の表を出す', () => {
+  // JSON 以外の利用者にも、指定ありと Codex 未起動の内訳を示す。
+  withTempDir((root) => {
+    writeDelegations(
+      root,
+      [['text-designated', 'impl-standard', CLAUDE_DESIGNATION]],
+      [],
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [METRICS_SCRIPT, '--since', '2026-09-10', '--until', '2026-09-10'],
+      {
+        cwd: path.resolve(__dirname, '../..'),
+        env: { ...process.env, CLAUDE_PROJECTS_DIR: root },
+        encoding: 'utf8',
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /委譲の結果\(/);
+    assert.match(result.stdout, /委譲を止める指定\(指定あり \/ うち Codex 未起動\)/);
+    assert.ok(
+      result.stdout.indexOf('委譲の結果(') < result.stdout.indexOf('委譲を止める指定('),
+    );
+    assert.match(result.stdout, /impl-standard\s+1\s+0/);
   });
 });
 
@@ -649,6 +738,8 @@ test('collect は同一分の起動、結果、待機、親子の紐付けを規
         noCodex: 0,
         committed: 1,
         unlinked: 0,
+        designated: 0,
+        designatedNotInvoked: 0,
         outcomes: outcomesOf({ gptRan: 1 }),
       },
       'impl-light': {
@@ -656,6 +747,8 @@ test('collect は同一分の起動、結果、待機、親子の紐付けを規
         noCodex: 1,
         committed: 0,
         unlinked: 1,
+        designated: 0,
+        designatedNotInvoked: 0,
         outcomes: outcomesOf({ notInvoked: 1 }),
       },
     });
