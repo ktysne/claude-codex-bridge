@@ -5,7 +5,9 @@
 // 用法:
 //   node tools/agent-log-metrics.js [--since <YYYY-MM-DD>] [--until <YYYY-MM-DD>] [--json]
 //
-// 既定の期間は直近 7 日である。
+// --since と --until は UTC の日付として解釈する。
+// --since はその日の 00:00:00.000 から、--until はその日の最後のミリ秒までを含む。
+// どちらも省くと、現在までの直近 7 日を見る。
 // 記録の場所は %USERPROFILE%\.claude\projects(環境変数 CLAUDE_PROJECTS_DIR で変えられる)。
 //
 // 数え方の約束:
@@ -35,17 +37,41 @@ const path = require('path');
 
 const WRAPPER_AGENTS = ['impl-hard', 'impl-light', 'impl-standard', 'codex-review', 'codex-subagent'];
 
+const DAY = 24 * 3600 * 1000;
+
+function takeValue(argv, i, name) {
+  const v = argv[i];
+  if (v === undefined || v.startsWith('--')) throw new Error(`${name} に値が無い`);
+  return v;
+}
+
 function parseArgs(argv) {
   const opts = { json: false };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
-    if (a === '--since') opts.since = argv[++i];
-    else if (a === '--until') opts.until = argv[++i];
+    if (a === '--since') opts.since = takeValue(argv, ++i, '--since');
+    else if (a === '--until') opts.until = takeValue(argv, ++i, '--until');
     else if (a === '--json') opts.json = true;
     else if (a === '-h' || a === '--help') opts.help = true;
     else throw new Error(`不明なオプションである: ${a}`);
   }
   return opts;
+}
+
+// 日付は UTC で解釈し、その日の 00:00:00.000 を数値で返す。
+// Date.UTC は 2026-02-30 のような日付を繰り上げて受け入れるため、年月日の一致まで確かめる。
+function parseDay(value, name) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value));
+  if (!m) throw new Error(`${name} は YYYY-MM-DD で指定する: ${value}`);
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  const t = Date.UTC(y, mo - 1, d);
+  const back = new Date(t);
+  if (back.getUTCFullYear() !== y || back.getUTCMonth() !== mo - 1 || back.getUTCDate() !== d) {
+    throw new Error(`${name} に実在しない日付が指定された: ${value}`);
+  }
+  return t;
 }
 
 function projectsDir() {
@@ -141,9 +167,20 @@ const textOf = (c) => {
   return '';
 };
 
-function collect(files, since, until) {
-  const inRange = (ts) => typeof ts === 'string' && ts >= since && ts <= until;
+// start 以上 endExclusive 未満を期間とする。文字列で比べると、
+// ミリ秒を持つ時刻(`...T00:00:00.000Z`)が `...T00:00:00Z` より小さくなり、開始日の先頭が落ちる。
+function collect(files, start, endExclusive) {
   const seen = new Set();
+  const inRange = (ts) => {
+    if (typeof ts !== 'string') return false;
+    const t = Date.parse(ts);
+    if (Number.isNaN(t)) {
+      // 日時が読めない記録を、黙って実績 0 へ混ぜない。
+      if (once(`badts|${ts}`)) m.badTimestamps += 1;
+      return false;
+    }
+    return t >= start && t < endExclusive;
+  };
   const once = (key) => {
     if (seen.has(key)) return false;
     seen.add(key);
@@ -159,6 +196,7 @@ function collect(files, since, until) {
     byAgent: {},
     unreadable: [],
     unparseableLines: new Map(),
+    badTimestamps: 0,
     subPrompts: new Map(),
     agentCalls: [],
   };
@@ -287,16 +325,16 @@ function main() {
     console.log(head.slice(2, end).join('\n').replace(/^\/\/ ?/gm, '').trimEnd());
     return;
   }
-  const until = opts.until ? `${opts.until}T23:59:59Z` : new Date().toISOString();
-  const since = opts.since
-    ? `${opts.since}T00:00:00Z`
-    : new Date(Date.parse(until) - 7 * 24 * 3600 * 1000).toISOString();
+  // 終了日は「翌日の 00:00:00.000 未満」とする。終了日の最後のミリ秒まで含める。
+  const endExclusive = opts.until === undefined ? Date.now() : parseDay(opts.until, '--until') + DAY;
+  const start = opts.since === undefined ? endExclusive - 7 * DAY : parseDay(opts.since, '--since');
+  if (start >= endExclusive) throw new Error('--since が --until より後になっている');
 
   const dir = projectsDir();
   if (!fs.existsSync(dir)) throw new Error(`記録の置き場が無い: ${dir}`);
   const failures = [];
   // ファイルの更新時刻で粗く絞る。個々の出来事の時刻は collect が見る。
-  const cutoff = new Date(Date.parse(since) - 2 * 24 * 3600 * 1000);
+  const cutoff = new Date(start - 2 * DAY);
   const files = walk(dir, [], failures).filter((f) => {
     try {
       return fs.statSync(f).mtime >= cutoff;
@@ -306,7 +344,9 @@ function main() {
     }
   });
 
-  const m = collect(files, since, until);
+  const m = collect(files, start, endExclusive);
+  // 表示は指定と同じ UTC で行う。終了は「未満」なので、最後に含まれる瞬間を出す。
+  const shown = `${new Date(start).toISOString()} 〜 ${new Date(endExclusive - 1).toISOString()}`;
   const unreadable = failures.concat(m.unreadable);
   const unparseableLines = {
     件数: Array.from(m.unparseableLines.values()).reduce((sum, count) => sum + count, 0),
@@ -314,7 +354,7 @@ function main() {
   };
   const offloaded = m.offloaded;
   const summary = {
-    期間: `${since} 〜 ${until}`,
+    期間: shown,
     対象ファイル数: files.length,
     実起動: m.runs,
     結果の内訳: m.results,
@@ -326,6 +366,7 @@ function main() {
     待つためのBash: m.waitCalls,
     委譲の内訳: m.byAgent,
     解析できなかった行: unparseableLines,
+    日時が読めなかった記録: m.badTimestamps,
     読めなかった場所: unreadable,
   };
 
@@ -333,7 +374,7 @@ function main() {
     console.log(JSON.stringify(summary, null, 2));
     return;
   }
-  console.log(`期間: ${since} 〜 ${until}`);
+  console.log(`期間: ${shown}`);
   console.log(`対象ファイル: ${files.length} 本`);
   console.log('');
   console.log(`codex-agent.sh の実起動(結果が記録に残ったもの): ${m.runs}`);
