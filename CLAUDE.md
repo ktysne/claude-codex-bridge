@@ -49,6 +49,7 @@ bash tools/codex-agent.sh impl-light --effort low <<< "Reply with exactly: PONG-
 bash tools/codex-agent.sh codex-review --effort low <<< "Reply with exactly: PONG-REVIEW"  # 同上
 dotnet build gui/CodexBridgeConsole.sln -c Release  # 設定コンソール
 dotnet test gui/CodexBridgeConsole.sln -c Release
+npm run test:codex-agent  # ラッパー(tools/codex-agent.sh)のテスト。偽の codex を使うので利用枠を消費しない。Git Bash から実行する
 ```
 
 エージェント定義(`.claude/agents/*.md`)の変更は、そのディレクトリがセッション開始時から在れば数秒で次の委譲に反映される。再起動が要る条件は [docs/setup.md](docs/setup.md) の共通手順 6 にある。
@@ -80,6 +81,6 @@ npm run review:claude -- --uncommitted
 このリポジトリ固有のレビュー観点は `.cross-review.md` にある。
 3 択、サーキットブレーカー、PR 運用といった汎用ルールはここに写さず、SKILL を参照する。
 
-- 検証コマンド: `bash -n tools/codex-agent.sh`、`node tools/cross-review.js --help`、GUI は `dotnet build gui/CodexBridgeConsole.sln -c Release` と `dotnet test gui/CodexBridgeConsole.sln -c Release`。
+- 検証コマンド: `bash -n tools/codex-agent.sh`、`npm run test:codex-agent`、`node tools/cross-review.js --help`、GUI は `dotnet build gui/CodexBridgeConsole.sln -c Release` と `dotnet test gui/CodexBridgeConsole.sln -c Release`。
 - 基盤の更新: `npm run sync:cross-review`（検査は `npm run sync:cross-review:check`）で上流から取り込む。更新手順は「同期 → 表示された移行ノートの作業 → 上の検証コマンド」の順。
 - レビューの起点: 既定のレビュアーは実装者と別のベンダーで、実装を一区切りしたら 3 択を `AskUserQuestion` で提示する（詳細は SKILL）。指摘、対応、妥当性確認は PR コメントに残し、本文は `.cross-review/round-<N>-triage.md` を書いて `node tools/cross-review.js comment --round <N>` で生成する。
