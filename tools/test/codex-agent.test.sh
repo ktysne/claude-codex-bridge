@@ -148,6 +148,22 @@ expect_arg_pair() {
   fi
 }
 
+# exec の引数一覧が、期待する一覧と過不足なく一致する(順序は問わない)。
+# 権限の固定(CLAUDE.md)を守るため、必須の引数があるかではなく一覧の一致で見る。
+# 前者だと、権限を緩める引数(-s や --sandbox= の別表記、--approve-for-me、
+# --dangerously-bypass-approvals-and-sandbox など)が足されても通ってしまう。
+# 値と引数の組は expect_arg_pair で別に確かめる。-o の値は実行ごとに変わるので <last> に置き換える。
+# expect_exec_args <sandbox> <effort>
+expect_exec_args() {
+  local expected actual
+  expected="$(printf '%s\n' exec -c approval_policy=never --skip-git-repo-check --sandbox "$1" -m model-test \
+    -c "model_reasoning_effort=\"$2\"" -C "$(norm_path "$root/work")" -o '<last>' - | LC_ALL=C sort)"
+  actual="$(exec_args | awk 'prev == "-o" { print "<last>"; prev = ""; next } { print; prev = $0 }' | LC_ALL=C sort)"
+  if [ "$expected" != "$actual" ]; then
+    fail "exec の引数一覧が期待と違う: 期待=[$(printf '%s' "$expected" | tr '\n' ' ')] 実際=[$(printf '%s' "$actual" | tr '\n' ' ')]"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # ケースの環境
 # ---------------------------------------------------------------------------
@@ -163,6 +179,7 @@ FAKE
 #   last_message            -o <file> へ書く最終報告
 #   stdout / stderr         そのまま出す内容
 #   sleep                   stderr を出したあとに待つ秒数
+#   help_delay              exec --help で --output-last-message の行を出したあと、残りを出す前に待つ秒数
 #   exit_code               終了コード(既定 0)
 kind=other
 last_arg=""
@@ -184,6 +201,7 @@ case "$kind" in
     printf 'Run Codex non-interactively\n\nUsage: codex exec [OPTIONS] [PROMPT]\n\nOptions:\n'
     printf '  -m, --model <MODEL>\n'
     [ -e "$FAKE_DIR/no_output_last_message" ] || printf '  -o, --output-last-message <FILE>\n'
+    [ -f "$FAKE_DIR/help_delay" ] && sleep "$(cat "$FAKE_DIR/help_delay")"
     printf '  -C, --cd <DIR>\n'
     exit 0
     ;;
@@ -319,11 +337,7 @@ t_args_basic() {
   expect_eq "approval_policy=never の回数" "1" "$(exec_args | grep -Fxc 'approval_policy=never')"
   expect_arg_pair -c 'approval_policy=never'
   expect_eq "最後の引数" "-" "$(exec_args | tail -n 1)"
-  # 権限の固定(CLAUDE.md)。必須の引数があるかだけを見ると、権限を緩める引数が足されても通ってしまう。
-  expect_eq "--sandbox の回数" "1" "$(exec_args | grep -Fxc -- '--sandbox')"
-  if exec_args | grep -Fxq -- '--dangerously-bypass-approvals-and-sandbox'; then
-    fail "--dangerously-bypass-approvals-and-sandbox が渡っている"
-  fi
+  expect_exec_args workspace-write low
 }
 
 t_args_effort_override() {
@@ -342,6 +356,7 @@ codex_model: model-test' "$DEFAULT_BODY"
   expect_rc 0
   expect_arg_pair -c 'model_reasoning_effort="medium"'
   expect_arg_pair --sandbox read-only
+  expect_exec_args read-only medium
 }
 
 t_args_workdir() {
@@ -433,6 +448,18 @@ t_no_output_last_message() {
     fail "報告が標準出力の末尾 40 行になっていない: 実際の先頭=[$(head -n 2 "$root/actual_tail" | tr '\n' ' ')] 行数=$(wc -l <"$root/actual_tail" | tr -d ' ')"
   fi
   expect_out_no_match "使われないはずの報告"
+}
+
+# ヘルプの --output-last-message の行を読んだ時点で読み手が終わっても、有る版と判定する。
+# ヘルプの残りを書く前に待たせ、読み手が先に終わる順序を毎回起こす。
+t_help_detect_late_writer() {
+  fake_set help_delay 0.5
+  fake_set last_message '遅れて書くヘルプでも使われる報告
+'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  exec_args | grep -Fxq -- '-o' || fail "-o が渡っていない(--output-last-message が無い版と判定された)"
+  expect_out_line "遅れて書くヘルプでも使われる報告"
 }
 
 t_empty_last_message() {
@@ -941,6 +968,7 @@ run_case "依頼文: 役割文、---、## 依頼、依頼文の順で渡る" t_p
 run_case "依頼文: 役割文が無い定義では依頼文だけが渡る" t_prompt_without_role
 run_case "成功時の出力: 監査行、log=、最終報告、result=ok の順で、経過はログにだけ残る" t_success_output
 run_case "--output-last-message が無い版: -o を渡さず標準出力の末尾 40 行を報告にする" t_no_output_last_message
+run_case "--output-last-message の判定: ヘルプの途中で読み手が終わっても有る版と判定する" t_help_detect_late_writer
 run_case "最終報告が空: 標準出力の末尾を報告にする" t_empty_last_message
 run_case "最終報告が改行で終わらない: result=ok が独立した行になる" t_last_message_no_newline
 run_case "利用上限(stderr): 75、evidence の直後に result=rate-limited" t_rate_limit_stderr
