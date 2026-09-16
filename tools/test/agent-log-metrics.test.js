@@ -279,6 +279,73 @@ test('collect は退避された出力を、区切り文字の違うパスの読
   });
 });
 
+test('collect は最終報告がバックグラウンドの文言に触れていても、result 行で確定する', () => {
+  // 退避されていない本文の result 行はラッパーが最後に出した確定結果である。
+  // 最終報告の本文がバックグラウンドへの移行を話題にしていても、結果不明にしない。
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['mentions-bg', 'impl-standard']],
+      [['mentions-bg', [
+        invokeEvent('2026-09-10T10:01:00.000Z', 'm1',
+          'codex-agent: log=C:/logs/x.log\nBash ツールの上限で moved to the background と出る場合の手順を書いた。\ncodex-agent: result=ok'),
+      ]]],
+    );
+
+    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+
+    assert.deepEqual(metrics.byAgent['impl-standard'].outcomes, outcomesOf({ gptRan: 1 }));
+  });
+});
+
+test('collect は退避の抜粋に引用された result 行では確定せず、退避先の読み取りで確定する', () => {
+  // 抜粋は出力の冒頭だけで、最終報告が引用した result 行が入ることがある。本来の result 行は退避先の末尾にある。
+  withTempDir((root) => {
+    const quoted = PERSISTED_TEXT.replace('...\n', '報告の例:\ncodex-agent: result=rate-limited\n');
+    const files = writeDelegations(
+      root,
+      [['persisted-quote', 'impl-light']],
+      [['persisted-quote', [
+        invokeEvent('2026-09-10T10:01:00.000Z', 'q1', quoted),
+        toolEvent('2026-09-10T10:02:00.000Z', 'q2', 'Read',
+          { file_path: 'C:\\Users\\someone\\.claude\\projects\\proj\\tool-results\\toolu_persist.txt' },
+          '...\ncodex-agent: result=ok'),
+      ]]],
+    );
+
+    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+
+    assert.deepEqual(metrics.byAgent['impl-light'].outcomes, outcomesOf({ gptRan: 1 }));
+  });
+});
+
+test('collect は子の記録をまたいで順序を確定できない委譲を結果不明にし、ファイルの順に左右されない', () => {
+  // 記録順はファイルを読んだ順でしかない。時刻が読めない起動や、最後の時刻が別の記録で並ぶ起動は、前後を決められない。
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['bad-time', 'impl-standard'], ['same-time', 'impl-light'], ['ordered', 'impl-hard']],
+      [
+        ['bad-time', [invokeEvent('not-a-date', 'x1', 'codex-agent: result=ok')]],
+        ['bad-time', [invokeEvent('2026-09-10T10:01:00.000Z', 'x2', 'codex-agent: result=unavailable')]],
+        ['same-time', [invokeEvent('2026-09-10T10:03:00.000Z', 'y1', 'codex-agent: result=ok')]],
+        ['same-time', [invokeEvent('2026-09-10T10:03:00.000Z', 'y2', 'codex-agent: result=unavailable')]],
+        ['ordered', [invokeEvent('2026-09-10T10:01:00.000Z', 'z1', 'codex-agent: result=unavailable')]],
+        ['ordered', [invokeEvent('2026-09-10T10:04:00.000Z', 'z2', 'codex-agent: result=ok')]],
+      ],
+    );
+    const range = [parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000];
+
+    const forward = collect(files, ...range);
+    const reversed = collect([files[0], ...files.slice(1).reverse()], ...range);
+
+    assert.deepEqual(forward.byAgent['impl-standard'].outcomes, outcomesOf({ unknown: 1 }));
+    assert.deepEqual(forward.byAgent['impl-light'].outcomes, outcomesOf({ unknown: 1 }));
+    assert.deepEqual(forward.byAgent['impl-hard'].outcomes, outcomesOf({ gptRan: 1 }));
+    assert.deepEqual(reversed.byAgent, forward.byAgent);
+  });
+});
+
 test('collect は手がかりを含まない読み取りや is_error の結果では確定しない', () => {
   // 差分や文書を読んだ結果の result 行や、失敗した読み取りを起動の結果として拾わない。
   withTempDir((root) => {
