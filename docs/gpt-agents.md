@@ -240,7 +240,7 @@ EOF
 ## 既知の制約
 
 **1 つの worktree に同時に書き込む担当は 1 つである。**
-担当には、メインセッション、`impl-hard`、`impl-light`、`impl-standard` が委譲する GPT 側の実行、`codex-subagent`、`npm run review:codex:fix`(ai-cross-review の `--fix`)を含む。
+担当には、メインセッション、`impl-hard`、`impl-light`、`impl-standard`(Claude 側で実装する場合の実装担当自身と、委譲する GPT 側の実行)、`codex-subagent`、`npm run review:codex:fix`(ai-cross-review の `--fix`)を含む。
 担当するファイルを分けても足りないのは、ビルドの生成物、テストの実行、git の索引が worktree の中で共有されるためである。
 `codex-review` は `read-only` で動き、ファイルを書き換えないため、担当に数えない。
 GPT 側へ委譲した実行や `codex-subagent` が同じ worktree に書き込むあいだ、メインセッションはその worktree を編集しない。
@@ -249,6 +249,8 @@ GPT 側へ委譲した実行や `codex-subagent` が同じ worktree に書き込
 並行させたいときは、担当ごとに別 worktree を使う。
 Agent ツールの `isolation: "worktree"` でも別 worktree を用意できる。
 ただし、隔離された実装担当では、依頼文に「git」という語を含むヒアドキュメントを渡す `codex-agent.sh` の起動が隔離の検査で拒否され、Claude 側で実装されることがある(2026-09-16 に観測)。
+また、メインセッションが作業の途中で別の worktree へ移ると、元の worktree で隔離せずに動かしていたバックグラウンドのサブエージェントのコマンドが拒否されることがある(2026-09-16 に観測)。
+実装担当を並行して動かすあいだは、メインセッションが worktree を移らないか、実装担当を `isolation: "worktree"` で起動する。
 
 **書き込み担当の目印と警告の行。**
 ラッパーは、`codex_sandbox` が `workspace-write` の起動に限り、作業ディレクトリの worktree 固有の git ディレクトリ(`git rev-parse --absolute-git-dir` の値)に目印を置く。
