@@ -7,6 +7,7 @@
     "review:codex": "node tools/cross-review.js codex",
     "review:codex:fix": "node tools/cross-review.js codex --fix",
     "review:claude": "node tools/cross-review.js claude",
+    "test:metrics": "node --test tools/test/agent-log-metrics.test.js",
     "sync:cross-review": "node tools/cross-review.sync.js",
     "sync:cross-review:dry": "node tools/cross-review.sync.js --dry-run",
     "sync:cross-review:check": "node tools/cross-review.sync.js --check"
