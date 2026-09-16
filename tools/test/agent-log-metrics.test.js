@@ -319,6 +319,45 @@ test('collect は退避の抜粋に引用された result 行では確定せず�
   });
 });
 
+test('collect は最終報告が persisted-output のタグを引用していても、result 行で確定する', () => {
+  // 退避された出力と見なすのは、本文がタグの外枠で始まるものだけである。引用しただけの本文は通常の出力として読む。
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['quotes-tag', 'impl-standard']],
+      [['quotes-tag', [
+        invokeEvent('2026-09-10T10:01:00.000Z', 'k1',
+          'codex-agent: log=C:/logs/x.log\n退避された出力は <persisted-output> で始まり、Full output saved to: の行を持つ。\ncodex-agent: result=ok'),
+      ]]],
+    );
+
+    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+
+    assert.deepEqual(metrics.byAgent['impl-standard'].outcomes, outcomesOf({ gptRan: 1 }));
+  });
+});
+
+test('collect は子の記録をまたいで順序を確定できなくても、候補の結果がすべて同じならその分類に数える', () => {
+  // どの起動が最後でも分類が変わらないなら、結果不明に落とさない。
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['bad-time-same', 'impl-standard'], ['same-time-same', 'impl-light']],
+      [
+        ['bad-time-same', [invokeEvent('not-a-date', 'v1', 'codex-agent: result=ok')]],
+        ['bad-time-same', [invokeEvent('2026-09-10T10:01:00.000Z', 'v2', 'codex-agent: result=ok')]],
+        ['same-time-same', [invokeEvent('2026-09-10T10:03:00.000Z', 'w1', 'codex-agent: result=unavailable')]],
+        ['same-time-same', [invokeEvent('2026-09-10T10:03:00.000Z', 'w2', 'codex-agent: result=rate-limited')]],
+      ],
+    );
+
+    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+
+    assert.deepEqual(metrics.byAgent['impl-standard'].outcomes, outcomesOf({ gptRan: 1 }));
+    assert.deepEqual(metrics.byAgent['impl-light'].outcomes, outcomesOf({ gptUnavailable: 1 }));
+  });
+});
+
 test('collect は子の記録をまたいで順序を確定できない委譲を結果不明にし、ファイルの順に左右されない', () => {
   // 記録順はファイルを読んだ順でしかない。時刻が読めない起動や、最後の時刻が別の記録で並ぶ起動は、前後を決められない。
   withTempDir((root) => {

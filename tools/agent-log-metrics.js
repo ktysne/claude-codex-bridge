@@ -35,13 +35,15 @@
 //   - 分類には、子が codex-agent.sh を起動した Bash の呼び出しのうち最後のものの結果を使う。
 //     子は失敗や上限の後に起動し直すことがあり、委譲の行き先を決めたのは最後の起動だからである。
 //     子が複数ある委譲では、すべての子の起動を時刻で並べて最後のものを使う。記録順はファイルを読んだ順で
-//     記録どうしの前後を表さないため、時刻を読めない起動があるときと、最後の時刻に別の子の起動が並ぶときは
-//     結果不明とする。
+//     記録どうしの前後を表さないため、時刻を読めない起動があるときと、最後の時刻に別の子の起動が並ぶときは、
+//     子ごとの最後の起動の結果がすべて同じならその分類、食い違えば結果不明とする。
 //   - 拒否は、tool_result に is_error が付き、本文が `Exit code` で始まらず、`codex-agent: ` の行も
 //     含まないもので判定する。拒否の文言は拒否した仕組みごとに違い、版によっても変わるため、
 //     本文の文言では判定しない。
 //   - 起動の結果は、退避された出力、result 行、バックグラウンドへの移行の順に見る。退避された出力の本文は
 //     冒頭の抜粋で、最終報告が引用した result 行が入りうるため、本文の result 行では確定しない。
+//     退避された出力と見なすのは、本文が <persisted-output> で始まり退避先の行を持つものだけである。
+//     最終報告がこのタグを引用しただけの本文を取り違えないためである。
 //     result 行をバックグラウンドの文言より先に見るのは、最終報告の本文がその文言に触れていることがあるためである。
 //   - 起動がバックグラウンドへ移った場合と、出力が退避された場合は、その起動を追跡する。
 //     手がかりは、バックグラウンドの ID と出力ファイルのパス、退避先のパスである。
@@ -211,6 +213,10 @@ function outcomeFromResultLine(t) {
 // 照合のためにパスの区切りをそろえる。記録の JSON では `\` が `\\` になるため、連続もまとめる。
 const normalizeClue = (s) => s.replace(/[\\/]+/g, '/');
 
+// ツールが出力を退避したときの本文か。本文が <persisted-output> の外枠で始まり、退避先の行を持つものに限る。
+// 最終報告がこのタグを引用しただけの本文を、退避された出力と取り違えないためである。
+const isPersistedOutput = (t) => /^\s*<persisted-output>/.test(t) && /Full output saved to: /.test(t);
+
 // 起動の結果がその場で分からない場合に、後で子が読む出力を見分ける手がかりを返す。
 // バックグラウンドへ移った起動は ID と出力ファイルのパス、退避された出力は保存先のパスである。
 function trackingClues(t) {
@@ -219,7 +225,7 @@ function trackingClues(t) {
     for (const r of t.matchAll(/\bID: ([A-Za-z0-9_-]+)/g)) clues.push(r[1]);
     for (const r of t.matchAll(/Output is being written to: (\S+?)\.?(?=\s|$)/g)) clues.push(r[1]);
   }
-  if (/<persisted-output>/.test(t)) {
+  if (isPersistedOutput(t)) {
     for (const r of t.matchAll(/Full output saved to: (\S+?)\.?(?=\s|$)/g)) clues.push(r[1]);
   }
   return clues.map(normalizeClue);
@@ -230,7 +236,7 @@ function classifyInvocation(c) {
   const t = textOf(c);
   // 退避された出力は冒頭の抜粋しか本文に無く、抜粋には最終報告が引用した result 行が入ることがある。
   // 本文の result 行では確定せず、退避先を読んだ結果で確定する。
-  if (/<persisted-output>/.test(t)) return 'unknown';
+  if (isPersistedOutput(t)) return 'unknown';
   // ラッパーは result 行を出力の最後に出すので、退避されていない本文の result 行は確定した結果である。
   // バックグラウンドの文言より先に見るのは、最終報告の本文がその文言に触れていることがあるためである。
   const fromLine = outcomeFromResultLine(t);
@@ -245,20 +251,23 @@ function classifyInvocation(c) {
 const OUTCOME_KEYS = ['gptRan', 'notConfigured', 'gptUnavailable', 'gptFailed', 'denied', 'unknown', 'notInvoked'];
 
 // 委譲に属するすべての子の起動から最後のものを選び、その分類を返す。
-// 起動が 1 つの子の記録に収まるなら、記録順の最後が最後の起動である。
+// 1 つの子の記録の中では、記録順の後ろが後の起動である。
 // 別の子の記録にまたがるときは時刻で決める。記録順はファイルを読んだ順でしかなく、記録どうしの前後を表さない。
-// 時刻を読めない起動があるときと、最後の時刻に別の記録の起動が並ぶときは、順序を確定できないので結果不明とする。
+// 時刻を読めない起動があるときと、最後の時刻に別の記録の起動が並ぶときは前後を決められない。
+// そのときは記録ごとの最後の起動を候補とし、候補の結果がすべて同じならその分類、食い違えば結果不明とする。
 function lastInvocationOutcome(subs) {
   const all = subs.flatMap((s, file) => s.invocations.map((inv) => ({ ...inv, file })));
   if (all.length === 0) return 'notInvoked';
-  const lastBySeq = (list) => list.reduce((a, b) => (b.seq > a.seq ? b : a)).outcome;
-  if (new Set(all.map((inv) => inv.file)).size === 1) return lastBySeq(all);
+  const lastOf = (list) => list.reduce((a, b) => (b.seq > a.seq ? b : a));
+  const lastPerFile = (list) => [...new Set(list.map((inv) => inv.file))]
+    .map((file) => lastOf(list.filter((inv) => inv.file === file)));
+  const agreed = (list) => (new Set(list.map((inv) => inv.outcome)).size === 1 ? list[0].outcome : 'unknown');
+  const candidates = lastPerFile(all);
+  if (candidates.length === 1) return candidates[0].outcome;
   const times = all.map((inv) => (typeof inv.ts === 'string' ? Date.parse(inv.ts) : NaN));
-  if (times.some((t) => Number.isNaN(t))) return 'unknown';
+  if (times.some((t) => Number.isNaN(t))) return agreed(candidates);
   const latest = Math.max(...times);
-  const tied = all.filter((inv, i) => times[i] === latest);
-  if (new Set(tied.map((inv) => inv.file)).size > 1) return 'unknown';
-  return lastBySeq(tied);
+  return agreed(lastPerFile(all.filter((inv, i) => times[i] === latest)));
 }
 
 // start 以上 endExclusive 未満を期間とする。文字列で比べると、
