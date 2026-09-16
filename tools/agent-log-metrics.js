@@ -32,6 +32,9 @@
 //   - 委譲の結果は、紐付けできた委譲 1 件をちょうど 1 つの分類に数える。分類は GPT で実行、
 //     未設定(result=failed exit=3)、GPT 使用不能(rate-limited と unavailable)、GPT で失敗、
 //     拒否、結果不明、未起動である。
+//   - 委譲を止める指定は、依頼文の最初の空でない行を前後の空白を除いて比較する。
+//     2 行目以降やコードブロック内の文字列は指定に数えない。定義や文書を引用した依頼を
+//     誤って指定として数えないためである。
 //   - 分類には、子が codex-agent.sh を起動した Bash の呼び出しのうち最後のものの結果を使う。
 //     子は失敗や上限の後に起動し直すことがあり、委譲の行き先を決めたのは最後の起動だからである。
 //     子が複数ある委譲では、すべての子の起動を時刻で並べて最後のものを使う。記録順はファイルを読んだ順で
@@ -249,6 +252,14 @@ function classifyInvocation(c) {
 }
 
 const OUTCOME_KEYS = ['gptRan', 'notConfigured', 'gptUnavailable', 'gptFailed', 'denied', 'unknown', 'notInvoked'];
+const DESIGNATION = '委譲: Claude 側で実装';
+
+// 依頼文の最初の空でない行だけを指定とみなす。後続行やコードブロックの引用を数えないためである。
+function isDesignatedPrompt(prompt) {
+  if (typeof prompt !== 'string') return false;
+  const firstNonEmptyLine = prompt.split(/\r\n|\n/).find((line) => line.trim() !== '');
+  return firstNonEmptyLine !== undefined && firstNonEmptyLine.trim() === DESIGNATION;
+}
 
 // 委譲に属するすべての子の起動から最後のものを選び、その分類を返す。
 // 1 つの子の記録の中では、記録順の後ろが後の起動である。
@@ -389,7 +400,11 @@ function collect(files, start, endExclusive) {
         if (c.type === 'tool_use' && c.name === 'Agent' && !isSub(file)) {
           const st = String((c.input && c.input.subagent_type) || '');
           if (WRAPPER_AGENTS.includes(st) && inRange(o.timestamp, at)) {
-            m.agentCalls.push({ type: st, toolUseId: c.id });
+            m.agentCalls.push({
+              type: st,
+              toolUseId: c.id,
+              designated: isDesignatedPrompt(c.input && c.input.prompt),
+            });
           }
         }
         if (c.type === 'tool_result' && invocationById.has(c.tool_use_id)) {
@@ -451,9 +466,12 @@ function collect(files, start, endExclusive) {
         noCodex: 0,
         committed: 0,
         unlinked: 0,
+        designated: 0,
+        designatedNotInvoked: 0,
         outcomes: Object.fromEntries(OUTCOME_KEYS.map((k) => [k, 0])),
       });
     row.calls += 1;
+    if (call.designated) row.designated += 1;
     const subs = m.subByToolUse.get(call.toolUseId);
     if (!subs || subs.length === 0) {
       // 対応する実行を特定できない。別の実行の状態を流用せず、不明として数える。
@@ -462,7 +480,9 @@ function collect(files, start, endExclusive) {
     }
     if (subs.every((s) => s.calledCodex === 0)) row.noCodex += 1;
     if (subs.some((s) => s.committed > 0)) row.committed += 1;
-    row.outcomes[lastInvocationOutcome(subs)] += 1;
+    const outcome = lastInvocationOutcome(subs);
+    if (call.designated && outcome === 'notInvoked') row.designatedNotInvoked += 1;
+    row.outcomes[outcome] += 1;
   }
   delete m.subByToolUse;
   delete m.agentCalls;
@@ -552,6 +572,11 @@ function main() {
   console.log('委譲の結果(GPT で実行 / 未設定 / GPT 使用不能 / GPT で失敗 / 拒否 / 結果不明 / 未起動)');
   for (const [k, v] of Object.entries(m.byAgent).sort((a, b) => b[1].calls - a[1].calls)) {
     console.log(`  ${k.padEnd(16)}${OUTCOME_KEYS.map((key) => ` ${String(v.outcomes[key]).padStart(6)}`).join('')}`);
+  }
+  console.log('');
+  console.log('委譲を止める指定(指定あり / うち Codex 未起動)');
+  for (const [k, v] of Object.entries(m.byAgent).sort((a, b) => b[1].calls - a[1].calls)) {
+    console.log(`  ${k.padEnd(16)} ${String(v.designated).padStart(6)} ${String(v.designatedNotInvoked).padStart(12)}`);
   }
   console.log('');
   console.log(`解析できなかった行: ${unparseableLines.件数} 件(ファイル ${unparseableLines.ファイル数} 本)`);
