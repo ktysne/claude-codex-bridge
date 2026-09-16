@@ -68,11 +68,13 @@ function walk(dir, out = [], failures = []) {
 // その本文まで照合の対象にすると、依頼文が話題にしている語(`git commit` など)を
 // 実行したものとして数えてしまう。照合の前に本文を落とす。
 function stripHeredocs(cmd) {
-  return cmd.replace(/<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1[\s\S]*?^[\t ]*\2[\t ]*$/gm, '<<HEREDOC');
+  return cmd
+    .replace(/<<-\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1[\s\S]*?^\t*\2$/gm, '<<HEREDOC')
+    .replace(/<<(?!-)\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1[\s\S]*?^\2$/gm, '<<HEREDOC');
 }
 
 // 依頼文の同一性は全文で判断する。先頭だけで照合すると、共通の前置きから始まる別の依頼が衝突する。
-const promptKey = (s) => crypto.createHash('sha1').update(norm(s)).digest('hex');
+const promptKey = (s) => crypto.createHash('sha1').update(String(s ?? '')).digest('hex');
 
 const isSub = (file) => file.includes('/subagents/');
 
@@ -81,8 +83,6 @@ const textOf = (c) => {
   if (Array.isArray(c.content)) return c.content.map((x) => (x && x.text) || '').join('\n');
   return '';
 };
-
-const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
 
 function collect(files, since, until) {
   const inRange = (ts) => typeof ts === 'string' && ts >= since && ts <= until;
@@ -101,6 +101,7 @@ function collect(files, since, until) {
     waitCalls: 0,
     byAgent: {},
     unreadable: [],
+    unparseableLines: new Map(),
     subPrompts: new Map(),
     agentCalls: [],
   };
@@ -125,6 +126,8 @@ function collect(files, since, until) {
       try {
         o = JSON.parse(line);
       } catch {
+        // 書き込み中のファイルでは、末尾の 1 行が途中で切れていることがある。
+        m.unparseableLines.set(file, (m.unparseableLines.get(file) || 0) + 1);
         continue;
       }
       if (!firstPrompt && isSub(file) && o.type === 'user' && o.message && typeof o.message.content === 'string') {
@@ -234,6 +237,10 @@ function main() {
 
   const m = collect(files, since, until);
   const unreadable = failures.concat(m.unreadable);
+  const unparseableLines = {
+    件数: Array.from(m.unparseableLines.values()).reduce((sum, count) => sum + count, 0),
+    ファイル数: m.unparseableLines.size,
+  };
   const offloaded = m.offloaded;
   const summary = {
     期間: `${since} 〜 ${until}`,
@@ -247,6 +254,7 @@ function main() {
     },
     待つためのBash: m.waitCalls,
     委譲の内訳: m.byAgent,
+    解析できなかった行: unparseableLines,
     読めなかった場所: unreadable,
   };
 
@@ -272,6 +280,8 @@ function main() {
   for (const [k, v] of Object.entries(m.byAgent).sort((a, b) => b[1].calls - a[1].calls)) {
     console.log(`  ${k.padEnd(16)} ${String(v.calls).padStart(4)} ${String(v.noCodex).padStart(6)} ${String(v.committed).padStart(6)}`);
   }
+  console.log('');
+  console.log(`解析できなかった行: ${unparseableLines.件数} 件(ファイル ${unparseableLines.ファイル数} 本)`);
   if (unreadable.length) {
     console.log('');
     console.log(`読めなかった場所: ${unreadable.length} 件(この分は数えられていない)`);
