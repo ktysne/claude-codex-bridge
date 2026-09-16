@@ -123,9 +123,23 @@ Claude Code はサブエージェント定義を呼び出せるものとして�
 
 ### 6. Claude Code を再起動する
 
-エージェント定義と `CLAUDE.md` はセッション開始時に読み込まれる。
-配置した定義と追加した役割分担を有効にするため、Claude Code を再起動する。
+`CLAUDE.md` はセッション開始時にだけ読み込まれる。
+手順 5 で追加した役割分担を有効にするため、Claude Code を再起動する。
 再起動後に表示される定義は、`impl-hard` と、選んだパターンで配置したものだけになる。
+
+Claude 側定義(`.claude/agents/`)が反映される条件は、Claude Code の版によって変わる。
+2.1.273 では `~/.claude/agents/` と `<プロジェクト>/.claude/agents/` を監視しており、セッション開始時から在ったディレクトリの中でファイルを足したり直したりすると、数秒のうちに次の委譲へ反映される。
+次の 3 つの場合は監視が効かないため、再起動して読み込ませる([サブエージェントの公式文書](https://code.claude.com/docs/en/sub-agents))。
+
+- 手順 3 の配置先のディレクトリがセッション開始時に無く、そこで初めて定義を作った場合。
+- `--add-dir` や `/add-dir` で足したディレクトリの下に置いた場合。
+- `--disable-slash-commands` を付けて起動したセッションの場合。
+
+導入直後は最初の場合に当たる。
+ここで再起動しないと、`Agent type 'codex-review' not found` のように定義が見つからない失敗になる。
+
+GPT 側定義(`.claude/gpt-agents/`)と `tools/codex-agent.sh` は、`codex-agent.sh` が呼び出しのたびに読む。
+これらだけを直したときは、再起動せずに次の呼び出しから効く。
 
 ### 7. 設定コンソールを導入する(任意)
 
@@ -167,6 +181,7 @@ bash ~/.claude/tools/codex-agent.sh impl-standard --effort low <<< "Reply with e
 `impl-light` と `impl-standard` は、それぞれの監査行に `agent=impl-light` または `agent=impl-standard` と `sandbox=workspace-write` が出ることを確認する。
 `codex_home` に `~/.codex` に対応するパスが出て、各応答の末尾に `codex-agent: result=ok` が出ればよい。
 Claude Code の `Agent` ツールからも `subagent_type: impl-hard`、`subagent_type: impl-light`、`subagent_type: impl-standard` をそれぞれ指定して同じ応答を確認する(`impl-hard` は `codex_model` を設定した場合に限り Codex 側の応答を確認できる)。
+`Agent type '<定義名>' not found` のように定義が見つからないときは、手順 3 の配置と、共通手順 6 の反映条件を確認する。
 
 ## パターン 2
 
@@ -207,6 +222,7 @@ bash ~/.claude/tools/codex-agent.sh codex-subagent --effort low <<< "Reply with 
 実装補助用の `codex-subagent` では `sandbox=workspace-write` が出ることを確認する。
 `impl-hard` を除く 4 つすべての応答の末尾に `codex-agent: result=ok` が出ればよい。
 Claude Code の `Agent` ツールからも、5 つの `subagent_type` をそれぞれ指定して確認する。
+`Agent type '<定義名>' not found` のように定義が見つからないときは、手順 3 の配置と、共通手順 6 の反映条件を確認する。
 
 ## パターン 3
 
@@ -310,6 +326,7 @@ bash ~/.claude/tools/codex-agent.sh codex-subagent --effort low <<< "Reply with 
 `codex-review` では `sandbox=read-only`、`codex-subagent` では `sandbox=workspace-write` が出ることを確認する。
 `impl-hard` を除く 4 つすべての応答の末尾に `codex-agent: result=ok` が出ればよい。
 Claude Code の `Agent` ツールからも、5 つの `subagent_type` をそれぞれ指定して確認する。
+`Agent type '<定義名>' not found` のように定義が見つからないときは、手順 3 の配置と、共通手順 6 の反映条件を確認する。
 
 ## 設定に関する注意
 
