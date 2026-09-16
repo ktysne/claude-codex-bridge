@@ -14,6 +14,8 @@
 //     まとめると、同じ分に並行して起動した別々の実行が失われる。
 //   - 依頼文はヒアドキュメントでコマンドに埋め込まれる。照合の前にその本文を落とす。
 //     落とさないと、依頼文が話題にしている語を実行したものとして数える。
+//   - 起動の判定は、コマンドを実行単位へ切り出してから行う。区切りは `;`、`&`、`|`、改行である。
+//     引用符の中とコメントの中にある区切りは区切りとして扱わない。
 //   - 委譲の紐付けは、親セッションと依頼文の全文で行う。先頭だけで照合すると、共通の前置きから
 //     始まる別の依頼が衝突する。親セッションを鍵に含めないと、別のセッションが同じ依頼文を
 //     出していたときに、その結果で上書きされる。
@@ -77,6 +79,50 @@ function stripHeredocs(cmd) {
   return cmd
     .replace(/<<-\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1[\s\S]*?^\t*\2$/gm, '<<HEREDOC')
     .replace(/<<(?!-)\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1[\s\S]*?^\2$/gm, '<<HEREDOC');
+}
+
+// コマンド文字列をシェルの区切りで実行単位へ切り出す。
+// 区切りは `;`、`&`、`|`、改行である。
+// 引用符の中とコメントの中にある区切りは区切りとして扱わない。
+// 引用符を追わずに改行だけで切ると、複数行の引用文字列に書いた例を実行と取り違える。
+function splitCommands(cmd) {
+  const out = [];
+  let cur = '';
+  let quote = null;
+  for (let i = 0; i < cmd.length; i += 1) {
+    const ch = cmd[i];
+    if (quote) {
+      if (ch === '\\' && quote === '"') { cur += ch + (cmd[i + 1] || ''); i += 1; continue; }
+      if (ch === quote) quote = null;
+      cur += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"') { quote = ch; cur += ch; continue; }
+    // 行継続。次の行は同じ実行単位である。
+    if (ch === '\\' && cmd[i + 1] === '\n') { cur += ' '; i += 1; continue; }
+    if (ch === '\\') { cur += ch + (cmd[i + 1] || ''); i += 1; continue; }
+    // 語の先頭に来た `#` から行末まではコメントである。
+    if (ch === '#' && /(^|\s)$/.test(cur)) {
+      while (i < cmd.length && cmd[i] !== '\n') i += 1;
+      out.push(cur);
+      cur = '';
+      continue;
+    }
+    if (ch === ';' || ch === '&' || ch === '|' || ch === '\n') { out.push(cur); cur = ''; continue; }
+    cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+// 実行単位が codex-agent.sh の起動かを判定する。
+// 先頭に並ぶ環境変数の代入と、bash 自身のオプションは読み飛ばす。
+// `cat tools/codex-agent.sh` のように読むだけのコマンドは起動と数えない。
+const INVOCATION = /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:bash|sh)\s+(?:-\S+\s+)*["']?\S*codex-agent\.sh["']?(?:\s|$)/;
+
+// 起動の判定は 1 か所に置く。実起動、未呼出、待機の集計で同じ判定を使う。
+function isCodexInvocation(cmd) {
+  return splitCommands(stripHeredocs(cmd)).some((seg) => INVOCATION.test(seg.trim()));
 }
 
 // 依頼文の同一性は全文で判断する。先頭だけで照合すると、共通の前置きから始まる別の依頼が衝突する。
@@ -149,9 +195,9 @@ function collect(files, since, until) {
 
       for (const c of msg.content) {
         if (c.type === 'tool_use' && c.name === 'Bash') {
-          const cmd = stripHeredocs(String((c.input && c.input.command) || ''));
-          // スクリプトを読むだけの `cat tools/codex-agent.sh` などを起動と数えない。
-          if (/(^|[;&|]\s*)(bash|sh)\s+[^;|&]*codex-agent\.sh(\s|$)/.test(cmd)) {
+          const raw = String((c.input && c.input.command) || '');
+          const cmd = stripHeredocs(raw);
+          if (isCodexInvocation(raw)) {
             pending.set(c.id, { ts: o.timestamp, file });
             if (isSub(file)) calledCodex += 1;
           } else if (isSub(file) && inRange(o.timestamp) && /\.output|\bsleep\b|\buntil\b/.test(cmd)) {
@@ -317,9 +363,15 @@ function main() {
   }
 }
 
-try {
-  main();
-} catch (err) {
-  console.error(`agent-log-metrics: ${err.message}`);
-  process.exit(2);
+// 直接起動したときだけ実行する。読み込んだときは判定の部品だけを渡す。
+// 判定を外から確かめられるようにするためである。
+if (require.main === module) {
+  try {
+    main();
+  } catch (err) {
+    console.error(`agent-log-metrics: ${err.message}`);
+    process.exit(2);
+  }
 }
+
+module.exports = { stripHeredocs, splitCommands, isCodexInvocation, promptKey, collect };
