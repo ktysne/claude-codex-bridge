@@ -221,6 +221,7 @@ Claude Code の版によって、Bash ツールが長時間のコマンドをバ
 古いラッパーは実行中にどちらも出さないため、無い場合は Bash ツールが示した出力ファイルのパスを添える。
 監査行は、古いラッパーでも Codex の起動前に出ている。
 メインセッションは、この報告を完了の報告として扱わない。
+監査行が無い「進行中」の報告と、`run=` の行も出力ファイルのパスも無い「進行中」の報告は、Codex を経由した根拠も残った実行を探す手がかりも無いので、無効な報告として扱う([CLAUDE.md](../CLAUDE.md) の「委譲の検証」)。
 `run=` の行が無い「進行中」の報告を受けたときは、下の「実行 ID で探せない場合」の手順で残りを確かめる。
 上限で打ち切られた場合は、その時点までの書き込みは残るが、報告は返らない。
 `.claude/agents/` の 5 定義には「実行が長引いたとき」と出力の読み方の節があり、バックグラウンドへ移った場合の待ち方と出力の読み方を定めている。
@@ -285,9 +286,10 @@ Git Bash から `taskkill` を呼ぶときは、`/T` などが Git Bash のパ�
 **実行 ID で探せない場合。**
 `--output-last-message` を持たない版の Codex では、ラッパーが `-o` を渡さないため、3 の方法では探せない。
 `run=` の行を出さない古いラッパーでも、実行 ID が分からないため同じである。
-この場合は、コマンドラインに `exec` と、監査行の `workdir=` の値(`codex exec` の `-C` に渡る作業ディレクトリ)を含むプロセスを候補にする。
-1 つの作業ツリーに書き込む Codex は同時に 1 つという前提なので、候補は通常 1 つになる。
-候補の作成時刻が中断した委譲と合うこと、コマンドラインが読み取り専用のレビュー(`--sandbox read-only`)でないことを確かめてから、`taskkill /T /F /PID <pid>` で止める。
+この場合は、コマンドラインに `exec` と、監査行の `workdir=` の値(`codex exec` の `-C` に渡る作業ディレクトリ)と、監査行の `sandbox=` の値(`--sandbox` に渡る値)を含むプロセスを候補にする。
+`sandbox=` の値でも絞るのは、同じ作業ディレクトリで読み取り専用のレビュー(`codex-review`)と書き込み可能な委譲が並ぶことがあり、中断した側だけを候補にするためである。
+1 つの作業ツリーに書き込む Codex は同時に 1 つという前提なので、書き込み可能な委譲の候補は通常 1 つになる。
+候補の作成時刻が中断した委譲と合うことを確かめてから、`taskkill /T /F /PID <pid>` で止める。
 複数あって見分けられなければ、止めずに手で確かめる。
 ラッパーが残っていれば、先に 2 の確かめ方で止める。
 
@@ -298,12 +300,13 @@ PowerShell の例を示す。
 
 ```powershell
 $workdir = '<監査行の workdir= の値>'
+$sandbox = '<監査行の sandbox= の値>'
 $dir = [regex]::Escape($workdir) -replace '/', '[\\/]'
 $all = @(Get-CimInstance Win32_Process | Where-Object {
   $_.ProcessId -ne $PID -and
   $_.CommandLine -match '\sexec\s' -and
   $_.CommandLine -match ('\s-C\s+"?' + $dir + '"?(\s|$)') -and
-  $_.CommandLine -notmatch '--sandbox\s+"?read-only'
+  $_.CommandLine -match ('\s--sandbox\s+"?' + [regex]::Escape($sandbox) + '"?(\s|$)')
 })
 $ids = @($all | ForEach-Object { $_.ProcessId })
 $all | Where-Object { $ids -notcontains $_.ParentProcessId } |
