@@ -123,6 +123,7 @@ PR コメントの投稿やブランチの載せ替えといった実装でな�
 
 `tools/cross-review.js` は上流の ai-cross-review から取り込んでいるため、上流の [#49](https://github.com/ktysne/ai-cross-review/issues/49) で直し、このリポジトリで `npm run sync:cross-review` を実行して取り込む。
 取り込み先で直接編集すると、次の同期で失われるためである。
+同期では、同じ時期に上流へ入った [ai-cross-review#51](https://github.com/ktysne/ai-cross-review/pull/51)（指摘に推奨の対応方法を添えさせる変更）も一緒に取り込まれる。
 
 上流では次のように直す。
 
