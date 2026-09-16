@@ -77,6 +77,264 @@ function writeMeta(jsonlFile, toolUseId) {
   );
 }
 
+const OUTCOME_KEYS = ['gptRan', 'notConfigured', 'gptUnavailable', 'gptFailed', 'denied', 'unknown', 'notInvoked'];
+
+// 指定しない分類を 0 で埋めた outcomes を作る。
+function outcomesOf(values) {
+  return Object.fromEntries(OUTCOME_KEYS.map((k) => [k, values[k] || 0]));
+}
+
+const INVOKE = "bash ~/.claude/tools/codex-agent.sh impl-standard <<'EOF'\n依頼文\nEOF";
+
+// 起動の Bash 1 件。isError を与えると tool_result に is_error を付ける。
+// result を省くと tool_result を記録に残さない。
+function invokeEvent(timestamp, id, result, isError) {
+  const content = [bashUse(id, INVOKE)];
+  if (result !== undefined) {
+    const r = { type: 'tool_result', tool_use_id: id, content: result };
+    if (isError !== undefined) r.is_error = isError;
+    content.push(r);
+  }
+  return event(timestamp, ...content);
+}
+
+// 親の記録に委譲を並べ、委譲ごとに子の記録と meta を書く。
+// children は [toolUseId, events] の並びで、同じ toolUseId を複数回書くと子が複数ある委譲になる。
+function writeDelegations(root, calls, children) {
+  const sessionDir = path.join(root, 'project', 'session-outcomes');
+  const parentFile = writeJsonl(logPath(sessionDir, 'session.jsonl'), calls.map(([id, type]) => (
+    agentEvent('2026-09-10T10:00:00.000Z', id, type, `依頼 ${id}`)
+  )));
+  const files = [parentFile];
+  children.forEach(([toolUseId, rows], i) => {
+    const file = writeJsonl(logPath(sessionDir, 'subagents', `agent-${i}.jsonl`), rows);
+    writeMeta(file, toolUseId);
+    files.push(file);
+  });
+  return files;
+}
+
+function assertOutcomeInvariants(byAgent) {
+  for (const row of Object.values(byAgent)) {
+    const total = Object.values(row.outcomes).reduce((sum, v) => sum + v, 0);
+    assert.equal(total, row.calls - row.unlinked);
+    assert.equal(row.outcomes.notInvoked, row.noCodex);
+  }
+}
+
+test('collect は委譲ごとの結果を最後の起動で 7 つの分類に分ける', () => {
+  // 分類の取り違えが値の差として現れるよう、定義ごとに異なる件数を置く。
+  withTempDir((root) => {
+    const ts = '2026-09-10T10:01:00.000Z';
+    const files = writeDelegations(
+      root,
+      [
+        ['ran-1', 'impl-standard'],
+        ['not-configured-1', 'impl-standard'],
+        ['not-configured-2', 'impl-standard'],
+        ['unavailable-1', 'impl-light'],
+        ['unavailable-2', 'impl-light'],
+        ['unavailable-3', 'impl-light'],
+        ['failed-1', 'impl-hard'],
+        ['failed-2', 'impl-hard'],
+        ['denied-1', 'impl-light'],
+        ['unknown-1', 'impl-hard'],
+        ['not-invoked-1', 'impl-standard'],
+        ['unlinked-1', 'impl-standard'],
+      ],
+      [
+        ['ran-1', [invokeEvent(ts, 'b1', 'final\ncodex-agent: result=ok')]],
+        ['not-configured-1', [invokeEvent(ts, 'b2', 'Exit code 3\ncodex-agent: result=failed exit=3', true)]],
+        ['not-configured-2', [invokeEvent(ts, 'b3', 'codex-agent: result=failed exit=3')]],
+        ['unavailable-1', [invokeEvent(ts, 'b4', 'Exit code 75\ncodex-agent: result=rate-limited', true)]],
+        ['unavailable-2', [invokeEvent(ts, 'b5', 'codex-agent: result=unavailable')]],
+        ['unavailable-3', [invokeEvent(ts, 'b6', 'codex-agent: result=rate-limited')]],
+        ['failed-1', [invokeEvent(ts, 'b7', 'codex-agent: result=failed exit=1')]],
+        ['failed-2', [invokeEvent(ts, 'b8', 'Exit code 2\n定義が見つからない')]],
+        ['denied-1', [invokeEvent(ts, 'b9', 'Permission for this action was denied.', true)]],
+        ['unknown-1', [invokeEvent(ts, 'b10')]],
+        ['not-invoked-1', [bashEvent({ timestamp: ts, id: 'b11', command: 'echo 自分で実装した' })]],
+      ],
+    );
+
+    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+
+    assert.deepEqual(metrics.byAgent['impl-standard'].outcomes, outcomesOf({ gptRan: 1, notConfigured: 2, notInvoked: 1 }));
+    assert.deepEqual(metrics.byAgent['impl-light'].outcomes, outcomesOf({ gptUnavailable: 3, denied: 1 }));
+    assert.deepEqual(metrics.byAgent['impl-hard'].outcomes, outcomesOf({ gptFailed: 2, unknown: 1 }));
+    assert.equal(metrics.byAgent['impl-standard'].unlinked, 1);
+    assertOutcomeInvariants(metrics.byAgent);
+  });
+});
+
+test('collect は起動し直した委譲を最後の起動の結果で数える', () => {
+  // 上限の後に起動し直して成功した委譲は、GPT で実行したものである。
+  // 子が複数ある委譲でも、すべての子の起動を並べて最後のものを使う。
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['retry', 'impl-standard'], ['two-children', 'impl-light']],
+      [
+        ['retry', [
+          invokeEvent('2026-09-10T10:01:00.000Z', 'r1', 'codex-agent: result=rate-limited'),
+          invokeEvent('2026-09-10T10:02:00.000Z', 'r2', 'codex-agent: result=ok'),
+        ]],
+        ['two-children', [invokeEvent('2026-09-10T10:05:00.000Z', 'c2', 'codex-agent: result=unavailable')]],
+        ['two-children', [invokeEvent('2026-09-10T10:01:00.000Z', 'c1', 'codex-agent: result=ok')]],
+      ],
+    );
+
+    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+
+    assert.deepEqual(metrics.byAgent['impl-standard'].outcomes, outcomesOf({ gptRan: 1 }));
+    assert.deepEqual(metrics.byAgent['impl-light'].outcomes, outcomesOf({ gptUnavailable: 1 }));
+    assertOutcomeInvariants(metrics.byAgent);
+  });
+});
+
+test('collect は is_error でも Exit code で始まる結果を拒否に数えない', () => {
+  // 拒否は構造で判定する。終了コードを持つ結果はラッパーが動いた後の失敗である。
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['exit-2', 'impl-standard']],
+      [['exit-2', [invokeEvent('2026-09-10T10:01:00.000Z', 'e1', 'Exit code 2\n不明なエージェント', true)]]],
+    );
+
+    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+
+    assert.deepEqual(metrics.byAgent['impl-standard'].outcomes, outcomesOf({ gptFailed: 1 }));
+  });
+});
+
+test('collect は最後の起動がバックグラウンドへ移った委譲を結果不明に数える', () => {
+  // 先の起動が成功していても、最後の起動の結果が記録に無ければ行き先は分からない。
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['bg', 'impl-standard']],
+      [['bg', [
+        invokeEvent('2026-09-10T10:01:00.000Z', 'g1', 'codex-agent: result=ok'),
+        invokeEvent('2026-09-10T10:02:00.000Z', 'g2', 'Command running in background. The command was moved to the background.'),
+      ]]],
+    );
+
+    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+
+    assert.deepEqual(metrics.byAgent['impl-standard'].outcomes, outcomesOf({ unknown: 1 }));
+  });
+});
+
+// 任意の tool_use 1 件と、その tool_result。
+function toolEvent(timestamp, id, name, input, result, isError) {
+  const r = { type: 'tool_result', tool_use_id: id, content: result };
+  if (isError !== undefined) r.is_error = isError;
+  return event(timestamp, { type: 'tool_use', name, id, input }, r);
+}
+
+const BG_TEXT = 'Command did not complete within its 600s timeout and was moved to the background (ID: bgx123abc).'
+  + ' Output is being written to: E:\\Temp\\claude\\proj\\tasks\\bgx123abc.output. You will be notified when it completes.';
+const PERSISTED_TEXT = '<persisted-output>\nOutput too large (318.7KB). Full output saved to: '
+  + 'C:\\Users\\someone\\.claude\\projects\\proj\\tool-results\\toolu_persist.txt\n\nPreview (first 2KB):\ncodex-agent: agent=impl-light\n...\n</persisted-output>';
+
+test('collect はバックグラウンドへ移った起動を、ID を含む読み取りの結果で確定する', () => {
+  // バックグラウンドの出力は後で子が読む。手がかりで結び付けた読み取りの result 行を起動自身の結果とする。
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['bg-ok', 'impl-standard']],
+      [['bg-ok', [
+        invokeEvent('2026-09-10T10:01:00.000Z', 'i1', BG_TEXT),
+        toolEvent('2026-09-10T10:12:00.000Z', 't1', 'Bash', { command: 'tail -n 20 "$TMP/tasks/bgx123abc.output"' },
+          '最終報告\ncodex-agent: result=ok'),
+      ]]],
+    );
+
+    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+
+    assert.deepEqual(metrics.byAgent['impl-standard'].outcomes, outcomesOf({ gptRan: 1 }));
+    // 補うのは outcomes だけで、既存の数え方は変えない。
+    assert.equal(metrics.background, 1);
+    assert.deepEqual(metrics.results, {});
+  });
+});
+
+test('collect は退避された出力を、区切り文字の違うパスの読み取りで確定する', () => {
+  // 記録上の区切りは `\` でも、読み取りの入力では `/` になることがある。
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['persisted', 'impl-light']],
+      [['persisted', [
+        invokeEvent('2026-09-10T10:01:00.000Z', 'p1', PERSISTED_TEXT),
+        toolEvent('2026-09-10T10:02:00.000Z', 'p2', 'Read',
+          { file_path: 'C:/Users/someone/.claude/projects/proj/tool-results/toolu_persist.txt', offset: 3000 },
+          '...\ncodex-agent: result=rate-limited'),
+      ]]],
+    );
+
+    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+
+    assert.deepEqual(metrics.byAgent['impl-light'].outcomes, outcomesOf({ gptUnavailable: 1 }));
+  });
+});
+
+test('collect は手がかりを含まない読み取りや is_error の結果では確定しない', () => {
+  // 差分や文書を読んだ結果の result 行や、失敗した読み取りを起動の結果として拾わない。
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['unrelated-read', 'impl-standard'], ['error-read', 'impl-light']],
+      [
+        ['unrelated-read', [
+          invokeEvent('2026-09-10T10:01:00.000Z', 'u1', BG_TEXT),
+          toolEvent('2026-09-10T10:02:00.000Z', 'u2', 'Read', { file_path: 'docs/gpt-agents.md' },
+            '例:\ncodex-agent: result=ok'),
+        ]],
+        ['error-read', [
+          invokeEvent('2026-09-10T10:01:00.000Z', 'e1', BG_TEXT),
+          toolEvent('2026-09-10T10:02:00.000Z', 'e2', 'Bash', { command: 'cat E:/Temp/claude/proj/tasks/bgx123abc.output' },
+            'codex-agent: result=ok', true),
+        ]],
+      ],
+    );
+
+    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+
+    assert.deepEqual(metrics.byAgent['impl-standard'].outcomes, outcomesOf({ unknown: 1 }));
+    assert.deepEqual(metrics.byAgent['impl-light'].outcomes, outcomesOf({ unknown: 1 }));
+  });
+});
+
+test('--json の委譲の内訳は各定義に outcomes を含む', () => {
+  // JSON を読む利用者が結果の内訳を取り出せることを、CLI を通して確かめる。
+  withTempDir((root) => {
+    writeDelegations(
+      root,
+      [['json-1', 'impl-standard'], ['json-2', 'impl-light']],
+      [
+        ['json-1', [invokeEvent('2026-09-10T10:01:00.000Z', 'j1', 'codex-agent: result=ok')]],
+        ['json-2', [invokeEvent('2026-09-10T10:01:00.000Z', 'j2', 'denied', true)]],
+      ],
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [METRICS_SCRIPT, '--since', '2026-09-10', '--until', '2026-09-10', '--json'],
+      {
+        cwd: path.resolve(__dirname, '../..'),
+        env: { ...process.env, CLAUDE_PROJECTS_DIR: root },
+        encoding: 'utf8',
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const summary = JSON.parse(result.stdout);
+    assert.deepEqual(summary.委譲の内訳['impl-standard'].outcomes, outcomesOf({ gptRan: 1 }));
+    assert.deepEqual(summary.委譲の内訳['impl-light'].outcomes, outcomesOf({ denied: 1 }));
+  });
+});
+
 test('stripHeredocs は対応する終端記号まで本文を落とす', () => {
   // 依頼文は実行内容ではないため、本文中の git commit や sleep を指標に混ぜない。
   const forms = [
@@ -280,8 +538,20 @@ test('collect は同一分の起動、結果、待機、親子の紐付けを規
     assert.deepEqual(metrics.offloaded, [950]);
     assert.equal(metrics.waitCalls, 3);
     assert.deepEqual(metrics.byAgent, {
-      'impl-standard': { calls: 1, noCodex: 0, committed: 1, unlinked: 0 },
-      'impl-light': { calls: 2, noCodex: 1, committed: 0, unlinked: 1 },
+      'impl-standard': {
+        calls: 1,
+        noCodex: 0,
+        committed: 1,
+        unlinked: 0,
+        outcomes: outcomesOf({ gptRan: 1 }),
+      },
+      'impl-light': {
+        calls: 2,
+        noCodex: 1,
+        committed: 0,
+        unlinked: 1,
+        outcomes: outcomesOf({ notInvoked: 1 }),
+      },
     });
     assert.equal(metrics.badTimestamps, 1);
     assert.equal(metrics.unparseableLines.get(parentFile), 1);

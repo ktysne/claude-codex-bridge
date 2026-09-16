@@ -29,6 +29,24 @@
 //   - 出た値はすべて下限である。Codex の実行はバックグラウンドへ移ることがあり、
 //     その出力が記録に残らない場合があるためである。
 //   - 分類は終了コードと result 行だけで行う。依頼を果たせないまま 0 で終わった実行は数えられない。
+//   - 委譲の結果は、紐付けできた委譲 1 件をちょうど 1 つの分類に数える。分類は GPT で実行、
+//     未設定(result=failed exit=3)、GPT 使用不能(rate-limited と unavailable)、GPT で失敗、
+//     拒否、結果不明、未起動である。
+//   - 分類には、子が codex-agent.sh を起動した Bash の呼び出しのうち最後のものの結果を使う。
+//     子は失敗や上限の後に起動し直すことがあり、委譲の行き先を決めたのは最後の起動だからである。
+//     子が複数ある委譲では、すべての子の起動を時刻と記録順で並べて最後のものを使う。
+//   - 拒否は、tool_result に is_error が付き、本文が `Exit code` で始まらず、`codex-agent: ` の行も
+//     含まないもので判定する。拒否の文言は拒否した仕組みごとに違い、版によっても変わるため、
+//     本文の文言では判定しない。
+//   - 起動がバックグラウンドへ移った場合と、出力が退避された場合は、その起動を追跡する。
+//     手がかりは、バックグラウンドの ID と出力ファイルのパス、退避先のパスである。
+//     同じ子の記録で後に現れる tool_use のうち、入力が手がかりを含むもの(種類は問わない)を
+//     その起動に結び付け、その tool_result の行頭にある最後の result 行で起動の結果を確定する。
+//     パスは区切り文字 `\` と `/` の違いを吸収して照合する。is_error の付いた結果は確定に使わない。
+//   - 手がかりで結び付かない読み取りの result 行は使わない。差分や文書、別の実行のログを読んだ結果にも
+//     result 行が現れるため、それを拾うと別の起動の結果を流用する。
+//   - 追跡しても確定しなかったもの、結果が記録に無いもの、どの分類にも当たらないものは
+//     結果不明とする。
 //   - 読めなかった場所は握りつぶさず末尾に出す。測れなかったことと、実績が無いことは違う。
 
 const fs = require('fs');
@@ -172,6 +190,65 @@ const textOf = (c) => {
   return '';
 };
 
+const RESULT_LINE = /^codex-agent: result=(ok|rate-limited|unavailable|failed exit=(\d+))/gm;
+
+// 本文の行頭にある result 行のうち最後のものを分類へ写す。無ければ null を返す。
+// result 行は Codex の最終報告が引用することがあるため、最後の行を使う。
+function outcomeFromResultLine(t) {
+  let last = null;
+  for (const r of t.matchAll(RESULT_LINE)) last = r;
+  if (!last) return null;
+  if (last[1] === 'ok') return 'gptRan';
+  if (last[1] === 'rate-limited' || last[1] === 'unavailable') return 'gptUnavailable';
+  return last[2] === '3' ? 'notConfigured' : 'gptFailed';
+}
+
+// 照合のためにパスの区切りをそろえる。記録の JSON では `\` が `\\` になるため、連続もまとめる。
+const normalizeClue = (s) => s.replace(/[\\/]+/g, '/');
+
+// 起動の結果がその場で分からない場合に、後で子が読む出力を見分ける手がかりを返す。
+// バックグラウンドへ移った起動は ID と出力ファイルのパス、退避された出力は保存先のパスである。
+function trackingClues(t) {
+  const clues = [];
+  if (/moved to the background|Command running in background with ID:/.test(t)) {
+    for (const r of t.matchAll(/\bID: ([A-Za-z0-9_-]+)/g)) clues.push(r[1]);
+    for (const r of t.matchAll(/Output is being written to: (\S+?)\.?(?=\s|$)/g)) clues.push(r[1]);
+  }
+  if (/<persisted-output>/.test(t)) {
+    for (const r of t.matchAll(/Full output saved to: (\S+?)\.?(?=\s|$)/g)) clues.push(r[1]);
+  }
+  return clues.map(normalizeClue);
+}
+
+// codex-agent.sh を起動した Bash の tool_result 1 件を、委譲の結果の分類へ写す。
+function classifyInvocation(c) {
+  const t = textOf(c);
+  if (/moved to the background/.test(t)) return 'unknown';
+  const fromLine = outcomeFromResultLine(t);
+  if (fromLine) return fromLine;
+  if (/^Exit code \d+/.test(t)) return 'gptFailed';
+  // 拒否は文言でなく構造で見分ける。文言は拒否した仕組みごとに違うためである。
+  if (c.is_error === true && !/^Exit code/.test(t) && !/codex-agent: /.test(t)) return 'denied';
+  return 'unknown';
+}
+
+const OUTCOME_KEYS = ['gptRan', 'notConfigured', 'gptUnavailable', 'gptFailed', 'denied', 'unknown', 'notInvoked'];
+
+// 委譲に属するすべての子の起動から最後のものを選び、その分類を返す。
+// 時刻で並べ、同じ時刻は記録順で決める。時刻を読めない起動が混ざる場合は記録順だけで並べる。
+function lastInvocationOutcome(subs) {
+  const all = subs.flatMap((s) => s.invocations);
+  if (all.length === 0) return 'notInvoked';
+  const times = all.map((inv) => (typeof inv.ts === 'string' ? Date.parse(inv.ts) : NaN));
+  const byTime = times.every((t) => !Number.isNaN(t));
+  let best = 0;
+  for (let i = 1; i < all.length; i += 1) {
+    const later = byTime && times[i] !== times[best] ? times[i] > times[best] : all[i].seq > all[best].seq;
+    if (later) best = i;
+  }
+  return all[best].outcome;
+}
+
 // start 以上 endExclusive 未満を期間とする。文字列で比べると、
 // ミリ秒を持つ時刻(`...T00:00:00.000Z`)が `...T00:00:00Z` より小さくなり、開始日の先頭が落ちる。
 function collect(files, start, endExclusive) {
@@ -208,6 +285,9 @@ function collect(files, start, endExclusive) {
     agentCalls: [],
   };
 
+  // 起動の記録順。子が複数ある委譲で、時刻が同じ起動の前後を決めるために使う。
+  let invocationSeq = 0;
+
   for (const file of files) {
     let lines;
     try {
@@ -220,6 +300,13 @@ function collect(files, start, endExclusive) {
     let calledCodex = 0;
     let committed = 0;
     const waitKeys = [];
+    // 子の記録にある codex-agent.sh の起動を出現順に持つ。結果の分類は期間で絞らない。
+    const invocations = [];
+    const invocationById = new Map();
+    // 結果がその場で分からず、後の読み取りで確定を待つ起動と、その手がかり。
+    const tracking = [];
+    // 手がかりで起動に結び付けた tool_use の識別子と、結び付いた起動の並び。
+    const linkedReads = new Map();
     let lineNo = 0;
 
     for (const line of lines) {
@@ -238,12 +325,37 @@ function collect(files, start, endExclusive) {
       if (!msg || !Array.isArray(msg.content)) continue;
 
       for (const c of msg.content) {
+        if (c.type === 'tool_use' && tracking.length > 0) {
+          // 種類を問わず、入力が追跡中の起動の手がかりを含む tool_use をその起動に結び付ける。
+          const input = normalizeClue(JSON.stringify(c.input === undefined ? null : c.input));
+          const hits = tracking.filter((tr) => tr.clues.some((clue) => input.includes(clue)));
+          if (hits.length > 0) linkedReads.set(c.id, hits);
+        }
+        if (c.type === 'tool_result' && linkedReads.has(c.tool_use_id)) {
+          const hits = linkedReads.get(c.tool_use_id);
+          linkedReads.delete(c.tool_use_id);
+          const fromLine = c.is_error === true ? null : outcomeFromResultLine(textOf(c));
+          if (fromLine) {
+            for (const tr of hits) {
+              const idx = tracking.indexOf(tr);
+              if (idx < 0) continue; // 先に別の読み取りで確定した。
+              tr.inv.outcome = fromLine;
+              tracking.splice(idx, 1);
+            }
+          }
+        }
         if (c.type === 'tool_use' && c.name === 'Bash') {
           const raw = String((c.input && c.input.command) || '');
           const cmd = stripHeredocs(raw);
           if (isCodexInvocation(raw)) {
             pending.set(c.id, { ts: o.timestamp, at, file });
-            if (isSub(file)) calledCodex += 1;
+            if (isSub(file)) {
+              calledCodex += 1;
+              const inv = { ts: o.timestamp, seq: invocationSeq, outcome: 'unknown' };
+              invocationSeq += 1;
+              invocations.push(inv);
+              invocationById.set(c.id, inv);
+            }
           } else if (isSub(file) && /\.output|\bsleep\b|\buntil\b/.test(cmd) && inRange(o.timestamp, at)) {
             // 待つためだけの Bash。定義に待ち方を書く前は、これが毎回繰り返されていた。
             // Codex の起動そのものは待機に数えない。
@@ -257,6 +369,14 @@ function collect(files, start, endExclusive) {
           const st = String((c.input && c.input.subagent_type) || '');
           if (WRAPPER_AGENTS.includes(st) && inRange(o.timestamp, at)) {
             m.agentCalls.push({ type: st, toolUseId: c.id });
+          }
+        }
+        if (c.type === 'tool_result' && invocationById.has(c.tool_use_id)) {
+          const inv = invocationById.get(c.tool_use_id);
+          inv.outcome = classifyInvocation(c);
+          if (inv.outcome === 'unknown') {
+            const clues = trackingClues(textOf(c));
+            if (clues.length > 0) tracking.push({ inv, clues });
           }
         }
         if (c.type === 'tool_result' && pending.has(c.tool_use_id)) {
@@ -294,7 +414,7 @@ function collect(files, start, endExclusive) {
       const link = readAgentMeta(file, m);
       if (link && link.toolUseId) {
         const list = m.subByToolUse.get(link.toolUseId) || [];
-        list.push({ calledCodex, committed });
+        list.push({ calledCodex, committed, invocations });
         m.subByToolUse.set(link.toolUseId, list);
       }
     }
@@ -305,7 +425,13 @@ function collect(files, start, endExclusive) {
   // それぞれ別の実行を伴うので別の委譲として数える。
   for (const call of m.agentCalls) {
     const row = (m.byAgent[call.type] = m.byAgent[call.type]
-      || { calls: 0, noCodex: 0, committed: 0, unlinked: 0 });
+      || {
+        calls: 0,
+        noCodex: 0,
+        committed: 0,
+        unlinked: 0,
+        outcomes: Object.fromEntries(OUTCOME_KEYS.map((k) => [k, 0])),
+      });
     row.calls += 1;
     const subs = m.subByToolUse.get(call.toolUseId);
     if (!subs || subs.length === 0) {
@@ -315,6 +441,7 @@ function collect(files, start, endExclusive) {
     }
     if (subs.every((s) => s.calledCodex === 0)) row.noCodex += 1;
     if (subs.some((s) => s.committed > 0)) row.committed += 1;
+    row.outcomes[lastInvocationOutcome(subs)] += 1;
   }
   delete m.subByToolUse;
   delete m.agentCalls;
@@ -399,6 +526,11 @@ function main() {
       `  ${k.padEnd(16)} ${String(v.calls).padStart(4)} ${String(v.noCodex).padStart(6)}`
         + ` ${String(v.committed).padStart(6)} ${String(v.unlinked).padStart(6)}`,
     );
+  }
+  console.log('');
+  console.log('委譲の結果(GPT で実行 / 未設定 / GPT 使用不能 / GPT で失敗 / 拒否 / 結果不明 / 未起動)');
+  for (const [k, v] of Object.entries(m.byAgent).sort((a, b) => b[1].calls - a[1].calls)) {
+    console.log(`  ${k.padEnd(16)}${OUTCOME_KEYS.map((key) => ` ${String(v.outcomes[key]).padStart(6)}`).join('')}`);
   }
   console.log('');
   console.log(`解析できなかった行: ${unparseableLines.件数} 件(ファイル ${unparseableLines.ファイル数} 本)`);
