@@ -15,7 +15,8 @@
 #   3   GPT 側が未導入、無効化、または未設定である
 #       (codex コマンドが無い、定義ファイルが無い、codex_enabled: false、または codex_model が無いか空)
 #       呼び出し側は Claude へフォールバックする
-#   75  Codex がレートリミットで実行できなかった(呼び出し側は Claude へフォールバックする)
+#   75  呼び出し側では直せない GPT 側の事情で実行できなかった(呼び出し側は Claude へフォールバックする)
+#       利用上限なら result=rate-limited、モデルの混雑など他の事情なら result=unavailable
 #   他  Codex の終了コードをそのまま返す
 #       ただし Codex 自身が 75 で終了した場合は 75 の意味と衝突するため 1 に写像し、
 #       元の値は codex-agent: result=failed exit=75 の行に残す
@@ -45,7 +46,8 @@ usage() {
   2   引数、定義ファイルの内容、環境の不備でスクリプトが起動しなかった
   3   GPT 側が未導入、無効化、または未設定である
       (codex コマンドが無い、定義ファイルが無い、codex_enabled: false、または codex_model が無いか空)
-  75  Codex がレートリミットで実行できなかった
+  75  呼び出し側では直せない GPT 側の事情で実行できなかった
+      (利用上限なら result=rate-limited、モデルの混雑など他の事情なら result=unavailable)
   他  Codex の終了コードをそのまま返す(Codex 自身の 75 は 1 に写像する)
 USAGE
 }
@@ -251,54 +253,133 @@ if [ "${CODEX_AGENT_SIMULATE_RATE_LIMIT:-}" = "1" ]; then
   printf 'codex-agent: result=rate-limited (simulated)\n'
   exit 75
 fi
+if [ "${CODEX_AGENT_SIMULATE_UNAVAILABLE:-}" = "1" ]; then
+  printf 'codex-agent: result=unavailable (simulated)\n'
+  exit 75
+fi
 
+# 実行ログの置き場。Codex は推論の経過と実行したコマンドを標準エラーへ流すため、
+# 受け取った全文をそのまま返すと呼び出し側のツール結果が肥大してファイルへ退避され、
+# 報告を取り出せなくなる。全文はここへ残し、標準出力へは最終報告と監査用の行だけを出す。
+log_dir="${TMPDIR:-/tmp}/codex-agent"
+mkdir -p "$log_dir" || die "実行ログの置き場を作れない: $log_dir"
+# 残し続けると 1 回あたり数百 KB が溜まるため、古いものを落とす。
+find "$log_dir" -maxdepth 1 -type f -name '*.log' -mtime +7 -delete 2>/dev/null || true
+
+log_base="$log_dir/$agent_name-$(date +%Y%m%d-%H%M%S)-$$"
+log_file="$log_base.log"
 out_file="$(mktemp)"
 err_file="$(mktemp)"
 err_filtered="$(mktemp)"
-trap 'rm -f "$out_file" "$err_file" "$err_filtered"' EXIT
+last_msg_file="$log_base.last"
+# ログ本体だけを残す。他は標準出力へ出すかログへ写した時点で役目を終える。
+trap 'rm -f "$out_file" "$err_file" "$err_filtered" "$last_msg_file"' EXIT
+
+# 失敗時と、最終報告を取り出せない場合に出すログの行数。
+tail_lines=40
+
+# 出したファイルが改行で終わっていないと、続く codex-agent: の行が同じ行に繋がって読めなくなる。
+# Codex の最終報告は改行で終わらないことがある。
+end_newline() {
+  [ -s "$1" ] || return 0
+  if [ -n "$(tail -c 1 "$1")" ]; then
+    printf '\n'
+  fi
+  return 0
+}
+
+# --output-last-message は Codex の版によって無い。無い版ではログの末尾を報告の代わりに出す。
+output_last_message=0
+if codex exec --help 2>/dev/null | grep -q -- '--output-last-message'; then
+  output_last_message=1
+fi
+
+codex_args=(
+  --skip-git-repo-check
+  --sandbox "$codex_sandbox"
+  -m "$codex_model"
+  -c "model_reasoning_effort=\"$codex_effort\""
+  -c approval_policy=never
+  -C "$workdir"
+)
+if [ "$output_last_message" -eq 1 ]; then
+  codex_args+=(-o "$last_msg_file")
+fi
 
 # 認証ホームは常に明示する。既定の ~/.codex への暗黙依存を作らない。
 # --dangerously-bypass-approvals-and-sandbox は付けない。
 # 承認方針は never に固定する。このスクリプトは非対話の委譲専用で承認を返す相手がいないため、
 # 呼び出し側の config.toml が on-request 等でも承認待ちで止まらないようにする
 # (ai-cross-review の cross-review.js は、この明示があるスクリプトに限って bridge 経由を選ぶ)。
-CODEX_HOME="$codex_home" codex exec \
-  --skip-git-repo-check \
-  --sandbox "$codex_sandbox" \
-  -m "$codex_model" \
-  -c "model_reasoning_effort=\"$codex_effort\"" \
-  -c approval_policy=never \
-  -C "$workdir" \
-  - <<<"$prompt" >"$out_file" 2>"$err_file"
+CODEX_HOME="$codex_home" codex exec "${codex_args[@]}" - <<<"$prompt" >"$out_file" 2>"$err_file"
 codex_status=$?
 
 # 標準エラーからはフックと警告の行だけを除く。
-# 標準出力は Codex の回答本文なので、フィルタを掛けずにそのまま出す。
 grep -v -e '^WARNING' -e '^hook:' "$err_file" >"$err_filtered"
-cat "$err_filtered"
-cat "$out_file"
+# 経過(標準エラー)と最終回答(標準出力)を、従来どおりの順でログへ写す。
+{ cat "$err_filtered"; cat "$out_file"; } >"$log_file"
 
-if [ "$codex_status" -ne 0 ]; then
-  # レートリミットの通知は標準出力に出ることも標準エラーに出ることもあるため、両方を見る。
-  # 標準エラー側はフックと警告を除いた後の内容だけを対象にする。
-  # 429 は単語境界で照合する。ID や桁数の一致で誤検出しないためである。
-  # 一致した行を残し、フォールバックの根拠を報告から追えるようにする。
-  matched="$(grep -hiE 'usage limit|rate limit|too many requests|\b429\b' "$out_file" "$err_filtered" | head -n 3)"
-  if [ -n "$matched" ]; then
-    printf 'codex-agent: rate-limit evidence: %s\n' "$matched"
-    printf 'codex-agent: result=rate-limited\n'
-    exit 75
+printf 'codex-agent: log=%s\n' "$(to_windows_path "$log_file")"
+
+if [ "$codex_status" -eq 0 ]; then
+  if [ -s "$last_msg_file" ]; then
+    cat "$last_msg_file"
+    end_newline "$last_msg_file"
+  else
+    # --output-last-message が無い版では、最終回答が流れる標準出力を報告の代わりに出す。
+    tail -n "$tail_lines" "$out_file"
+    end_newline "$out_file"
   fi
-  printf 'codex-agent: result=failed exit=%s\n' "$codex_status"
-  # Codex 自身の 75 はレートリミットの 75 と区別できないため 1 に写像する。
-  # 元の値は直前の result 行に残している。
-  if [ "$codex_status" -eq 75 ]; then
-    exit 1
-  fi
-  exit "$codex_status"
+  printf 'codex-agent: result=ok\n'
+  exit 0
 fi
 
-printf 'codex-agent: result=ok\n'
+# 失敗したときは原因を追えるようにする。ログの末尾だけを出す。
+# 全文を出すと、肥大を避けるためにログへ移した意味がなくなる。
+tail -n "$tail_lines" "$log_file"
+end_newline "$log_file"
+
+# 判定の対象は、失敗を告げる行と出力の末尾に絞る。
+# ログには Codex が読んだファイルの中身も流れるため、全文を対象にすると
+# テストデータに含まれる文字列で誤検出する。
+# 末尾も残すのは、失敗の通知が ERROR で始まらない版があり得るためである。
+# 末尾に読み込んだ内容が来ていれば誤検出は残るが、誤検出の結果は Claude 側での実装であり、
+# 検出漏れ(作業がそこで止まる)より軽い。
+evidence="$(
+  {
+    grep -iE '^[[:space:]]*(ERROR|stream error)' "$log_file"
+    tail -n 10 "$log_file"
+  } 2>/dev/null
+)"
+
+# 利用上限の通知は標準出力に出ることも標準エラーに出ることもあるため、両方を見る。
+# 429 は単語境界で照合する。ID や桁数の一致で誤検出しないためである。
+# 一致した行を残し、フォールバックの根拠を報告から追えるようにする。
+matched="$(printf '%s\n' "$evidence" | grep -iE 'usage limit|rate limit|too many requests|\b429\b' | head -n 3)"
+if [ -n "$matched" ]; then
+  printf 'codex-agent: rate-limit evidence: %s\n' "$matched"
+  printf 'codex-agent: result=rate-limited\n'
+  exit 75
+fi
+
+# 利用上限のほかにも、呼び出し側では直せない GPT 側の事情で実行できないことがある。
+# これらは引数や定義の不備と違って呼び出し側で直せないため、利用上限と同じ終了コード 75 を返し、
+# 呼び出し側が Claude へ倒せるようにする。理由は result 行で区別する。
+# 並べる語は実際に観測したものだけにする。広く取ると、Codex の通常の失敗まで倒れてしまう。
+matched="$(printf '%s\n' "$evidence" | grep -iE 'at capacity' | head -n 3)"
+if [ -n "$matched" ]; then
+  printf 'codex-agent: unavailable evidence: %s\n' "$matched"
+  printf 'codex-agent: result=unavailable\n'
+  exit 75
+fi
+
+printf 'codex-agent: result=failed exit=%s\n' "$codex_status"
+# Codex 自身の 75 は、GPT 側が使えないことを示す 75 と区別できないため 1 に写像する。
+# 元の値は直前の result 行に残している。
+if [ "$codex_status" -eq 75 ]; then
+  exit 1
+fi
+exit "$codex_status"
 }
 
 # main の後ろにコードを置かない。この行までを読み終えてから実行が始まる。
