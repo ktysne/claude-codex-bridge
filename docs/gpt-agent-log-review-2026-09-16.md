@@ -4,19 +4,22 @@
 
 Claude Code のセッション記録から、GPT 系サブエージェントの運用を測った結果と、そこから直した内容を残す。
 次に測るときの基準値として使う。
-測り方を先に固定してあるので、同じコマンドで数え直せば前回との差が読める。
+数え方をここに固定してあるので、同じ規則で数え直せば前回との差が読める。
 
 ## 測り方
 
-指標は `tools/agent-log-metrics.js` で数える。
+記録の置き場は `%USERPROFILE%\.claude\projects` である。
+この下にセッションごとの `.jsonl` があり、サブエージェントの記録は `<セッション>/subagents/` に入る。
+1 行が 1 件の出来事で、`message.content` の中に `tool_use` と `tool_result` が並ぶ。
 
-```bash
-node tools/agent-log-metrics.js --since 2026-09-16 --until 2026-09-23
-```
+測る指標は 4 つである。
 
-記録の置き場は `%USERPROFILE%\.claude\projects` である(環境変数 `CLAUDE_PROJECTS_DIR` で変えられる)。
-期間を省くと直近 7 日を見る。
-`--json` を付けると機械で読める形で出る。
+- **実起動**：`codex-agent.sh` を起動した Bash の呼び出しのうち、結果が記録に残ったものの件数。`codex-agent: result=` の値(`ok`、`rate-limited`、`unavailable`、`failed exit=<code>`)で分ける。
+- **バックグラウンドへの移行**：結果の本文に「moved to the background」が出た起動の件数。
+- **出力の退避**：結果の本文に「Output too large」が出た件数と、その最大のサイズ。
+- **待つためだけの Bash**：Codex を呼んだサブエージェントの中で、`.output`、`sleep`、`until` を含む Bash の呼び出しの件数。Codex の起動そのものは含めない。
+
+あわせて、定義ごとの内訳(親から見た起動、Codex を呼ばなかった件数、`git commit` を実行した件数)を出す。
 
 数え方には 4 つの約束がある。
 
@@ -25,7 +28,7 @@ node tools/agent-log-metrics.js --since 2026-09-16 --until 2026-09-23
 - `cat tools/codex-agent.sh` のようにスクリプトを読むだけのコマンドは起動と数えない。`bash` または `sh` がスクリプトを実行している形だけを数える。
 - 委譲の内訳は、親の依頼文とサブエージェントの最初の受信文を全文で突き合わせて紐付ける。同じ依頼文の再送は 1 件として数える。
 
-読めなかった場所は最後に件数と例を出す。
+読めなかった場所と、解析できなかった行は、件数を出す。
 測れなかったことと、実績が無いことを取り違えないためである。
 
 出た値はすべて下限である。
