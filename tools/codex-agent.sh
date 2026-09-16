@@ -263,6 +263,10 @@ fi
 # 報告を取り出せなくなる。全文はここへ残し、標準出力へは最終報告と監査用の行だけを出す。
 log_dir="${TMPDIR:-/tmp}/codex-agent"
 mkdir -p "$log_dir" || die "実行ログの置き場を作れない: $log_dir"
+# ログには Codex が読んだファイルの中身や実行結果が入りうる。
+# 置き場は利用者の一時ディレクトリ配下だが、POSIX 権限が効く環境では本人だけが読める形に落とす。
+# Windows の Git Bash では反映されないことがあるため、これは多重防御である。
+chmod 700 "$log_dir" 2>/dev/null || true
 # 残し続けると 1 回あたり数百 KB が溜まるため、古いものを落とす。
 find "$log_dir" -maxdepth 1 -type f -name '*.log' -mtime +7 -delete 2>/dev/null || true
 
@@ -272,6 +276,10 @@ out_file="$(mktemp)"
 err_file="$(mktemp)"
 err_filtered="$(mktemp)"
 last_msg_file="$log_base.last"
+# 先に作って権限を落とす。あとの書き込みは truncate なので、この権限が残る。
+: >"$log_file" || die "実行ログを作れない: $log_file"
+: >"$last_msg_file" || die "最終報告の受け皿を作れない: $last_msg_file"
+chmod 600 "$log_file" "$last_msg_file" 2>/dev/null || true
 # ログ本体だけを残す。他は標準出力へ出すかログへ写した時点で役目を終える。
 trap 'rm -f "$out_file" "$err_file" "$err_filtered" "$last_msg_file"' EXIT
 
@@ -289,8 +297,9 @@ end_newline() {
 }
 
 # --output-last-message は Codex の版によって無い。無い版ではログの末尾を報告の代わりに出す。
+# 認証ホームはこの確認でも明示する。codex を呼ぶ経路に既定の ~/.codex への暗黙依存を残さない。
 output_last_message=0
-if codex exec --help 2>/dev/null | grep -q -- '--output-last-message'; then
+if CODEX_HOME="$codex_home" codex exec --help 2>/dev/null | grep -q -- '--output-last-message'; then
   output_last_message=1
 fi
 
@@ -345,19 +354,30 @@ end_newline "$log_file"
 # 末尾も残すのは、失敗の通知が ERROR で始まらない版があり得るためである。
 # 末尾に読み込んだ内容が来ていれば誤検出は残るが、誤検出の結果は Claude 側での実装であり、
 # 検出漏れ(作業がそこで止まる)より軽い。
+# 抽出と末尾で同じ行が二重に入るため、重複は落とす。
 evidence="$(
   {
     grep -iE '^[[:space:]]*(ERROR|stream error)' "$log_file"
     tail -n 10 "$log_file"
-  } 2>/dev/null
+  } 2>/dev/null | awk '!seen[$0]++'
 )"
+
+# 根拠は 1 行ずつ接頭辞を付けて出す。
+# 呼び出し側の定義は result 行の直前に evidence 行が来ることを前提にしているため、
+# 接頭辞の無い行を間に挟まない。
+emit_evidence() {
+  printf '%s\n' "$2" | while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    printf 'codex-agent: %s evidence: %s\n' "$1" "$line"
+  done
+}
 
 # 利用上限の通知は標準出力に出ることも標準エラーに出ることもあるため、両方を見る。
 # 429 は単語境界で照合する。ID や桁数の一致で誤検出しないためである。
 # 一致した行を残し、フォールバックの根拠を報告から追えるようにする。
 matched="$(printf '%s\n' "$evidence" | grep -iE 'usage limit|rate limit|too many requests|\b429\b' | head -n 3)"
 if [ -n "$matched" ]; then
-  printf 'codex-agent: rate-limit evidence: %s\n' "$matched"
+  emit_evidence 'rate-limit' "$matched"
   printf 'codex-agent: result=rate-limited\n'
   exit 75
 fi
@@ -368,7 +388,7 @@ fi
 # 並べる語は実際に観測したものだけにする。広く取ると、Codex の通常の失敗まで倒れてしまう。
 matched="$(printf '%s\n' "$evidence" | grep -iE 'at capacity' | head -n 3)"
 if [ -n "$matched" ]; then
-  printf 'codex-agent: unavailable evidence: %s\n' "$matched"
+  emit_evidence 'unavailable' "$matched"
   printf 'codex-agent: result=unavailable\n'
   exit 75
 fi
