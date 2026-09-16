@@ -14,8 +14,14 @@
 //     まとめると、同じ分に並行して起動した別々の実行が失われる。
 //   - 依頼文はヒアドキュメントでコマンドに埋め込まれる。照合の前にその本文を落とす。
 //     落とさないと、依頼文が話題にしている語を実行したものとして数える。
-//   - 委譲の紐付けは依頼文の全文で行う。先頭だけで照合すると、共通の前置きから
-//     始まる別の依頼が衝突する。
+//   - 委譲の紐付けは、親セッションと依頼文の全文で行う。先頭だけで照合すると、共通の前置きから
+//     始まる別の依頼が衝突する。親セッションを鍵に含めないと、別のセッションが同じ依頼文を
+//     出していたときに、その結果で上書きされる。
+//   - 再送をまとめる単位は「親セッション、定義名、依頼文」である。別のセッションや別の定義への
+//     同じ依頼文は、独立した委譲として数える。
+//   - 委譲の期間は親の起動時刻で選ぶ。子の実行が日付をまたぐことがあるため、子の側では絞らない。
+//   - 対応する実行を特定できない委譲は「紐付け不明」として数え、未呼出には加えない。
+//     別の実行の状態を流用しないためである。
 //   - 出た値はすべて下限である。Codex の実行はバックグラウンドへ移ることがあり、
 //     その出力が記録に残らない場合があるためである。
 //   - 分類は終了コードと result 行だけで行う。依頼を果たせないまま 0 で終わった実行は数えられない。
@@ -77,6 +83,11 @@ function stripHeredocs(cmd) {
 const promptKey = (s) => crypto.createHash('sha1').update(String(s ?? '')).digest('hex');
 
 const isSub = (file) => file.includes('/subagents/');
+
+// 親セッションの記録は `<プロジェクト>/<セッション>.jsonl`、
+// サブエージェントの記録は `<プロジェクト>/<セッション>/subagents/agent-*.jsonl` にある。
+// 両者から同じ鍵を作り、委譲の突き合わせを親セッションの中に閉じる。
+const sessionOf = (file) => file.replace(/\/subagents\/.*$/, '').replace(/\.jsonl$/, '');
 
 const textOf = (c) => {
   if (typeof c.content === 'string') return c.content;
@@ -148,12 +159,14 @@ function collect(files, since, until) {
             // Codex の起動そのものは待機に数えない。
             waitKeys.push(`wait|${file}|${c.id}`);
           }
-          if (/git commit/.test(cmd) && isSub(file) && inRange(o.timestamp)) committed += 1;
+          // 委譲は親の起動時刻で期間を選ぶ。子の実行が日付をまたぐことがあるため、
+          // 子の側では期間で絞らない。
+          if (/git commit/.test(cmd) && isSub(file)) committed += 1;
         }
         if (c.type === 'tool_use' && c.name === 'Agent' && !isSub(file) && inRange(o.timestamp)) {
           const st = String((c.input && c.input.subagent_type) || '');
           if (WRAPPER_AGENTS.includes(st)) {
-            m.agentCalls.push({ type: st, prompt: promptKey(c.input.prompt) });
+            m.agentCalls.push({ type: st, prompt: promptKey(c.input.prompt), session: sessionOf(file) });
           }
         }
         if (c.type === 'tool_result' && pending.has(c.tool_use_id)) {
@@ -186,21 +199,33 @@ function collect(files, since, until) {
       }
     }
     if (isSub(file) && firstPrompt) {
-      m.subPrompts.set(firstPrompt, { calledCodex, committed });
+      // 同じ親セッションで同じ依頼文の記録が複数あることがある。
+      // 後から読んだもので上書きせず、候補として並べる。
+      const key = `${sessionOf(file)}|${firstPrompt}`;
+      const list = m.subPrompts.get(key) || [];
+      list.push({ calledCodex, committed });
+      m.subPrompts.set(key, list);
     }
   }
 
-  // 親から見た委譲を、依頼文でサブエージェントの記録と突き合わせる。
-  const counted = new Set();
+  // 親から見た委譲を、サブエージェントの記録と突き合わせる。
+  // 突き合わせの鍵は親セッションと依頼文である。依頼文だけを鍵にすると、
+  // 別のセッションが同じ依頼文を出していたときに、その結果で上書きされる。
+  // 同じ親セッションから同じ定義へ出した同じ依頼文は、再送とみなして 1 件の委譲として数える。
   for (const call of m.agentCalls) {
-    if (counted.has(call.prompt)) continue;
-    counted.add(call.prompt);
-    const sub = m.subPrompts.get(call.prompt);
-    if (!sub) continue;
-    const row = (m.byAgent[call.type] = m.byAgent[call.type] || { calls: 0, noCodex: 0, committed: 0 });
+    if (!once(`unit|${call.session}|${call.type}|${call.prompt}`)) continue;
+    const row = (m.byAgent[call.type] = m.byAgent[call.type]
+      || { calls: 0, noCodex: 0, committed: 0, unlinked: 0 });
     row.calls += 1;
-    if (sub.calledCodex === 0) row.noCodex += 1;
-    if (sub.committed > 0) row.committed += 1;
+    const subs = m.subPrompts.get(`${call.session}|${call.prompt}`);
+    if (!subs || subs.length === 0) {
+      // 対応する実行を特定できない。別の実行の状態を流用せず、不明として数える。
+      row.unlinked += 1;
+      continue;
+    }
+    // 紐付いた実行のどれかが Codex を呼んでいれば、未呼出には数えない。
+    if (subs.every((s) => s.calledCodex === 0)) row.noCodex += 1;
+    if (subs.some((s) => s.committed > 0)) row.committed += 1;
   }
   delete m.subPrompts;
   delete m.agentCalls;
@@ -276,9 +301,12 @@ function main() {
   );
   console.log(`待つためだけの Bash: ${m.waitCalls}`);
   console.log('');
-  console.log('委譲の内訳(親から見た起動 / Codex 未呼出 / git commit を実行)');
+  console.log('委譲の内訳(親から見た委譲 / Codex 未呼出 / git commit を実行 / 紐付け不明)');
   for (const [k, v] of Object.entries(m.byAgent).sort((a, b) => b[1].calls - a[1].calls)) {
-    console.log(`  ${k.padEnd(16)} ${String(v.calls).padStart(4)} ${String(v.noCodex).padStart(6)} ${String(v.committed).padStart(6)}`);
+    console.log(
+      `  ${k.padEnd(16)} ${String(v.calls).padStart(4)} ${String(v.noCodex).padStart(6)}`
+        + ` ${String(v.committed).padStart(6)} ${String(v.unlinked).padStart(6)}`,
+    );
   }
   console.log('');
   console.log(`解析できなかった行: ${unparseableLines.件数} 件(ファイル ${unparseableLines.ファイル数} 本)`);
