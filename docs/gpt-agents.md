@@ -136,7 +136,9 @@ Codex が終わると標準出力をログへ追記し、最後の行に標準�
 ログは `%USERPROFILE%\.claude\codex-agent\logs` に置く。
 ログには Codex が読んだファイルの中身が入りうるため、共有される一時ディレクトリを避けてホーム配下に取る。
 共有の場所では、他の利用者から読まれる余地と、先回りして置かれたシンボリックリンク越しに別のファイルを切り詰める余地が残る。
-スクリプトの起動時に 7 日より古い `.log` を削除する。
+Codex の標準出力と最終報告の受け皿も、同じ置き場に `<実行 ID>.out` と `<実行 ID>.last` として置き、終了時に消す。
+強制終了で終了時の後始末が動かなくても、実行 ID から特定して消せるようにするためである。
+スクリプトの起動時に 7 日より古い `.log`、`.last`、`.out` を削除する。
 
 スクリプトは末尾に結果の 1 行を出す。
 成功なら `codex-agent: result=ok`、利用上限なら `codex-agent: result=rate-limited`、モデルの混雑など GPT 側の事情なら `codex-agent: result=unavailable`、それ以外の失敗なら `codex-agent: result=failed exit=<code>` である。
@@ -214,8 +216,12 @@ Claude Code の版によって、Bash ツールが長時間のコマンドをバ
 バックグラウンドへ移った場合は、完了の通知を待ち、通知の本文または通知が示す出力ファイルの末尾を読んで `codex-agent: result=` の行で結果を判定する。
 途中経過が要るときは、出力ファイルの `codex-agent: log=` の行が示すログの末尾を数十行まで読んでよい。
 自分で `sleep` や `until` のループを回したり、プロセスの一覧を調べたり、ファイルを探し回ったりしない。
-`result=` の行を確認できないままターンを終えるサブエージェントは、報告の冒頭に「進行中」と書き、`run=` の行と `log=` の行をそのまま添える。
+`result=` の行を確認できないままターンを終えるサブエージェントは、報告の冒頭に「進行中」と書き、出力ファイルにある `codex-agent: agent=` の監査行をそのまま添える。
+`run=` の行と `log=` の行があれば、それもそのまま添える。
+古いラッパーは実行中にどちらも出さないため、無い場合は Bash ツールが示した出力ファイルのパスを添える。
+監査行は、古いラッパーでも Codex の起動前に出ている。
 メインセッションは、この報告を完了の報告として扱わない。
+`run=` の行が無い「進行中」の報告を受けたときは、下の「実行 ID で探せない場合」の手順で残りを確かめる。
 上限で打ち切られた場合は、その時点までの書き込みは残るが、報告は返らない。
 `.claude/agents/` の 5 定義には「実行が長引いたとき」と出力の読み方の節があり、バックグラウンドへ移った場合の待ち方と出力の読み方を定めている。
 古いラッパーでは `run=` の行が無く、`log=` の行は Codex の終了後に出る。定義はこの形でも `log=` の行と `result=` の行で同じように読む。
@@ -229,19 +235,43 @@ Windows 10 と Git Bash 5.3 で確かめたところ、Bash ツールで止ま�
 
 中断したあとで同じ作業を委譲し直す前に、メインセッションは次の順で確かめる。
 
-1. 出力の `run=` の行から PID と実行 ID を控え、その PID のプロセスが残っているかを確かめる。
-   PowerShell では `Get-CimInstance Win32_Process -Filter "ProcessId=<pid>"` が何か返せば残っている。
-   ログの最後の行が `codex-agent: result=` の行であれば、その実行は既に終わっている。
-2. 残っていれば、`taskkill /T /F /PID <pid>` でラッパーを子ごと止める。
+1. 出力の `log=` の行が示すログの最後の行を読む。
+   `codex-agent: result=` の行であれば、その実行は終わっている。何も止めない。
+2. 出力の `run=` の行から PID、実行 ID、開始時刻(`started=`)を控え、その PID のプロセスがラッパー本人であるかを確かめる。
+   PID は別のプロセスに再利用されうるため、PID が残っているだけでは止めない。
+   コマンドラインに `codex-agent.sh` を含み、作成時刻が `started=` の前後 60 秒以内にあるときだけ、ラッパーと見なして `taskkill /T /F /PID <pid>` で止める。
+   一致しなければ止めず、手で確かめる。
    ラッパーを先に止めるのは、Codex 側を先に止めると、ラッパーが続きを実行して `result=` の行を書くためである。
    止めたシムの終了コードが 0 として返り、`result=ok` と書かれることがあり、完了と取り違えやすい。
-3. ログの最後の行が `result=` の行でなければ、ラッパーが残っていなかった場合も、コマンドラインに `<実行 ID>.last` を含むプロセスを探し、残っていれば同じく `taskkill /T /F /PID <pid>` で止める。
+3. ラッパーが残っていなかった場合も、コマンドラインに `<実行 ID>.last` を含むプロセスを探し、残っていれば `taskkill /T /F /PID <pid>` で止める。
    `.last` は、ラッパーが `codex exec` の `-o` に渡す最終報告の受け皿のファイル名である。
+   実行 ID は時刻と番号を含み、別の実行と重ならないため、PID と違って作成時刻を確かめなくてよい。
    2 だけでは Codex まで止まらないため、この手順が要る。
    Git Bash が Git Bash 系のプログラム(npm のシムの `sh` など)を起動すると、中継のプロセスが先に終わり、Windows 上の親子関係がラッパーから途切れるためである。
+4. 止めたあと、ログ置き場(`%USERPROFILE%\.claude\codex-agent\logs`)の `<実行 ID>.last` と `<実行 ID>.out` を消す。ログ本体の `<実行 ID>.log` は残す。
+   強制終了ではラッパーの終了時の後始末が動かないため、この 2 つが残る。
+   消さなくても、次にラッパーを起動したときに 7 日より古いものは消える。
+
+2 の PowerShell の例を示す。
+`started=` は UTC なので、両辺を UTC に揃えて比べる。
+
+```powershell
+$wrapperPid = <run= の pid>
+$started = '<run= の started>'
+$p = Get-CimInstance Win32_Process -Filter "ProcessId=$wrapperPid"
+if (-not $p) {
+  'ラッパーは残っていない'
+} elseif ($p.CommandLine -like '*codex-agent.sh*' -and
+    [Math]::Abs(($p.CreationDate.ToUniversalTime() - ([datetimeoffset]$started).UtcDateTime).TotalSeconds) -le 60) {
+  taskkill /T /F /PID $wrapperPid
+} else {
+  "PID $wrapperPid は別のプロセスに再利用されている可能性がある。止めずに確かめる: $($p.Name) $($p.CommandLine)"
+}
+```
 
 3 の PowerShell の例を示す。
 実行 ID を検索の文字列と分けて変数に入れるのは、問い合わせたシェル自身のコマンドラインが一致しないようにするためである。
+一致するのはシム、node、Codex の実行ファイルの 3 つになることが多い。最初の `taskkill /T` で残りも止まるため、続く呼び出しが「見つからない」と失敗することがあるが、害はない。
 
 ```powershell
 $id = '<実行 ID>'
@@ -251,7 +281,39 @@ Get-CimInstance Win32_Process |
 ```
 
 Git Bash から `taskkill` を呼ぶときは、`/T` などが Git Bash のパス変換で書き換えられないよう、`taskkill //T //F //PID <pid>` と書く。
-`--output-last-message` を持たない版の Codex では `-o` を渡さないため、3 の方法では探せない。
+
+**実行 ID で探せない場合。**
+`--output-last-message` を持たない版の Codex では、ラッパーが `-o` を渡さないため、3 の方法では探せない。
+`run=` の行を出さない古いラッパーでも、実行 ID が分からないため同じである。
+この場合は、コマンドラインに `exec` と、監査行の `workdir=` の値(`codex exec` の `-C` に渡る作業ディレクトリ)を含むプロセスを候補にする。
+1 つの作業ツリーに書き込む Codex は同時に 1 つという前提なので、候補は通常 1 つになる。
+候補の作成時刻が中断した委譲と合うこと、コマンドラインが読み取り専用のレビュー(`--sandbox read-only`)でないことを確かめてから、`taskkill /T /F /PID <pid>` で止める。
+複数あって見分けられなければ、止めずに手で確かめる。
+ラッパーが残っていれば、先に 2 の確かめ方で止める。
+
+PowerShell の例を示す。
+`workdir=` の値は `/` 区切りだが、コマンドライン側が `\` 区切りでも一致するよう、区切りをどちらにも一致させて照合する。
+シム、node、Codex の実行ファイルがそろって一致するため、親が候補に含まれない最上位のプロセスだけを残す。
+`-C` と `exec` の照合に前の空白を求めるのは、問い合わせたシェル自身のコマンドラインが一致しないようにするためである。
+
+```powershell
+$workdir = '<監査行の workdir= の値>'
+$dir = [regex]::Escape($workdir) -replace '/', '[\\/]'
+$all = @(Get-CimInstance Win32_Process | Where-Object {
+  $_.ProcessId -ne $PID -and
+  $_.CommandLine -match '\sexec\s' -and
+  $_.CommandLine -match ('\s-C\s+"?' + $dir + '"?(\s|$)') -and
+  $_.CommandLine -notmatch '--sandbox\s+"?read-only'
+})
+$ids = @($all | ForEach-Object { $_.ProcessId })
+$all | Where-Object { $ids -notcontains $_.ParentProcessId } |
+  Select-Object ProcessId, Name, CreationDate, CommandLine | Format-List
+```
+
+候補が 1 つで、作成時刻とコマンドラインを確かめたら、その `ProcessId` を `taskkill /T /F /PID <pid>` に渡す。
+止めたあとは、4 と同じくログ置き場の一時ファイルを消す。
+古いラッパーでは `.out` を作らないため、ログ置き場で消す対象は `.last` だけである。
+古いラッパーは起動時の削除で `.last` を消さないため、この場合は手で消す。
 
 **スクリプト自身の書き換えを Codex に任せると、実行中の bash が壊れ得る。**
 bash はスクリプトを読みながら実行する。
@@ -272,6 +334,9 @@ GPT 側の定義は、スクリプトを起動したカレントディレクト�
 配布先のディレクトリがセッション開始時から在れば、書き換えは数秒で次の委譲に反映される。そのディレクトリを新しく作った場合など、再起動が要る条件は [setup.md](setup.md) の共通手順 6 にある。
 このリポジトリで作業しているあいだは、スクリプトがユーザ側の複製、GPT 側の定義がリポジトリ側という混在で動く。
 全プロジェクトに適用するなら、次の 3 つを置く。
+配布は、ラッパー(3)を定義(1)より先に行う。
+定義を先に配ると、新しい定義が `run=` の行を出さない古いラッパーの出力を読む時間ができるためである。
+定義は古いラッパーの出力も読めるように書いてあるが、「進行中」の報告から実行 ID が欠け、止める手順が「実行 ID で探せない場合」に落ちる。
 
 1. `.claude/agents/` の 5 定義を `%USERPROFILE%\.claude\agents\` に置き換える。
 2. `.claude/gpt-agents/` の 5 定義を `%USERPROFILE%\.claude\gpt-agents\` にコピーする。
