@@ -18,11 +18,11 @@
 //     落とさないと、依頼文が話題にしている語を実行したものとして数える。
 //   - 起動の判定は、コマンドを実行単位へ切り出してから行う。区切りは `;`、`&`、`|`、改行である。
 //     引用符の中とコメントの中にある区切りは区切りとして扱わない。
-//   - 委譲の紐付けは、親セッションと依頼文の全文で行う。先頭だけで照合すると、共通の前置きから
-//     始まる別の依頼が衝突する。親セッションを鍵に含めないと、別のセッションが同じ依頼文を
-//     出していたときに、その結果で上書きされる。
-//   - 再送をまとめる単位は「親セッション、定義名、依頼文」である。別のセッションや別の定義への
-//     同じ依頼文は、独立した委譲として数える。
+//   - 委譲 1 件は Agent の呼び出し 1 件である。同じ依頼文を出し直した場合も、
+//     それぞれ別の実行を伴うので別の委譲として数える。
+//   - 委譲と実行の紐付けは、サブエージェントの記録の脇にある `<名前>.meta.json` が持つ
+//     親の tool_use の識別子で行う。依頼文の一致で推測すると、同じ依頼文を出した
+//     別の定義や別の時期の実行と取り違える。
 //   - 委譲の期間は親の起動時刻で選ぶ。子の実行が日付をまたぐことがあるため、子の側では絞らない。
 //   - 対応する実行を特定できない委譲は「紐付け不明」として数え、未呼出には加えない。
 //     別の実行の状態を流用しないためである。
@@ -31,7 +31,6 @@
 //   - 分類は終了コードと result 行だけで行う。依頼を果たせないまま 0 で終わった実行は数えられない。
 //   - 読めなかった場所は握りつぶさず末尾に出す。測れなかったことと、実績が無いことは違う。
 
-const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
@@ -151,15 +150,21 @@ function isCodexInvocation(cmd) {
   return splitCommands(stripHeredocs(cmd)).some((seg) => INVOCATION.test(seg.trim()));
 }
 
-// 依頼文の同一性は全文で判断する。先頭だけで照合すると、共通の前置きから始まる別の依頼が衝突する。
-const promptKey = (s) => crypto.createHash('sha1').update(String(s ?? '')).digest('hex');
-
 const isSub = (file) => file.includes('/subagents/');
 
-// 親セッションの記録は `<プロジェクト>/<セッション>.jsonl`、
-// サブエージェントの記録は `<プロジェクト>/<セッション>/subagents/agent-*.jsonl` にある。
-// 両者から同じ鍵を作り、委譲の突き合わせを親セッションの中に閉じる。
-const sessionOf = (file) => file.replace(/\/subagents\/.*$/, '').replace(/\.jsonl$/, '');
+// サブエージェントの記録の脇には `<名前>.meta.json` があり、その実行を起こした親の
+// tool_use の識別子(`toolUseId`)と定義名を持つ。これで親子を一意に結ぶ。
+// 読めない場合は結ばない。依頼文の一致で代用すると、同じ依頼文を出した別の実行と取り違える。
+function readAgentMeta(file, m) {
+  const metaPath = file.replace(/\.jsonl$/, '.meta.json');
+  if (!fs.existsSync(metaPath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+  } catch (err) {
+    m.unreadable.push(`${metaPath}: ${err.code || err.message}`);
+    return null;
+  }
+}
 
 const textOf = (c) => {
   if (typeof c.content === 'string') return c.content;
@@ -171,12 +176,14 @@ const textOf = (c) => {
 // ミリ秒を持つ時刻(`...T00:00:00.000Z`)が `...T00:00:00Z` より小さくなり、開始日の先頭が落ちる。
 function collect(files, start, endExclusive) {
   const seen = new Set();
-  const inRange = (ts) => {
-    if (typeof ts !== 'string') return false;
-    const t = Date.parse(ts);
+  // at は「ファイル名と行番号」である。日時が必要な集計だけがこれを呼ぶ。
+  // 日時を持たない記録や読めない記録は、黙って実績 0 へ混ぜず件数を出す。
+  // 数える鍵を記録単位にするのは、同じ記録を何度判定しても 1 件とし、
+  // 別の記録が同じ不正値を持つときは別々に数えるためである。
+  const inRange = (ts, at) => {
+    const t = typeof ts === 'string' ? Date.parse(ts) : NaN;
     if (Number.isNaN(t)) {
-      // 日時が読めない記録を、黙って実績 0 へ混ぜない。
-      if (once(`badts|${ts}`)) m.badTimestamps += 1;
+      if (once(`badts|${at}`)) m.badTimestamps += 1;
       return false;
     }
     return t >= start && t < endExclusive;
@@ -197,7 +204,7 @@ function collect(files, start, endExclusive) {
     unreadable: [],
     unparseableLines: new Map(),
     badTimestamps: 0,
-    subPrompts: new Map(),
+    subByToolUse: new Map(),
     agentCalls: [],
   };
 
@@ -210,12 +217,13 @@ function collect(files, start, endExclusive) {
       continue;
     }
     const pending = new Map();
-    let firstPrompt = null;
     let calledCodex = 0;
     let committed = 0;
     const waitKeys = [];
+    let lineNo = 0;
 
     for (const line of lines) {
+      lineNo += 1;
       if (!line.trim()) continue;
       let o;
       try {
@@ -225,9 +233,7 @@ function collect(files, start, endExclusive) {
         m.unparseableLines.set(file, (m.unparseableLines.get(file) || 0) + 1);
         continue;
       }
-      if (!firstPrompt && isSub(file) && o.type === 'user' && o.message && typeof o.message.content === 'string') {
-        firstPrompt = promptKey(o.message.content);
-      }
+      const at = `${file}:${lineNo}`;
       const msg = o.message;
       if (!msg || !Array.isArray(msg.content)) continue;
 
@@ -236,9 +242,9 @@ function collect(files, start, endExclusive) {
           const raw = String((c.input && c.input.command) || '');
           const cmd = stripHeredocs(raw);
           if (isCodexInvocation(raw)) {
-            pending.set(c.id, { ts: o.timestamp, file });
+            pending.set(c.id, { ts: o.timestamp, at, file });
             if (isSub(file)) calledCodex += 1;
-          } else if (isSub(file) && inRange(o.timestamp) && /\.output|\bsleep\b|\buntil\b/.test(cmd)) {
+          } else if (isSub(file) && /\.output|\bsleep\b|\buntil\b/.test(cmd) && inRange(o.timestamp, at)) {
             // 待つためだけの Bash。定義に待ち方を書く前は、これが毎回繰り返されていた。
             // Codex の起動そのものは待機に数えない。
             waitKeys.push(`wait|${file}|${c.id}`);
@@ -247,16 +253,16 @@ function collect(files, start, endExclusive) {
           // 子の側では期間で絞らない。
           if (/git commit/.test(cmd) && isSub(file)) committed += 1;
         }
-        if (c.type === 'tool_use' && c.name === 'Agent' && !isSub(file) && inRange(o.timestamp)) {
+        if (c.type === 'tool_use' && c.name === 'Agent' && !isSub(file)) {
           const st = String((c.input && c.input.subagent_type) || '');
-          if (WRAPPER_AGENTS.includes(st)) {
-            m.agentCalls.push({ type: st, prompt: promptKey(c.input.prompt), session: sessionOf(file) });
+          if (WRAPPER_AGENTS.includes(st) && inRange(o.timestamp, at)) {
+            m.agentCalls.push({ type: st, toolUseId: c.id });
           }
         }
         if (c.type === 'tool_result' && pending.has(c.tool_use_id)) {
           const run = pending.get(c.tool_use_id);
           pending.delete(c.tool_use_id);
-          if (!inRange(run.ts)) continue;
+          if (!inRange(run.ts, run.at)) continue;
           const t = textOf(c);
           // 起動は Bash の呼び出しごとに 1 件である。時刻でまとめると、
           // 同じ分に並行して起動した別々の実行が失われる。
@@ -282,36 +288,35 @@ function collect(files, start, endExclusive) {
         if (once(key)) m.waitCalls += 1;
       }
     }
-    if (isSub(file) && firstPrompt) {
-      // 同じ親セッションで同じ依頼文の記録が複数あることがある。
-      // 後から読んだもので上書きせず、候補として並べる。
-      const key = `${sessionOf(file)}|${firstPrompt}`;
-      const list = m.subPrompts.get(key) || [];
-      list.push({ calledCodex, committed });
-      m.subPrompts.set(key, list);
+    if (isSub(file)) {
+      // 記録の脇にある meta ファイルが、その実行を起こした親の tool_use を持つ。
+      // これで親子を一意に結べるので、依頼文の一致で推測しない。
+      const link = readAgentMeta(file, m);
+      if (link && link.toolUseId) {
+        const list = m.subByToolUse.get(link.toolUseId) || [];
+        list.push({ calledCodex, committed });
+        m.subByToolUse.set(link.toolUseId, list);
+      }
     }
   }
 
-  // 親から見た委譲を、サブエージェントの記録と突き合わせる。
-  // 突き合わせの鍵は親セッションと依頼文である。依頼文だけを鍵にすると、
-  // 別のセッションが同じ依頼文を出していたときに、その結果で上書きされる。
-  // 同じ親セッションから同じ定義へ出した同じ依頼文は、再送とみなして 1 件の委譲として数える。
+  // 親から見た委譲を、親の tool_use の識別子でサブエージェントの記録と突き合わせる。
+  // 委譲 1 件は Agent の呼び出し 1 件である。同じ依頼文を出し直した場合も、
+  // それぞれ別の実行を伴うので別の委譲として数える。
   for (const call of m.agentCalls) {
-    if (!once(`unit|${call.session}|${call.type}|${call.prompt}`)) continue;
     const row = (m.byAgent[call.type] = m.byAgent[call.type]
       || { calls: 0, noCodex: 0, committed: 0, unlinked: 0 });
     row.calls += 1;
-    const subs = m.subPrompts.get(`${call.session}|${call.prompt}`);
+    const subs = m.subByToolUse.get(call.toolUseId);
     if (!subs || subs.length === 0) {
       // 対応する実行を特定できない。別の実行の状態を流用せず、不明として数える。
       row.unlinked += 1;
       continue;
     }
-    // 紐付いた実行のどれかが Codex を呼んでいれば、未呼出には数えない。
     if (subs.every((s) => s.calledCodex === 0)) row.noCodex += 1;
     if (subs.some((s) => s.committed > 0)) row.committed += 1;
   }
-  delete m.subPrompts;
+  delete m.subByToolUse;
   delete m.agentCalls;
   return m;
 }
@@ -397,6 +402,7 @@ function main() {
   }
   console.log('');
   console.log(`解析できなかった行: ${unparseableLines.件数} 件(ファイル ${unparseableLines.ファイル数} 本)`);
+  console.log(`日時が読めなかった記録: ${m.badTimestamps} 件(この分は数えられていない)`);
   if (unreadable.length) {
     console.log('');
     console.log(`読めなかった場所: ${unreadable.length} 件(この分は数えられていない)`);
@@ -415,4 +421,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { stripHeredocs, splitCommands, isCodexInvocation, promptKey, collect };
+module.exports = { stripHeredocs, splitCommands, isCodexInvocation, parseDay, collect };
