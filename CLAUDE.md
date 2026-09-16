@@ -7,6 +7,7 @@
 Claude Code から Codex CLI を、用途別のサブエージェントとして呼び出す仕組みを整備する。
 通常利用とレビュー用、サブエージェント用で ChatGPT アカウントを分け、`CODEX_HOME` を分離して認証を切り替える。
 全体像は [README.md](README.md)、サブエージェントの構成と設計上の制約は [docs/gpt-agents.md](docs/gpt-agents.md) を参照。
+運用の測定結果と、そこから直した内容の記録は [docs/gpt-agent-log-review-2026-09-16.md](docs/gpt-agent-log-review-2026-09-16.md) にある。測り直しの規則も同じ文書にある。
 定義ファイルを GUI から書き換える設定コンソール(`gui/`、Windows Forms、.NET Framework 4.8)も含む。使い方は [docs/gui.md](docs/gui.md)、設計は [docs/gui-console-design.md](docs/gui-console-design.md) を参照。
 
 ## 言語
@@ -31,6 +32,7 @@ Claude Code から Codex CLI を、用途別のサブエージェントとして
 - 認証の分離: `codex` を呼ぶときは必ず `CODEX_HOME` を明示する。既定の `~/.codex` に暗黙に依存する呼び出しを書かない。
 - 権限の固定: レビュー用は `--sandbox read-only` を外さない。実装補助用でも `--dangerously-bypass-approvals-and-sandbox` は使わない。設定コンソールからも `codex_sandbox` は編集させない。`codex_home` は設定コンソールから変えられるが、`%USERPROFILE%` 直下に実在する `.codex*` ディレクトリから選ぶだけで、任意のパスは入力させない。
 - 認証情報の非コミット: `auth.json`、トークン、アカウント ID をリポジトリに入れない。ドキュメントの例には実値を書かない。
+- 委譲の検証: `codex-review` と `codex-subagent` の報告は、Codex を起動できた場合は `codex-agent: agent=` の監査行と `codex-agent: result=` の行、起動する前に止まった場合は `codex-agent:` の理由行を含む。どれも含まない報告は Codex を経由していないため、受け取らずに委譲をやり直す。
 - 作業ツリーの分離: 書き込み可能な Codex 呼び出しは、Claude Code と別の worktree で行う。例外として、`impl-hard`、`impl-light`、`impl-standard` が委譲する GPT 側の実行は、メインセッションが同じファイルを同時に編集しない前提で同一 worktree に書く。
 
 ## CLAUDE.md と AGENTS.md の同期

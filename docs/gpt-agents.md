@@ -1,7 +1,7 @@
 # GPT 系サブエージェントを Codex CLI で動かす
 
-Claude Code のサブエージェント `impl-hard`、`impl-light`、`impl-standard`、`codex-review`、`codex-subagent` は、`tools/codex-agent.sh` を通じて Codex CLI を呼び出す。
-`impl-hard`、`impl-light`、`impl-standard` は、GPT 側が未設定、未導入、無効化、またはレートリミットで使えないときだけ、サブエージェント自身が Claude として実装する。
+Claude Code のサブエージェント `impl-hard`、`impl-light`、`impl-standard`、`codex-review`、`codex-subagent` は、ユーザ側の `~/.claude/tools/codex-agent.sh` を通じて Codex CLI を呼び出す。
+`impl-hard`、`impl-light`、`impl-standard` は、GPT 側が未設定、未導入、無効化、または GPT 側の事情で使えないときだけ、サブエージェント自身が Claude として実装する。
 
 ## 目的
 
@@ -21,19 +21,19 @@ GPT 側に委ねたい場合は、`.claude/gpt-agents/impl-hard.md` に `codex_m
 ```text
 Claude Code(メインセッション)
 ├─ codex-review                      .claude/agents/codex-review.md
-│   └─ tools/codex-agent.sh           .claude/gpt-agents/codex-review.md を読む
+│   └─ ~/.claude/tools/codex-agent.sh  .claude/gpt-agents/codex-review.md を読む
 │       └─ codex exec                 CODEX_HOME=~/.codex、read-only
 ├─ codex-subagent                    .claude/agents/codex-subagent.md
-│   └─ tools/codex-agent.sh           .claude/gpt-agents/codex-subagent.md を読む
+│   └─ ~/.claude/tools/codex-agent.sh  .claude/gpt-agents/codex-subagent.md を読む
 │       └─ codex exec                 CODEX_HOME=~/.codex、workspace-write
 ├─ impl-hard                         .claude/agents/impl-hard.md
-│   └─ tools/codex-agent.sh           .claude/gpt-agents/impl-hard.md を読む(既定は codex_model 未設定)
+│   └─ ~/.claude/tools/codex-agent.sh  .claude/gpt-agents/impl-hard.md を読む(既定は codex_model 未設定)
 │       └─ codex exec                 codex_model を設定した場合のみ実行。CODEX_HOME=~/.codex、workspace-write
 ├─ impl-light                        .claude/agents/impl-light.md
-│   └─ tools/codex-agent.sh           .claude/gpt-agents/impl-light.md を読む
+│   └─ ~/.claude/tools/codex-agent.sh  .claude/gpt-agents/impl-light.md を読む
 │       └─ codex exec                 CODEX_HOME=~/.codex、workspace-write
 └─ impl-standard                     .claude/agents/impl-standard.md
-    └─ tools/codex-agent.sh           .claude/gpt-agents/impl-standard.md を読む
+    └─ ~/.claude/tools/codex-agent.sh  .claude/gpt-agents/impl-standard.md を読む
         └─ codex exec                 CODEX_HOME=~/.codex、workspace-write
 ```
 
@@ -46,10 +46,10 @@ Claude Code(メインセッション)
 Claude 側と GPT 側のモデルと effort は各定義のフロントマターが正であり、設定コンソール([gui.md](gui.md))や手編集で変えられる。
 そのため、この文書には具体値を書かない。
 
-5 つのサブエージェントは依頼を受けると、まず `tools/codex-agent.sh` を 1 回呼び、依頼文をヒアドキュメントで標準入力に流す。
+5 つのサブエージェントは依頼を受けると、まずユーザ側の `~/.claude/tools/codex-agent.sh` を 1 回呼び、依頼文をヒアドキュメントで標準入力に流す。
 コマンドライン引数に埋め込むと、依頼文に含まれる引用符やバックスラッシュで壊れるためである。
 スクリプトが成功すれば、その出力をそのまま返す。
-`impl-hard`、`impl-light`、`impl-standard` は、GPT 側が未導入、無効化、未設定、またはレートリミットで使えないときだけ、サブエージェント自身が Claude として実装する。
+`impl-hard`、`impl-light`、`impl-standard` は、GPT 側が未導入、無効化、未設定、または GPT 側の事情で実行できないときだけ、サブエージェント自身が Claude として実装する。
 `codex-review` と `codex-subagent` は、非 0 終了時にフォールバックせず、終了コードと出力末尾を報告して停止する。
 
 ## 定義ファイルの二層
@@ -66,7 +66,7 @@ Claude Code はこれらを解釈しないし、`.claude/gpt-agents/` をサブ�
 GPT 側の定義では、フロントマター直後から末尾までが Codex へ渡る役割文になる。
 スクリプトはその役割文を先頭に置き、区切り線を挟んで `## 依頼` として依頼文を続けたプロンプトを組み立てる。
 
-定義の探索は、スクリプトを起動したカレントディレクトリを基準にする。
+GPT 側の定義の探索は、スクリプトを起動したカレントディレクトリを基準にする。
 `-C` で別のディレクトリを作業ディレクトリに指定しても、読む定義は切り替わらない。
 別のプロジェクトの定義を使いたい場合は、そのディレクトリへ移ってからスクリプトを起動する。
 
@@ -90,10 +90,10 @@ Claude 側の定義(`.claude/agents/<name>.md`)のフロントマターは、Cla
 
 `impl-hard`、`impl-light`、`impl-standard` はスクリプトの終了コードでフォールバックの要否を決める。
 
-- **0**：Codex が完了した。出力の末尾にある Codex の報告をそのまま返し、Claude 側では実装しない。
+- **0**：Codex が完了した。出力にある Codex の最終報告をそのまま返し、Claude 側では実装しない。
 - **2**：引数、定義ファイルの内容、環境の不備でスクリプトが起動しなかった。フロントマターのキー不足、effort やサンドボックスの不正値、`codex_home` の不在、作業ディレクトリの不在、端末からの起動、空の依頼文がこれにあたる。実装せず、終了コードと出力の末尾を報告して終わる。
 - **3**：GPT 側が未導入、無効化、または未設定である。`codex` コマンドが PATH に無い、`.claude/gpt-agents/<name>.md` が見つからない、`codex_enabled: false` が書かれている、`codex_model` が無いか空である、のいずれかに当たる場合である。サブエージェント自身が Claude として実装し、その旨を報告の冒頭に書く。キー名の誤記も `codex_model` の未設定と同じ経路で Claude 側へ倒れるため、報告の冒頭には `codex-agent:` の理由行をそのまま添える。
-- **75**：Codex がレートリミットで実行できなかった。サブエージェント自身が Claude として実装し、フォールバックした旨を報告の冒頭に書く。
+- **75**：呼び出し側では直せない GPT 側の事情で実行できなかった。利用上限の場合は `codex-agent: result=rate-limited`、それ以外の場合は `codex-agent: result=unavailable` として理由を区別する。`unavailable` は、いまのところモデルの混雑を示す `Selected model is at capacity` を対象にする。利用上限なら `codex-agent: rate-limit evidence: ...`、それ以外なら `codex-agent: unavailable evidence: ...` の行に判定の根拠を残す。サブエージェント自身が Claude として実装し、フォールバックした旨を報告の冒頭に書く。
 - **権限判定で拒否された場合**：Bash の実行自体が拒否され、終了コードを得られない。
   `impl-hard`、`impl-light`、`impl-standard` は Claude 側で実装し、報告の冒頭に「Codex の呼び出しが権限判定で拒否されたため Claude 側で実装した」と書く。
   `codex-review` と `codex-subagent` は拒否の文言をそのまま報告して停止する。
@@ -103,25 +103,53 @@ Claude 側の定義(`.claude/agents/<name>.md`)のフロントマターは、Cla
 終了コードと出力の末尾を報告して停止する。
 これらは Codex への明示的なレビューまたは実装補助の依頼を扱うため、Claude 側が代行すると依頼の意味が変わるからである。
 
+引数や定義の不備は呼び出し側で直せるため終了コード 2 で止め、GPT 側の事情は呼び出し側で直せないため終了コード 75 として呼び出し側が Claude 側へフォールバックできるようにする。
+
 Codex 自身が 75 で終了した場合だけは、レートリミットの 75 と区別できないため 1 に写像する。
 元の値は `codex-agent: result=failed exit=75` の行に残る。
 
+**標準出力の形。**
+Codex を起動して正常終了した場合、標準出力には監査用の行、ログファイルのパス、最終報告、結果の行だけが出る。
+Codex の経過は標準エラーへ数百 KB 流れることがある。
+これをそのまま返すと呼び出し側のツール結果が肥大してファイルへ退避され、報告を取り出せなくなるため、経過はログファイルへ残す。
+
+```text
+codex-agent: agent=<name> model=<定義の codex_model> effort=<実行時の値> sandbox=<定義の codex_sandbox> codex_home=... workdir=...
+codex-agent: log=<ログファイルのパス>
+<codex exec の最終報告>
+codex-agent: result=ok
+```
+
+最終報告は `codex exec` の `--output-last-message` から取る。
+この選択肢がない版では標準出力の末尾で代用する。
+失敗時は最終報告の位置にログの末尾 40 行が出る。
+ログは `%USERPROFILE%\.claude\codex-agent\logs` に置く。
+ログには Codex が読んだファイルの中身が入りうるため、共有される一時ディレクトリを避けてホーム配下に取る。
+共有の場所では、他の利用者から読まれる余地と、先回りして置かれたシンボリックリンク越しに別のファイルを切り詰める余地が残る。
+スクリプトの起動時に 7 日より古い `.log` を削除する。
+
 スクリプトは末尾に結果の 1 行を出す。
-成功なら `codex-agent: result=ok`、レートリミットなら `codex-agent: result=rate-limited`、それ以外の失敗なら `codex-agent: result=failed exit=<code>` である。
+成功なら `codex-agent: result=ok`、利用上限なら `codex-agent: result=rate-limited`、モデルの混雑など GPT 側の事情なら `codex-agent: result=unavailable`、それ以外の失敗なら `codex-agent: result=failed exit=<code>` である。
 ただし、Codex を起動する前に終了コード 2 で止まる経路では出さない。
 引数や定義の不備で止まる経路であり、`codex-agent: <理由>` の 1 行だけを標準エラーに出す。
 Codex 自身が 2 を返した場合は、他の非 0 終了と同じく `codex-agent: result=failed exit=2` を出す。
 レートリミットと判定したときは、その直前に `codex-agent: rate-limit evidence: <一致した行>` を出し、フォールバックの根拠を報告から追えるようにしている。
+GPT 側の事情と判定したときは、その直前に `codex-agent: unavailable evidence: <一致した行>` を出す。
 
-レートリミットの判定は、`codex` が 0 以外で終了し、かつ `usage limit`、`rate limit`、`too many requests`、`429` のいずれかが大文字小文字を問わず含まれる場合に限る。
-判定の対象は標準出力と標準エラーの両方である。
-Codex の版によって通知の出力先が変わるためである。
+レートリミットの判定は、`codex` が 0 以外で終了し、判定対象に `usage limit`、`rate limit`、`too many requests`、`429` のいずれかが大文字小文字を問わず含まれる場合に限る。
+失敗の判定対象は、標準出力と標準エラーをログへまとめた内容のうち、失敗を告げる行(`ERROR` または `stream error` で始まる行)と出力の末尾 10 行だけである。
+従来のように出力の全文を対象にしないのは、Codex の出力には読み込んだファイルの中身も流れ、テストデータに含まれる文字列で誤検出するからである。
+末尾 10 行を残すのは、失敗の通知が `ERROR` で始まらない版があり得るためである。
+`unavailable` の判定は、上記の対象に `at capacity` が大文字小文字を問わず含まれる場合に限る。
+標準出力と標準エラーのどちらに通知されても判定できるようにするためである。
 標準エラー側は、`WARNING` と `hook:` で始まる行を除いた後の内容だけを見る。
 `429` は単語境界で照合し、ID や桁数の一致で誤検出しないようにしている。
 
 スクリプト自体が見つからない場合も、GPT 側が未導入とみなす。
-5 つのサブエージェントはカレントディレクトリの `tools/codex-agent.sh` を先に探し、無ければ `%USERPROFILE%\.claude\tools\codex-agent.sh` を使う。
-`impl-hard`、`impl-light`、`impl-standard` はどちらも無ければ自分で実装し、`codex-review` と `codex-subagent` は終了コードと出力の末尾を報告して停止する。
+5 つのサブエージェントは `bash ~/.claude/tools/codex-agent.sh` を固定で呼び、カレントディレクトリのスクリプトを探さない。
+変数への代入や `[ -f ... ] ||` の分岐を前に付けないのは、権限の許可規則がコマンドの先頭一致で判定されるためである。
+カレントディレクトリを先に探すのは GPT 側の定義ファイル(`.claude/gpt-agents/<name>.md`)だけであり、無ければ `%USERPROFILE%\.claude\gpt-agents\` の定義を使う。
+ユーザ側の `~/.claude/tools/codex-agent.sh` が無ければ GPT 側が未導入として扱い、`impl-hard`、`impl-light`、`impl-standard` は自分で実装し、`codex-review` と `codex-subagent` は終了コードと出力の末尾を報告して停止する。
 
 ## 認証ホームの割り当て
 
@@ -172,8 +200,11 @@ EOF
 複数のプロジェクトにまたがる変更を委譲するときは、依頼文の作業ディレクトリに共通の親ディレクトリを指定する。
 
 **1 回の委譲は Bash ツールの上限である 10 分に収める。**
-Claude 側のサブエージェントは Bash ツールで `tools/codex-agent.sh` を呼ぶため、Codex の実行が 10 分を超えるとタイムアウトで打ち切られる。
-その時点までの書き込みは残るが、報告は返らない。
+Claude Code の版によって、Bash ツールが長時間のコマンドをバックグラウンドへ移して完了を通知する場合と、上限で打ち切る場合がある。
+バックグラウンドへ移った場合は、完了の通知を待ち、通知の本文または通知が示す出力ファイルの末尾を 1 回だけ読んで `codex-agent: result=` の行で結果を判定する。
+自分で `sleep` や `until` のループを回したり、プロセスの一覧を調べたり、出力ファイルを探し回ったりしない。
+上限で打ち切られた場合は、その時点までの書き込みは残るが、報告は返らない。
+`.claude/agents/` の 5 定義には「実行が長引いたとき」の節があり、バックグラウンドへ移った場合の待ち方と出力の読み方を定めている。
 対象が多い依頼は、数プロジェクトずつに分けて委譲する。
 
 **スクリプト自身の書き換えを Codex に任せると、実行中の bash が壊れ得る。**
@@ -185,12 +216,14 @@ bash はスクリプトを読みながら実行する。
 **認証ホームのフック出力が混じる。**
 `CODEX_HOME` に Codex プラグインや ai-cross-review の設定が入っている場合、実行のたびにフックの出力が標準エラーへ流れる。
 スクリプトは標準出力と標準エラーを別々に受け取り、標準エラー側からだけ `WARNING` と `hook:` で始まる行を除く。
-Codex の回答本文が流れる標準出力にはフィルタを掛けない。
+Codex の回答本文が流れる標準出力にはフィルタを掛けず、ログへ保存する。
 フックを使わない専用ホームを `codex_home` に指定すれば、この除去は不要になる。
 
 **全プロジェクトに適用するには。**
-スクリプトもサブエージェントも、カレントディレクトリの定義を先に探し、無ければユーザ定義を使う。
-そのため、このリポジトリの定義は、このリポジトリでのみ効く。
+GPT 側の定義は、スクリプトを起動したカレントディレクトリの定義を先に探し、無ければユーザ定義を使う。
+サブエージェントが呼ぶスクリプトはユーザ側の固定パスにあるため、リポジトリ側の `tools/codex-agent.sh` を直しても、ユーザ側へ配布するまでサブエージェントの動きは変わらない。
+`.claude/agents/` の定義も、ユーザ側へ配布したうえで Claude Code のセッションを再起動するまで効かない。
+このリポジトリで作業しているあいだは、スクリプトがユーザ側の複製、GPT 側の定義がリポジトリ側という混在で動く。
 全プロジェクトに適用するなら、次の 3 つを置く。
 
 1. `.claude/agents/` の 5 定義を `%USERPROFILE%\.claude\agents\` に置き換える。
@@ -213,7 +246,7 @@ bash tools/codex-agent.sh impl-light --effort low <<< "Reply with exactly: PONG-
 codex-agent: agent=impl-light model=<定義の codex_model> effort=low sandbox=workspace-write codex_home=... workdir=...
 ```
 
-続く Codex のヘッダで定義どおりの `model` と `reasoning effort` を確認し、`PONG-LUNA` に続いて `codex-agent: result=ok` が出れば期待どおりである。
+先頭の監査用行(`agent=` の行)で定義どおりの `model` と実行時の `effort` を確認し、`PONG-LUNA` に続いて `codex-agent: result=ok` が出れば期待どおりである。
 
 フォールバック経路は、試験用の環境変数で確認する。
 
@@ -222,4 +255,12 @@ CODEX_AGENT_SIMULATE_RATE_LIMIT=1 bash tools/codex-agent.sh impl-light <<< x; ec
 ```
 
 `codex-agent: result=rate-limited (simulated)` と `exit=75` が出る。
-この環境変数は `codex` を起動せずに終了コード 75 を返すだけのもので、フォールバック経路の確認以外には使わない。
+
+利用上限以外の事情で使えない経路も、同じ形で確認できる。
+
+```bash
+CODEX_AGENT_SIMULATE_UNAVAILABLE=1 bash tools/codex-agent.sh impl-light <<< x; echo exit=$?
+```
+
+`codex-agent: result=unavailable (simulated)` と `exit=75` が出る。
+どちらの環境変数も `codex` を起動せずに終了コード 75 を返すだけのもので、フォールバック経路の確認以外には使わない。
