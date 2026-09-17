@@ -617,6 +617,8 @@ test('isCodexInvocation は構文検査と用法の表示を起動と数えな�
     'bash tools/codex-agent.sh impl-light <<< "grep -h の使い方を調べる"',
     'bash tools/codex-agent.sh impl-light <<< -h',
     'bash tools/codex-agent.sh impl-light <<<"--help"',
+    'bash tools/codex-agent.sh impl-light 0<<< --help',
+    'bash tools/codex-agent.sh impl-light 0<<<"--help"',
     'bash tools/codex-agent.sh impl-light "-h の意味を調べる"',
   ]) {
     assert.equal(isCodexInvocation(command), true, command);
