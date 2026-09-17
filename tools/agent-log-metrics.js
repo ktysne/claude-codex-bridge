@@ -378,6 +378,7 @@ function shellWords(text) {
 // スクリプトパスより後ろにちょうど -h か --help の語があれば、ラッパーは用法を出して終わる。
 // 語はシェルと同じく引用符を外して比べる。シェルは `"--help"` の引用符を外してラッパーへ渡すためである。
 // ヒアストリング(`<<<` と、その本文の語)は標準入力で、ラッパーの引数ではないので比べない。
+// `<<<` の前にはファイル記述子の番号(`0<<<`)が付くことがある。
 function isCodexInvocation(cmd) {
   return splitCommands(stripHeredocs(cmd)).some((seg) => {
     const trimmed = seg.trim();
@@ -388,11 +389,11 @@ function isCodexInvocation(cmd) {
     const words = shellWords(trimmed.slice(m[0].length));
     for (let i = 0; i < words.length; i += 1) {
       const { value, raw } = words[i];
-      if (raw === '<<<') {
+      if (/^\d*<<<$/.test(raw)) {
         i += 1; // 次の語はヒアストリングの本文である。
         continue;
       }
-      if (raw.startsWith('<<<')) continue; // 本文が `<<<` に続けて書かれている。
+      if (/^\d*<<</.test(raw)) continue; // 本文が `<<<` に続けて書かれている。
       if (value === '-h' || value === '--help') return false;
     }
     return true;
