@@ -12,6 +12,8 @@ const {
   splitCommands,
   isCodexInvocation,
   parseDay,
+  parseBoundary,
+  dedupeSessionCopies,
   collect,
 } = require('../agent-log-metrics.js');
 
@@ -594,11 +596,55 @@ test('isCodexInvocation は起動形だけを判定する', () => {
   );
 });
 
+test('isCodexInvocation は構文検査と用法の表示を起動と数えない', () => {
+  // -n は構文を検査するだけで実行せず、-h と --help を受けたラッパーは用法を出して終わる。どちらも Codex を起動しない。
+  for (const command of [
+    'bash -n tools/codex-agent.sh',
+    'bash -nv ~/.claude/tools/codex-agent.sh impl-standard',
+    'bash tools/codex-agent.sh -h',
+    'bash ~/.claude/tools/codex-agent.sh impl-light --help',
+    // シェルは引用符を外してラッパーへ渡すので、引用符付きでも用法の表示である。
+    'bash tools/codex-agent.sh impl-light "--help"',
+    "bash tools/codex-agent.sh '-h'",
+  ]) {
+    assert.equal(isCodexInvocation(command), false, command);
+  }
+  // n を含まない短いオプションと、`--` で始まる長いオプションは実行を止めない。
+  // ヒアストリングの本文は標準入力で、ラッパーの引数ではない。引用符を外した値が -h ちょうどでない語も引数の -h ではない。
+  for (const command of [
+    'bash -x ~/.claude/tools/codex-agent.sh impl-standard',
+    'bash --norc ~/.claude/tools/codex-agent.sh impl-standard',
+    'bash tools/codex-agent.sh impl-light <<< "grep -h の使い方を調べる"',
+    'bash tools/codex-agent.sh impl-light <<< -h',
+    'bash tools/codex-agent.sh impl-light <<<"--help"',
+    'bash tools/codex-agent.sh impl-light 0<<< --help',
+    'bash tools/codex-agent.sh impl-light 0<<<"--help"',
+    'bash tools/codex-agent.sh impl-light "-h の意味を調べる"',
+  ]) {
+    assert.equal(isCodexInvocation(command), true, command);
+  }
+});
+
 test('parseDay は UTC の日付を返し、不正な日付を拒否する', () => {
   // 期間境界をローカル時刻に左右されない UTC の日の始点で固定する。
   assert.equal(parseDay('2026-09-16', '--since'), Date.UTC(2026, 8, 16));
   assert.throws(() => parseDay('2026-02-30', '--since'), /実在しない日付/);
   assert.throws(() => parseDay('2026/09/16', '--since'), /YYYY-MM-DD/);
+});
+
+test('parseBoundary は日付とタイムゾーン付きの日時を解釈し、実在しない日時とタイムゾーンの無い日時を拒否する', () => {
+  // 日時の境界は実行した環境の時差に左右されない。繰り上げで受け入れる日時は実在しないものとして拒否する。
+  const noon = Date.UTC(2026, 8, 10, 12);
+  assert.deepEqual(parseBoundary('2026-09-10', '--since'), { time: Date.UTC(2026, 8, 10), isDay: true });
+  assert.deepEqual(parseBoundary('2026-09-10T12:00:00Z', '--since'), { time: noon, isDay: false });
+  assert.equal(parseBoundary('2026-09-10T21:00:00+09:00', '--since').time, noon);
+  assert.equal(parseBoundary('2026-09-10T12:00Z', '--until').time, noon);
+  assert.equal(parseBoundary('2026-09-10T07:30:00.250-04:30', '--until').time, noon + 250);
+  assert.throws(() => parseBoundary('2026-02-30T00:00:00Z', '--since'), /実在しない日時/);
+  assert.throws(() => parseBoundary('2026-09-10T24:00:00Z', '--until'), /実在しない日時/);
+  assert.throws(() => parseBoundary('2026-09-10T12:00:00', '--since'), /タイムゾーン/);
+  assert.throws(() => parseBoundary('2026-02-30', '--since'), /実在しない日付/);
+  assert.throws(() => parseBoundary('2026/09/10 12:00', '--since'), /YYYY-MM-DD/);
 });
 
 test('collect は同一分の起動、結果、待機、親子の紐付けを規則どおり数える', () => {
@@ -683,7 +729,7 @@ test('collect は同一分の起動、結果、待機、親子の紐付けを規
       bashEvent({
         timestamp: '2026-09-10T12:35:01.000Z',
         id: 'wait-output',
-        command: 'test -f task.output',
+        command: 'test -f tasks/task.output',
       }),
       bashEvent({
         timestamp: '2026-09-10T12:35:02.000Z',
@@ -887,4 +933,398 @@ test('--help は用法コメントだけを出力する', () => {
   assert.doesNotMatch(result.stdout, /const fs = require/);
   assert.doesNotMatch(result.stdout, /function collect/);
   assert.doesNotMatch(result.stdout, /module\.exports/);
+});
+
+const DAY_MS = 24 * 3600 * 1000;
+const RANGE_0910 = [Date.UTC(2026, 8, 10), Date.UTC(2026, 8, 10) + DAY_MS];
+
+// 一時ディレクトリを記録の置き場として CLI を実行する。
+function runMetrics(root, args) {
+  return spawnSync(process.execPath, [METRICS_SCRIPT, ...args], {
+    cwd: path.resolve(__dirname, '../..'),
+    env: { ...process.env, CLAUDE_PROJECTS_DIR: root },
+    encoding: 'utf8',
+  });
+}
+
+test('collect は待つための Bash をコマンドの位置で判定する', () => {
+  // 語を含むだけのコマンドは待機ではない。出力ファイルの読み取りと、実行単位の先頭の sleep と until だけを数える。
+  const cases = [
+    ['node tools/agent-log-metrics.js --since 2026-09-10 --until 2026-09-11', 0],
+    ["sed -i '/fake_set sleep 0$/d' tools/test/x.sh", 0],
+    ["grep '\\.output' tools/agent-log-metrics.js", 0],
+    ['while [ ! -f done ]; do sleep 5; done', 1],
+    ['tail -c 100 "E:/tmp/tasks/b1.output"', 1],
+    ['sleep 30 && tail -5 tasks/b2.output', 1],
+  ];
+  for (const [command, expected] of cases) {
+    withTempDir((root) => {
+      const file = logPath(root, 'project', 'session', 'subagents', 'agent-wait.jsonl');
+      writeJsonl(file, [
+        invokeEvent('2026-09-10T10:01:00.000Z', 'codex', 'codex-agent: result=ok'),
+        bashEvent({ timestamp: '2026-09-10T10:02:00.000Z', id: 'wait', command }),
+      ]);
+
+      const metrics = collect([file], ...RANGE_0910);
+
+      assert.equal(metrics.waitCalls, expected, command);
+    });
+  }
+});
+
+test('collect は実起動の内訳を最後の行頭の result 行で分け、行の途中の引用と退避された本文を結果行なしにする', () => {
+  // 最終報告は result 行を引用することがある。ラッパーの行は最後に行頭から出るので、それだけを使う。
+  // 退避された本文の抜粋にある result 行は引用でありうるので、委譲の結果の分類と同じく内訳に使わない。
+  withTempDir((root) => {
+    const file = logPath(root, 'project', 'session.jsonl');
+    const command = 'bash ~/.claude/tools/codex-agent.sh impl-standard';
+    writeJsonl(file, [
+      bashEvent({
+        timestamp: '2026-09-10T10:01:00.000Z',
+        id: 'last-line',
+        command,
+        result: 'codex-agent: result=ok\n報告\ncodex-agent: result=failed exit=1',
+      }),
+      bashEvent({
+        timestamp: '2026-09-10T10:02:00.000Z',
+        id: 'mid-line',
+        command,
+        result: '報告に codex-agent: result=ok と書いた',
+      }),
+      bashEvent({
+        timestamp: '2026-09-10T10:03:00.000Z',
+        id: 'persisted',
+        command,
+        result: PERSISTED_TEXT.replace('...\n', 'codex-agent: result=ok\n'),
+      }),
+      bashEvent({
+        timestamp: '2026-09-10T10:04:00.000Z',
+        id: 'grep-n',
+        command: `${command} 2>&1 | grep -n "codex-agent:"`,
+        result: '1:codex-agent: agent=impl-standard\n32:codex-agent: result=ok',
+      }),
+    ]);
+
+    const metrics = collect([file], ...RANGE_0910);
+
+    assert.equal(metrics.runs, 4);
+    assert.deepEqual(metrics.results, { 'failed exit=1': 1, ok: 1, '(結果行なし)': 2 });
+    assert.deepEqual(metrics.offloaded, [318.7]);
+  });
+});
+
+test('collect は上限を超えて移った起動と、最初からバックグラウンドに置いた起動を、実起動と分けて数える', () => {
+  // 移った件数は Codex の実行時間を表し、最初から置いた件数は起動した側の選択を表すので、混ぜない。
+  withTempDir((root) => {
+    const file = logPath(root, 'project', 'session.jsonl');
+    writeJsonl(file, [
+      invokeEvent('2026-09-10T10:01:00.000Z', 'moved', BG_TEXT),
+      invokeEvent(
+        '2026-09-10T10:02:00.000Z',
+        'started',
+        'Command running in background with ID: bstart123. Output is being written to: E:/tmp/tasks/bstart123.output',
+      ),
+      invokeEvent('2026-09-10T10:03:00.000Z', 'quoted', '報告\nCommand running in background with ID: を引用した'),
+    ]);
+
+    const metrics = collect([file], ...RANGE_0910);
+
+    assert.equal(metrics.background, 1);
+    assert.equal(metrics.startedInBackground, 1);
+    assert.equal(metrics.runs, 1);
+    assert.deepEqual(metrics.results, { '(結果行なし)': 1 });
+  });
+});
+
+test('collect は別の記録に写った同じ識別子の起動、待機、委譲を 1 件と数える', () => {
+  // 会話を引き継いだセッションは、前のセッションの記録を識別子ごと写す。記録の名前が違うので複製としては除けない。
+  withTempDir((root) => {
+    const copied = [
+      agentEvent('2026-09-10T10:00:00.000Z', 'agent-copied', 'impl-standard', '依頼'),
+      bashEvent({
+        timestamp: '2026-09-10T10:00:30.000Z',
+        id: 'parent-run-copied',
+        command: 'bash ~/.claude/tools/codex-agent.sh impl-light <<< x',
+        result: 'codex-agent: result=ok',
+      }),
+    ];
+    const oldParent = writeJsonl(logPath(root, 'project', 'session-old.jsonl'), copied);
+    const newParent = writeJsonl(logPath(root, 'project', 'session-new.jsonl'), copied);
+    const child = [
+      invokeEvent('2026-09-10T10:01:00.000Z', 'sub-run-copied', 'codex-agent: result=ok'),
+      bashEvent({ timestamp: '2026-09-10T10:02:00.000Z', id: 'sub-wait-copied', command: 'sleep 5' }),
+    ];
+    const oldChild = writeJsonl(logPath(root, 'project', 'session-old', 'subagents', 'agent-x.jsonl'), child);
+    const newChild = writeJsonl(logPath(root, 'project', 'session-new', 'subagents', 'agent-x.jsonl'), child);
+    writeMeta(oldChild, 'agent-copied');
+    writeMeta(newChild, 'agent-copied');
+
+    const metrics = collect([oldParent, newParent, oldChild, newChild], ...RANGE_0910);
+
+    assert.equal(metrics.runs, 2);
+    assert.deepEqual(metrics.results, { ok: 2 });
+    assert.equal(metrics.waitCalls, 1);
+    assert.deepEqual(metrics.byAgent['impl-standard'], {
+      calls: 1,
+      noCodex: 0,
+      committed: 0,
+      unlinked: 0,
+      designated: 0,
+      designatedNotInvoked: 0,
+      outcomes: outcomesOf({ gptRan: 1 }),
+    });
+  });
+});
+
+const SIMULATE_INVOKE = 'CODEX_AGENT_SIMULATE_RATE_LIMIT=1 bash tools/codex-agent.sh impl-light <<< x';
+const SIMULATED_TEXT = 'codex-agent: agent=impl-light\ncodex-agent: result=rate-limited (simulated)';
+
+// 試験用フックによる疑似の起動 1 件。フックは終了コード 75 で終わるので、tool_result に is_error が付く。
+function simulatedEvent(timestamp, id) {
+  return event(
+    timestamp,
+    bashUse(id, SIMULATE_INVOKE),
+    { type: 'tool_result', tool_use_id: id, content: `Exit code 75\n${SIMULATED_TEXT}`, is_error: true },
+  );
+}
+
+test('collect は疑似の result 行で終わる起動を実起動に数えず、期間内のものを疑似の起動に数える', () => {
+  // 試験用フックは Codex を起動しない。実起動、結果の内訳、バックグラウンドのどれにも入れない。
+  withTempDir((root) => {
+    const file = logPath(root, 'project', 'session.jsonl');
+    writeJsonl(file, [
+      bashEvent({ timestamp: '2026-09-10T10:01:00.000Z', id: 'sim', command: SIMULATE_INVOKE, result: SIMULATED_TEXT }),
+      bashEvent({ timestamp: '2026-09-11T00:00:00.000Z', id: 'sim-out', command: SIMULATE_INVOKE, result: SIMULATED_TEXT }),
+    ]);
+
+    const metrics = collect([file], ...RANGE_0910);
+
+    assert.equal(metrics.runs, 0);
+    assert.equal(metrics.simulated, 1);
+    assert.deepEqual(metrics.results, {});
+    assert.equal(metrics.background, 0);
+  });
+});
+
+test('collect は疑似の起動を委譲の結果、Codex 未呼出、待機の条件から除く', () => {
+  // 疑似の起動しかない委譲は Codex を呼んでいない。疑似の起動は最後の起動にもならない。
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['sim-only', 'impl-light'], ['sim-then-ok', 'impl-standard'], ['limited-then-sim', 'impl-hard']],
+      [
+        ['sim-only', [
+          simulatedEvent('2026-09-10T10:01:00.000Z', 's1'),
+          bashEvent({ timestamp: '2026-09-10T10:02:00.000Z', id: 's1-wait', command: 'sleep 5' }),
+        ]],
+        ['sim-then-ok', [
+          simulatedEvent('2026-09-10T10:01:00.000Z', 's2'),
+          invokeEvent('2026-09-10T10:02:00.000Z', 's3', 'codex-agent: result=ok'),
+        ]],
+        ['limited-then-sim', [
+          invokeEvent('2026-09-10T10:01:00.000Z', 's4', 'Exit code 75\ncodex-agent: result=rate-limited', true),
+          simulatedEvent('2026-09-10T10:02:00.000Z', 's5'),
+        ]],
+      ],
+    );
+
+    const metrics = collect(files, ...RANGE_0910);
+
+    assert.deepEqual(metrics.byAgent['impl-light'].outcomes, outcomesOf({ notInvoked: 1 }));
+    assert.equal(metrics.byAgent['impl-light'].noCodex, 1);
+    assert.deepEqual(metrics.byAgent['impl-standard'].outcomes, outcomesOf({ gptRan: 1 }));
+    assert.equal(metrics.byAgent['impl-standard'].noCodex, 0);
+    assert.deepEqual(metrics.byAgent['impl-hard'].outcomes, outcomesOf({ gptUnavailable: 1 }));
+    assert.equal(metrics.waitCalls, 0);
+    assert.equal(metrics.simulated, 3);
+    assert.equal(metrics.runs, 2);
+    assertOutcomeInvariants(metrics.byAgent);
+  });
+});
+
+test('collect は追跡した読み取りでも、疑似の result 行と行の途中の引用では確定しない', () => {
+  // 追跡の確定にも実起動の内訳と同じ result 行の読み取りを使う。
+  withTempDir((root) => {
+    const read = (timestamp, id, result) => toolEvent(timestamp, id, 'Bash',
+      { command: 'tail -n 20 "$TMP/tasks/bgx123abc.output"' }, result);
+    const files = writeDelegations(
+      root,
+      [['bg-sim', 'impl-standard'], ['bg-quote', 'impl-light']],
+      [
+        ['bg-sim', [
+          invokeEvent('2026-09-10T10:01:00.000Z', 'g1', BG_TEXT),
+          read('2026-09-10T10:02:00.000Z', 'g2', 'codex-agent: result=rate-limited (simulated)'),
+        ]],
+        ['bg-quote', [
+          invokeEvent('2026-09-10T10:01:00.000Z', 'g3', BG_TEXT),
+          read('2026-09-10T10:02:00.000Z', 'g4', '報告に codex-agent: result=ok と書いた'),
+        ]],
+      ],
+    );
+
+    const metrics = collect(files, ...RANGE_0910);
+
+    assert.deepEqual(metrics.byAgent['impl-standard'].outcomes, outcomesOf({ unknown: 1 }));
+    assert.deepEqual(metrics.byAgent['impl-light'].outcomes, outcomesOf({ unknown: 1 }));
+  });
+});
+
+// 同じセッションの記録を 2 つのプロジェクト置き場に書く。移った先(projB)の親の記録は、移る前(projA)の内容の後ろに 1 行足す。
+// meta ファイルは移る前の子の脇にだけ置く。childBExtra を与えると、移った先の子の記録の後ろにその行を足す。
+function writeSessionCopies(root, sid, childBExtra) {
+  const parentRows = [agentEvent('2026-09-10T10:00:00.000Z', `${sid}-call`, 'impl-standard', '依頼')];
+  const childRows = [invokeEvent('2026-09-10T10:01:00.000Z', `${sid}-run`, 'codex-agent: result=ok')];
+  const parentA = writeJsonl(logPath(root, 'projA', `${sid}.jsonl`), parentRows);
+  const childA = writeJsonl(logPath(root, 'projA', sid, 'subagents', 'agent-x.jsonl'), childRows);
+  writeMeta(childA, `${sid}-call`);
+  const parentB = writeJsonl(logPath(root, 'projB', `${sid}.jsonl`), [
+    ...parentRows,
+    bashEvent({ timestamp: '2026-09-10T10:05:00.000Z', id: `${sid}-moved`, command: 'echo moved' }),
+  ]);
+  const childB = writeJsonl(
+    logPath(root, 'projB', sid, 'subagents', 'agent-x.jsonl'),
+    childBExtra === undefined ? childRows : [...childRows, childBExtra],
+  );
+  return { parentA, childA, parentB, childB };
+}
+
+test('dedupeSessionCopies は前方一致する複製を除き、残した子の委譲を数える', () => {
+  // 親の記録は大きい移った先を残し、同じ内容の子の記録はパスの辞書順で先の移る前を残す。
+  withTempDir((root) => {
+    const { parentA, childA, parentB, childB } = writeSessionCopies(root, 'session-copy');
+
+    const deduped = dedupeSessionCopies([parentA, childA, parentB, childB], root);
+
+    assert.deepEqual(deduped.files, [childA, parentB]);
+    assert.equal(deduped.dropped, 2);
+    assert.deepEqual(deduped.divergent, []);
+    assert.deepEqual([...deduped.copiesOf.entries()], [[parentB, [parentA]], [childA, [childB]]]);
+
+    const metrics = collect(deduped.files, ...RANGE_0910, { copiesOf: deduped.copiesOf });
+
+    assert.equal(metrics.runs, 1);
+    assert.equal(metrics.byAgent['impl-standard'].calls, 1);
+    assert.equal(metrics.byAgent['impl-standard'].unlinked, 0);
+    assert.deepEqual(metrics.byAgent['impl-standard'].outcomes, outcomesOf({ gptRan: 1 }));
+  });
+});
+
+test('collect は残した子の記録の脇に meta ファイルが無ければ、除いた複製の脇のものを使う', () => {
+  // meta ファイルは移る前の置き場にだけ残ることがある。第 4 引数を省くと従来どおり紐付け不明になる。
+  withTempDir((root) => {
+    const extra = bashEvent({ timestamp: '2026-09-10T10:02:00.000Z', id: 'child-moved', command: 'echo moved' });
+    const { parentA, childA, parentB, childB } = writeSessionCopies(root, 'session-meta', extra);
+
+    const deduped = dedupeSessionCopies([parentA, childA, parentB, childB], root);
+
+    assert.deepEqual(deduped.files, [parentB, childB]);
+    assert.deepEqual(deduped.copiesOf.get(childB), [childA]);
+    const withCopies = collect(deduped.files, ...RANGE_0910, { copiesOf: deduped.copiesOf });
+    const withoutCopies = collect(deduped.files, ...RANGE_0910);
+
+    assert.equal(withCopies.byAgent['impl-standard'].unlinked, 0);
+    assert.deepEqual(withCopies.byAgent['impl-standard'].outcomes, outcomesOf({ gptRan: 1 }));
+    assert.equal(withoutCopies.byAgent['impl-standard'].unlinked, 1);
+  });
+});
+
+test('dedupeSessionCopies は前方一致しない複製を除かずに divergent に入れる', () => {
+  // 前提が破れた組は値を黙って変えず、パスで知らせる。
+  withTempDir((root) => {
+    const small = writeText(logPath(root, 'projA', 'session-diverged.jsonl'), 'line1\nline2-a\n');
+    const large = writeText(logPath(root, 'projB', 'session-diverged.jsonl'), 'line1\nline2-bb\nline3\n');
+    const outside = writeText(logPath(root, 'session-diverged.jsonl'), 'line1\n');
+
+    const deduped = dedupeSessionCopies([small, large, outside], root);
+
+    assert.deepEqual(deduped.files, [small, large, outside]);
+    assert.equal(deduped.dropped, 0);
+    assert.deepEqual(deduped.divergent, [small]);
+    assert.equal(deduped.copiesOf.size, 0);
+  });
+});
+
+test('メイン処理は複製として除いた記録と前方一致しない複製を出す', () => {
+  // 複製を除いた値と、除けなかった組を、JSON とテキストの両方で読めるようにする。
+  withTempDir((root) => {
+    writeSessionCopies(root, 'session-cli');
+    const diverged = writeJsonl(logPath(root, 'projA', 'session-diverged.jsonl'), [
+      bashEvent({ timestamp: '2026-09-10T10:00:00.000Z', id: 'a', command: 'echo a' }),
+    ]);
+    writeJsonl(logPath(root, 'projB', 'session-diverged.jsonl'), [
+      bashEvent({ timestamp: '2026-09-10T10:00:00.000Z', id: 'b', command: 'echo bb' }),
+      bashEvent({ timestamp: '2026-09-10T10:01:00.000Z', id: 'c', command: 'echo c' }),
+    ]);
+
+    const json = runMetrics(root, ['--since', '2026-09-10', '--until', '2026-09-10', '--json']);
+    const text = runMetrics(root, ['--since', '2026-09-10', '--until', '2026-09-10']);
+
+    assert.equal(json.status, 0, json.stderr);
+    const summary = JSON.parse(json.stdout);
+    assert.equal(summary.複製として除いた記録, 2);
+    assert.deepEqual(summary.前方一致しない複製, [diverged]);
+    assert.equal(summary.対象ファイル数, 4);
+    assert.equal(summary.実起動, 1);
+    assert.equal(summary.委譲の内訳['impl-standard'].unlinked, 0);
+    assert.equal(text.status, 0, text.stderr);
+    assert.match(text.stdout, /複製として除いた記録: 2 本/);
+    assert.match(text.stdout, /前方一致しない複製: 1 本\(除かずに数えた\)/);
+  });
+});
+
+test('--since と --until の日時は開始の時刻を含み、終了の時刻を含まない', () => {
+  // ある時刻を境に前後 2 回数えたとき、境界の記録を二重に数えない。
+  withTempDir((root) => {
+    const file = logPath(root, 'session', 'subagents', 'boundary.jsonl');
+    writeJsonl(file, [
+      ['2026-09-10T11:59:59.999Z', 'before-start', 'failed exit=1'],
+      ['2026-09-10T12:00:00.000Z', 'at-start', 'ok'],
+      ['2026-09-10T12:59:59.999Z', 'before-end', 'unavailable'],
+      ['2026-09-10T13:00:00.000Z', 'at-end', 'rate-limited'],
+    ].map(([timestamp, id, value]) => bashEvent({
+      timestamp,
+      id,
+      command: 'bash ~/.claude/tools/codex-agent.sh impl-standard',
+      result: `codex-agent: result=${value}`,
+    })));
+
+    const first = runMetrics(root, ['--since', '2026-09-10T12:00:00Z', '--until', '2026-09-10T13:00:00Z', '--json']);
+    const second = runMetrics(root, ['--since', '2026-09-10T22:00:00+09:00', '--until', '2026-09-10T14:00Z', '--json']);
+
+    assert.equal(first.status, 0, first.stderr);
+    const summary = JSON.parse(first.stdout);
+    assert.equal(summary.実起動, 2);
+    assert.deepEqual(summary.結果の内訳, { ok: 1, unavailable: 1 });
+    assert.equal(summary.期間, '2026-09-10T12:00:00.000Z 〜 2026-09-10T12:59:59.999Z');
+    assert.equal(second.status, 0, second.stderr);
+    assert.deepEqual(JSON.parse(second.stdout).結果の内訳, { 'rate-limited': 1 });
+  });
+});
+
+test('--json とテキスト出力は数え方の版を出す', () => {
+  // 運用記録の値がどの規則で数えたものかを、値の脇に残せるようにする。
+  withTempDir((root) => {
+    fs.mkdirSync(path.join(root, 'project'), { recursive: true });
+
+    const json = runMetrics(root, ['--since', '2026-09-10', '--until', '2026-09-10', '--json']);
+    const text = runMetrics(root, ['--since', '2026-09-10', '--until', '2026-09-10']);
+
+    assert.equal(json.status, 0, json.stderr);
+    assert.equal(JSON.parse(json.stdout).数え方の版, 2);
+    assert.equal(text.status, 0, text.stderr);
+    assert.match(text.stdout, /^期間: .*\n数え方の版: 2\n/);
+  });
+});
+
+test('メイン処理はタイムゾーンの無い日時と実在しない日時をエラーとして報告する', () => {
+  // 境界を黙って繰り上げたり、実行環境の時差で解釈したりしない。
+  withTempDir((root) => {
+    const noZone = runMetrics(root, ['--since', '2026-09-10T12:00:00', '--json']);
+    const invalid = runMetrics(root, ['--until', '2026-09-10T24:00:00Z', '--json']);
+
+    assert.equal(noZone.status, 2);
+    assert.match(noZone.stderr, /--since の日時にはタイムゾーン/);
+    assert.equal(invalid.status, 2);
+    assert.match(invalid.stderr, /--until に実在しない日時が指定された/);
+  });
 });
