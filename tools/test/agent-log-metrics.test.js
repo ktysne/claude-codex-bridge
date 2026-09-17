@@ -603,15 +603,21 @@ test('isCodexInvocation は構文検査と用法の表示を起動と数えな�
     'bash -nv ~/.claude/tools/codex-agent.sh impl-standard',
     'bash tools/codex-agent.sh -h',
     'bash ~/.claude/tools/codex-agent.sh impl-light --help',
+    // シェルは引用符を外してラッパーへ渡すので、引用符付きでも用法の表示である。
+    'bash tools/codex-agent.sh impl-light "--help"',
+    "bash tools/codex-agent.sh '-h'",
   ]) {
     assert.equal(isCodexInvocation(command), false, command);
   }
   // n を含まない短いオプションと、`--` で始まる長いオプションは実行を止めない。
-  // 引用符の中にある -h はヒアストリングの本文で、ラッパーの引数ではない。
+  // ヒアストリングの本文は標準入力で、ラッパーの引数ではない。引用符を外した値が -h ちょうどでない語も引数の -h ではない。
   for (const command of [
     'bash -x ~/.claude/tools/codex-agent.sh impl-standard',
     'bash --norc ~/.claude/tools/codex-agent.sh impl-standard',
     'bash tools/codex-agent.sh impl-light <<< "grep -h の使い方を調べる"',
+    'bash tools/codex-agent.sh impl-light <<< -h',
+    'bash tools/codex-agent.sh impl-light <<<"--help"',
+    'bash tools/codex-agent.sh impl-light "-h の意味を調べる"',
   ]) {
     assert.equal(isCodexInvocation(command), true, command);
   }
