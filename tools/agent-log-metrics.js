@@ -26,6 +26,7 @@
 //     構文を検査するだけで実行しないためである。`--norc` のような `--` で始まる長いオプションは対象にしない。
 //   - スクリプトパスより後ろに、ちょうど `-h` か `--help` の語がある実行単位は、起動と数えない。
 //     ラッパーは引数のどこにこれがあっても用法を出して終わり、Codex を起動しないためである。
+//     語はシェルと同じく引用符を外して比べ、ヒアストリング(`<<<`)の本文は比べない。
 //   - セッションが作業ディレクトリを移ると、同じセッションの記録が別のプロジェクト置き場にも書かれる。
 //     プロジェクト置き場より後ろの相対パスが同じ記録を複製の候補とし、最も大きい記録を残す
 //     (同じ大きさならパスの辞書順で先のもの)。ほかの記録は、残した記録の先頭と全バイトが一致する場合に限って除く。
@@ -317,11 +318,66 @@ function splitCommands(cmd) {
 // `cat tools/codex-agent.sh` のように読むだけのコマンドは起動と数えない。
 const INVOCATION = /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:bash|sh)\s+((?:-\S+\s+)*)["']?\S*codex-agent\.sh["']?(?:\s|$)/;
 
+// 文字列をシェルと同じ規則で語に分け、語ごとに引用符とエスケープを外した値(value)と、書かれたままの形(raw)を返す。
+// 引用符の中の空白は語を区切らない。
+function shellWords(text) {
+  const words = [];
+  let value = '';
+  let raw = '';
+  let inWord = false;
+  let quote = null;
+  const flush = () => {
+    if (inWord) words.push({ value, raw });
+    value = '';
+    raw = '';
+    inWord = false;
+  };
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      else value += ch;
+      raw += ch;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '\\' && /["\\$`]/.test(text[i + 1] || '')) {
+        value += text[i + 1];
+        raw += ch + text[i + 1];
+        i += 1;
+        continue;
+      }
+      if (ch === '"') quote = null;
+      else value += ch;
+      raw += ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      flush();
+      continue;
+    }
+    inWord = true;
+    raw += ch;
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+    } else if (ch === '\\') {
+      value += text[i + 1] || '';
+      raw += text[i + 1] || '';
+      i += 1;
+    } else {
+      value += ch;
+    }
+  }
+  flush();
+  return words;
+}
+
 // 起動の判定は 1 か所に置く。実起動、未呼出、待機の集計で同じ判定を使う。
 // 起動の形でも、Codex を起動しない実行は数えない。
 // bash の短いオプションのまとまりに n を含む実行は構文を検査するだけで、スクリプトを実行しない。
 // スクリプトパスより後ろにちょうど -h か --help の語があれば、ラッパーは用法を出して終わる。
-// 引用符で囲んだ文字列は 1 つの語として読み飛ばす。ヒアストリングの本文にある -h を引数と取り違えないためである。
+// 語はシェルと同じく引用符を外して比べる。シェルは `"--help"` の引用符を外してラッパーへ渡すためである。
+// ヒアストリング(`<<<` と、その本文の語)は標準入力で、ラッパーの引数ではないので比べない。
 function isCodexInvocation(cmd) {
   return splitCommands(stripHeredocs(cmd)).some((seg) => {
     const trimmed = seg.trim();
@@ -329,11 +385,17 @@ function isCodexInvocation(cmd) {
     if (!m) return false;
     const options = m[1].split(/\s+/).filter(Boolean);
     if (options.some((option) => /^-[^-\s]*n/.test(option))) return false;
-    const args = trimmed
-      .slice(m[0].length)
-      .replace(/'[^']*'|"(?:\\[\s\S]|[^"\\])*"/g, "''")
-      .split(/\s+/);
-    return !args.some((word) => word === '-h' || word === '--help');
+    const words = shellWords(trimmed.slice(m[0].length));
+    for (let i = 0; i < words.length; i += 1) {
+      const { value, raw } = words[i];
+      if (raw === '<<<') {
+        i += 1; // 次の語はヒアストリングの本文である。
+        continue;
+      }
+      if (raw.startsWith('<<<')) continue; // 本文が `<<<` に続けて書かれている。
+      if (value === '-h' || value === '--help') return false;
+    }
+    return true;
   });
 }
 
