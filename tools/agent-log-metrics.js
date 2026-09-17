@@ -3,21 +3,55 @@
 // Claude Code のセッション記録から、GPT 系サブエージェントの運用の指標を数える。
 //
 // 用法:
-//   node tools/agent-log-metrics.js [--since <YYYY-MM-DD>] [--until <YYYY-MM-DD>] [--json]
+//   node tools/agent-log-metrics.js [--since <日付か日時>] [--until <日付か日時>] [--json]
 //
-// --since と --until は UTC の日付として解釈する。
-// --since はその日の 00:00:00.000 から、--until はその日の最後のミリ秒までを含む。
+// --since と --until には、日付(YYYY-MM-DD)か、タイムゾーン付きの日時を指定する。
+// 日時は YYYY-MM-DDTHH:MM、YYYY-MM-DDTHH:MM:SS、YYYY-MM-DDTHH:MM:SS.sss のいずれかに、Z か ±HH:MM を付ける。
+// 日付は UTC の日として解釈し、--since はその日の 00:00:00.000 から、--until はその日の最後のミリ秒までを含む。
+// 日時では、--since はその時刻を含み、--until はその時刻を含まない。ある時刻を境に前後 2 回数えたとき、
+// 境界の記録を二重に数えないためである。
 // どちらも省くと、現在までの直近 7 日を見る。
 // 記録の場所は %USERPROFILE%\.claude\projects(環境変数 CLAUDE_PROJECTS_DIR で変えられる)。
 //
-// 数え方の約束:
-//   - 起動は Bash の呼び出し 1 件を 1 件と数える。同じ呼び出しが親とサブエージェントの
-//     両方の記録に現れることは無いので、時刻でまとめる重複除去は行わない。
-//     まとめると、同じ分に並行して起動した別々の実行が失われる。
+// 数え方の約束(出力の「数え方の版」は、ここに書いた約束の版である):
+//   - 起動は Bash の呼び出し 1 件を 1 件と数え、tool_use の識別子でまとめる。会話を引き継いだセッションは
+//     前のセッションの記録を識別子ごと写すため、同じ呼び出しが別の記録に現れることがある。
+//     待つための Bash と委譲も、同じく tool_use の識別子でまとめる。
+//     時刻ではまとめない。まとめると、同じ分に並行して起動した別々の実行が失われる。
 //   - 依頼文はヒアドキュメントでコマンドに埋め込まれる。照合の前にその本文を落とす。
 //     落とさないと、依頼文が話題にしている語を実行したものとして数える。
 //   - 起動の判定は、コマンドを実行単位へ切り出してから行う。区切りは `;`、`&`、`|`、改行である。
 //     引用符の中とコメントの中にある区切りは区切りとして扱わない。
+//   - bash や sh の短いオプションのまとまり(`-` 1 つで始まる語)に n を含む実行単位は、起動と数えない。
+//     構文を検査するだけで実行しないためである。`--norc` のような `--` で始まる長いオプションは対象にしない。
+//   - スクリプトパスより後ろに、ちょうど `-h` か `--help` の語がある実行単位は、起動と数えない。
+//     ラッパーは引数のどこにこれがあっても用法を出して終わり、Codex を起動しないためである。
+//   - セッションが作業ディレクトリを移ると、同じセッションの記録が別のプロジェクト置き場にも書かれる。
+//     プロジェクト置き場より後ろの相対パスが同じ記録を複製の候補とし、最も大きい記録を残す
+//     (同じ大きさならパスの辞書順で先のもの)。ほかの記録は、残した記録の先頭と全バイトが一致する場合に限って除く。
+//     一致しない記録は除かずに数え、「前方一致しない複製」としてパスを出す。前提が破れたときに値を黙って変えず、
+//     件数で知らせるためである。残した記録の脇に meta ファイルが無ければ、除いた複製の脇のものを使う。
+//   - result 行は、行頭から行末までが `codex-agent: result=<値>` の行である。値は ok、rate-limited、unavailable、
+//     failed exit=<n> のいずれかで、後ろに ` (simulated)` が付くことがある。本文にいくつもあるときは最後の行を使う。
+//     Codex の最終報告が result 行を引用することがあり、ラッパーは自分の result 行を出力の最後に出すためである。
+//     行頭に `grep -n` の行番号(`32:` か `32-`)が付いた行も result 行とする。出力を `grep -n` で絞った起動の結果を
+//     読むためである。行の途中にある result 行は拾わない。最終報告が行の途中で引用することがあるためである。
+//   - 最後の result 行に ` (simulated)` が付く起動は、試験用フックが Codex を起動せずに出したものである。
+//     実起動にも結果の内訳にも入れず、「疑似の起動」として別に数える。期間の判定は実起動と同じである。
+//     委譲の結果、Codex 未呼出、待つための Bash の条件でいう「Codex を起動した」は、疑似でない起動があることである。
+//   - 実起動の内訳は、本文の最後の result 行の値で分ける。出力が退避された本文は「結果行なし」とする。
+//     退避された本文は冒頭の抜粋で、最終報告が引用した result 行が入りうるためである。
+//   - 結果がその場で分からない起動は実起動に数えない。上限を超えてバックグラウンドへ移った起動
+//     (本文に「moved to the background」が出るもの)と、run_in_background で最初からバックグラウンドに置いた起動
+//     (本文が「Command running in background with ID:」で始まるもの)を、それぞれ別に数える。
+//     前者は Codex の実行時間が Bash の上限を超えた回数を表し、後者は起動した側の選択を表すためである。
+//   - 待つための Bash は、Codex を起動したサブエージェントの記録にある、Codex の起動でない Bash の呼び出しで、
+//     ヒアドキュメントを落としたコマンドが次のどちらかに当たるものである。1 回の呼び出しは、両方に当たっても 1 件と数える。
+//     1 つは、パス区切り(`/` か `\`)に続く語が `.output` で終わるものを含むことである。
+//     Claude Code のバックグラウンドの出力は `.../tasks/<ID>.output` の形であるためである。
+//     もう 1 つは、実行単位の先頭から `do`、`then`、`else`、`{`、`(`、`!` の語を読み飛ばした後の最初の語が、
+//     ちょうど `sleep` か `until` であることである。語を含むだけのコマンド(`--until` を渡す実行や、
+//     `sleep` を含む行を編集する実行)を待機と取り違えないためである。
 //   - 委譲 1 件は Agent の呼び出し 1 件である。同じ依頼文を出し直した場合も、
 //     それぞれ別の実行を伴うので別の委譲として数える。
 //   - 委譲と実行の紐付けは、サブエージェントの記録の脇にある `<名前>.meta.json` が持つ
@@ -31,11 +65,11 @@
 //   - 分類は終了コードと result 行だけで行う。依頼を果たせないまま 0 で終わった実行は数えられない。
 //   - 委譲の結果は、紐付けできた委譲 1 件をちょうど 1 つの分類に数える。分類は GPT で実行、
 //     未設定(result=failed exit=3)、GPT 使用不能(rate-limited と unavailable)、GPT で失敗、
-//     拒否、結果不明、未起動である。
+//     拒否、結果不明、未起動である。子の起動がすべて疑似の起動なら、その委譲は未起動である。
 //   - 委譲を止める指定は、依頼文の最初の空でない行を前後の空白を除いて比較する。
 //     2 行目以降やコードブロック内の文字列は指定に数えない。定義や文書を引用した依頼を
 //     誤って指定として数えないためである。
-//   - 分類には、子が codex-agent.sh を起動した Bash の呼び出しのうち最後のものの結果を使う。
+//   - 分類には、子が codex-agent.sh を起動した Bash の呼び出しのうち、疑似でない最後のものの結果を使う。
 //     子は失敗や上限の後に起動し直すことがあり、委譲の行き先を決めたのは最後の起動だからである。
 //     子が複数ある委譲では、すべての子の起動を時刻で並べて最後のものを使う。記録順はファイルを読んだ順で
 //     記録どうしの前後を表さないため、時刻を読めない起動があるときと、最後の時刻に別の子の起動が並ぶときは、
@@ -51,8 +85,9 @@
 //   - 起動がバックグラウンドへ移った場合と、出力が退避された場合は、その起動を追跡する。
 //     手がかりは、バックグラウンドの ID と出力ファイルのパス、退避先のパスである。
 //     同じ子の記録で後に現れる tool_use のうち、入力が手がかりを含むもの(種類は問わない)を
-//     その起動に結び付け、その tool_result の行頭にある最後の result 行で起動の結果を確定する。
-//     パスは区切り文字 `\` と `/` の違いを吸収して照合する。is_error の付いた結果は確定に使わない。
+//     その起動に結び付け、その tool_result の最後の result 行で起動の結果を確定する。
+//     パスは区切り文字 `\` と `/` の違いを吸収して照合する。is_error の付いた結果と、
+//     最後の result 行が疑似のものは確定に使わない。
 //   - 手がかりで結び付かない読み取りの result 行は使わない。差分や文書、別の実行のログを読んだ結果にも
 //     result 行が現れるため、それを拾うと別の起動の結果を流用する。
 //   - 追跡しても確定しなかったもの、結果が記録に無いもの、どの分類にも当たらないものは
@@ -63,6 +98,9 @@ const fs = require('fs');
 const path = require('path');
 
 const WRAPPER_AGENTS = ['impl-hard', 'impl-light', 'impl-standard', 'codex-review', 'codex-subagent'];
+
+// 数え方の約束を変えたら上げる。運用記録の値がどの規則で数えたものかを、値の脇に残すためである。
+const COUNTING_RULES_VERSION = 2;
 
 const DAY = 24 * 3600 * 1000;
 
@@ -101,6 +139,50 @@ function parseDay(value, name) {
   return t;
 }
 
+const DATETIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{3}))?)?(Z|[+-]\d{2}:\d{2})?$/;
+
+// 期間の境界を解釈し、時刻の数値と、日付で指定したかどうかを返す。
+// 日付は parseDay と同じく UTC の日の先頭である。含み方は呼び出し側が isDay で決める。
+// 日時はタイムゾーンを必須とする。無いと、実行した環境の時差で境界が動くためである。
+// Date.UTC は 2026-02-30 や 24:00 を繰り上げて受け入れるため、指定したタイムゾーンでの
+// 年月日時分秒ミリ秒が往復で一致するかを確かめ、一致しなければ実在しない日時として拒否する。
+function parseBoundary(value, name) {
+  const text = String(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return { time: parseDay(text, name), isDay: true };
+  const m = DATETIME.exec(text);
+  if (!m) {
+    throw new Error(
+      `${name} は YYYY-MM-DD か、タイムゾーン付きの YYYY-MM-DDTHH:MM[:SS[.sss]](Z か ±HH:MM)で指定する: ${value}`,
+    );
+  }
+  if (m[8] === undefined) throw new Error(`${name} の日時にはタイムゾーン(Z か ±HH:MM)を付ける: ${value}`);
+  const [y, mo, d, h, mi] = [1, 2, 3, 4, 5].map((i) => Number(m[i]));
+  const s = Number(m[6] || 0);
+  const ms = Number(m[7] || 0);
+  let offsetMinutes = 0;
+  if (m[8] !== 'Z') {
+    const oh = Number(m[8].slice(1, 3));
+    const om = Number(m[8].slice(4, 6));
+    if (oh > 23 || om > 59) throw new Error(`${name} に実在しない日時が指定された: ${value}`);
+    offsetMinutes = (m[8][0] === '-' ? -1 : 1) * (oh * 60 + om);
+  }
+  // 指定したタイムゾーンでの壁時計の時刻を、いったん UTC の数値として組み立てて往復を確かめる。
+  const wall = Date.UTC(y, mo - 1, d, h, mi, s, ms);
+  const back = new Date(wall);
+  if (
+    back.getUTCFullYear() !== y
+    || back.getUTCMonth() !== mo - 1
+    || back.getUTCDate() !== d
+    || back.getUTCHours() !== h
+    || back.getUTCMinutes() !== mi
+    || back.getUTCSeconds() !== s
+    || back.getUTCMilliseconds() !== ms
+  ) {
+    throw new Error(`${name} に実在しない日時が指定された: ${value}`);
+  }
+  return { time: wall - offsetMinutes * 60 * 1000, isDay: false };
+}
+
 function projectsDir() {
   if (process.env.CLAUDE_PROJECTS_DIR) return process.env.CLAUDE_PROJECTS_DIR;
   const home = process.env.USERPROFILE || process.env.HOME;
@@ -123,6 +205,68 @@ function walk(dir, out = [], failures = []) {
     else if (e.name.endsWith('.jsonl')) out.push(p);
   }
   return out;
+}
+
+// 照合のためにパスの区切りをそろえる。記録の JSON では `\` が `\\` になるため、連続もまとめる。
+const normalizeClue = (s) => s.replace(/[\\/]+/g, '/');
+
+// 別のプロジェクト置き場へ複製された同じセッションの記録を 1 本にする。
+// セッションが作業ディレクトリを移ると、移る前の記録が移った先にも書かれ、その後ろに追記される。
+// 候補は `<projectsDir>/<プロジェクト>/` より後ろの相対パスが同じ記録である。その階層に当たらない記録は候補にしない。
+// 候補の組では最も大きい記録(同じ大きさならパスの辞書順で先のもの)を残し、ほかの記録は、
+// 残した記録の先頭と自分の全バイトが一致する場合に限って除く。
+// 一致しない記録は除かずに残して divergent に入れる。前提が破れたときに値を黙って変えず、件数で知らせるためである。
+// 読めない記録は候補から外して残す。読めなかったことは collect が報告する。
+// 返り値の files は入力の順を保ち、copiesOf は残した記録のパスから除いた複製のパスの並びへの対応である。
+function dedupeSessionCopies(files, projectsDir) {
+  const root = `${normalizeClue(String(projectsDir)).replace(/\/$/, '')}/`;
+  const groups = new Map();
+  for (const file of files) {
+    const normalized = normalizeClue(file);
+    if (!normalized.startsWith(root)) continue;
+    const rest = normalized.slice(root.length);
+    const slash = rest.indexOf('/');
+    if (slash <= 0 || slash === rest.length - 1) continue;
+    const rel = rest.slice(slash + 1);
+    const group = groups.get(rel) || [];
+    group.push(file);
+    groups.set(rel, group);
+  }
+
+  const dropped = new Set();
+  const divergent = [];
+  const copiesOf = new Map();
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const records = [];
+    for (const file of group) {
+      try {
+        records.push({ file, bytes: fs.readFileSync(file) });
+      } catch {
+        // 読めない記録は残す。collect が読めなかった場所として報告する。
+      }
+    }
+    if (records.length < 2) continue;
+    records.sort((a, b) => (b.bytes.length - a.bytes.length)
+      || (a.file < b.file ? -1 : (a.file > b.file ? 1 : 0)));
+    const [kept, ...others] = records;
+    for (const other of others) {
+      if (kept.bytes.subarray(0, other.bytes.length).equals(other.bytes)) {
+        dropped.add(other.file);
+        const copies = copiesOf.get(kept.file) || [];
+        copies.push(other.file);
+        copiesOf.set(kept.file, copies);
+      } else {
+        divergent.push(other.file);
+      }
+    }
+  }
+  return {
+    files: files.filter((file) => !dropped.has(file)),
+    dropped: dropped.size,
+    divergent,
+    copiesOf,
+  };
 }
 
 // 依頼文はヒアドキュメントでコマンドに埋め込まれる。
@@ -168,30 +312,71 @@ function splitCommands(cmd) {
   return out;
 }
 
-// 実行単位が codex-agent.sh の起動かを判定する。
-// 先頭に並ぶ環境変数の代入と、bash 自身のオプションは読み飛ばす。
+// 実行単位が codex-agent.sh の起動の形かを判定する。
+// 先頭に並ぶ環境変数の代入と、bash 自身のオプションは読み飛ばす。オプションの並びは 1 番目の捕獲に入る。
 // `cat tools/codex-agent.sh` のように読むだけのコマンドは起動と数えない。
-const INVOCATION = /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:bash|sh)\s+(?:-\S+\s+)*["']?\S*codex-agent\.sh["']?(?:\s|$)/;
+const INVOCATION = /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:bash|sh)\s+((?:-\S+\s+)*)["']?\S*codex-agent\.sh["']?(?:\s|$)/;
 
 // 起動の判定は 1 か所に置く。実起動、未呼出、待機の集計で同じ判定を使う。
+// 起動の形でも、Codex を起動しない実行は数えない。
+// bash の短いオプションのまとまりに n を含む実行は構文を検査するだけで、スクリプトを実行しない。
+// スクリプトパスより後ろにちょうど -h か --help の語があれば、ラッパーは用法を出して終わる。
+// 引用符で囲んだ文字列は 1 つの語として読み飛ばす。ヒアストリングの本文にある -h を引数と取り違えないためである。
 function isCodexInvocation(cmd) {
-  return splitCommands(stripHeredocs(cmd)).some((seg) => INVOCATION.test(seg.trim()));
+  return splitCommands(stripHeredocs(cmd)).some((seg) => {
+    const trimmed = seg.trim();
+    const m = INVOCATION.exec(trimmed);
+    if (!m) return false;
+    const options = m[1].split(/\s+/).filter(Boolean);
+    if (options.some((option) => /^-[^-\s]*n/.test(option))) return false;
+    const args = trimmed
+      .slice(m[0].length)
+      .replace(/'[^']*'|"(?:\\[\s\S]|[^"\\])*"/g, "''")
+      .split(/\s+/);
+    return !args.some((word) => word === '-h' || word === '--help');
+  });
+}
+
+// 出力ファイルを読む Bash の目印。Claude Code のバックグラウンドの出力は `.../tasks/<ID>.output` の形である。
+// パス区切りに続く語に限るのは、`grep '\.output'` のように語を検索するだけの実行を数えないためである。
+const OUTPUT_FILE = /[\\/][\w.-]+\.output\b/;
+// 実行単位の先頭で読み飛ばす語。ループや条件の本体、グループ、否定の中に置いた待機を見つけるためである。
+// `(` は後ろに空白が無くても語になるので、ほかの語と分けて扱う。
+const LEADING_WORD = /^(?:(?:do|then|else|\{|!)(?=\s|$)|\()/;
+
+// 待つためだけの Bash かを判定する。cmd はヒアドキュメントを落とした後のコマンドである。
+// sleep と until は実行単位の先頭の語だけを見る。部分一致で見ると、`--until` を渡す実行や、
+// `sleep` を含む行を編集する実行を待機と取り違える。
+function isWaitCommand(cmd) {
+  if (OUTPUT_FILE.test(cmd)) return true;
+  return splitCommands(cmd).some((seg) => {
+    let rest = seg.replace(/^\s+/, '');
+    for (let lead = LEADING_WORD.exec(rest); lead; lead = LEADING_WORD.exec(rest)) {
+      rest = rest.slice(lead[0].length).replace(/^\s+/, '');
+    }
+    const word = /^[^\s()]*/.exec(rest)[0];
+    return word === 'sleep' || word === 'until';
+  });
 }
 
 const isSub = (file) => file.includes('/subagents/');
 
 // サブエージェントの記録の脇には `<名前>.meta.json` があり、その実行を起こした親の
 // tool_use の識別子(`toolUseId`)と定義名を持つ。これで親子を一意に結ぶ。
+// 記録の脇に無ければ、除いた複製の脇を順に探す。複製の meta は移る前の置き場にだけ残ることがあるためである。
 // 読めない場合は結ばない。依頼文の一致で代用すると、同じ依頼文を出した別の実行と取り違える。
-function readAgentMeta(file, m) {
-  const metaPath = file.replace(/\.jsonl$/, '.meta.json');
-  if (!fs.existsSync(metaPath)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-  } catch (err) {
-    m.unreadable.push(`${metaPath}: ${err.code || err.message}`);
-    return null;
+function readAgentMeta(file, m, copies = []) {
+  for (const candidate of [file, ...copies]) {
+    const metaPath = candidate.replace(/\.jsonl$/, '.meta.json');
+    if (!fs.existsSync(metaPath)) continue;
+    try {
+      return JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+    } catch (err) {
+      m.unreadable.push(`${metaPath}: ${err.code || err.message}`);
+      return null;
+    }
   }
+  return null;
 }
 
 const textOf = (c) => {
@@ -200,25 +385,39 @@ const textOf = (c) => {
   return '';
 };
 
-const RESULT_LINE = /^codex-agent: result=(ok|rate-limited|unavailable|failed exit=(\d+))/gm;
+const RESULT_LINE = /^(?:\d+[:-])?codex-agent: result=(ok|rate-limited|unavailable|failed exit=(\d+))( \(simulated\))?[ \t\r]*$/gm;
 
-// 本文の行頭にある result 行のうち最後のものを分類へ写す。無ければ null を返す。
-// result 行は Codex の最終報告が引用することがあるため、最後の行を使う。
-function outcomeFromResultLine(t) {
+// 本文の result 行のうち最後のものを読む。無ければ null を返す。
+// 行頭から行末までが result 行の形である行だけを見る。最終報告が行の途中で引用したものを拾わないためである。
+// 行頭の `grep -n` の行番号は読み飛ばす。出力を `grep -n` で絞った起動の結果も読むためである。
+// 最後の行を使うのは、最終報告が前のほうで result 行を引用することがあり、ラッパーは自分の行を最後に出すためである。
+// 実起動の内訳、委譲の結果、バックグラウンドの追跡のすべてでこの読み取りを使い、判定を食い違わせない。
+// value は ok、rate-limited、unavailable、failed exit=<n> のいずれかで、simulated は試験用フックの出力かを表す。
+function lastResultLine(t) {
   let last = null;
   for (const r of t.matchAll(RESULT_LINE)) last = r;
   if (!last) return null;
-  if (last[1] === 'ok') return 'gptRan';
-  if (last[1] === 'rate-limited' || last[1] === 'unavailable') return 'gptUnavailable';
-  return last[2] === '3' ? 'notConfigured' : 'gptFailed';
+  return { value: last[1], exitCode: last[2], simulated: last[3] !== undefined };
 }
 
-// 照合のためにパスの区切りをそろえる。記録の JSON では `\` が `\\` になるため、連続もまとめる。
-const normalizeClue = (s) => s.replace(/[\\/]+/g, '/');
+// result 行を委譲の結果の分類へ写す。疑似の result 行は呼び出し側で除いてある。
+function outcomeOfResult(r) {
+  if (r.value === 'ok') return 'gptRan';
+  if (r.value === 'rate-limited' || r.value === 'unavailable') return 'gptUnavailable';
+  return r.exitCode === '3' ? 'notConfigured' : 'gptFailed';
+}
 
 // ツールが出力を退避したときの本文か。本文が <persisted-output> の外枠で始まり、退避先の行を持つものに限る。
 // 最終報告がこのタグを引用しただけの本文を、退避された出力と取り違えないためである。
 const isPersistedOutput = (t) => /^\s*<persisted-output>/.test(t) && /Full output saved to: /.test(t);
+
+// 試験用フックが Codex を起動せずに出した本文か。フックは値の後ろに ` (simulated)` を付けた result 行を出す。
+// 退避された本文の抜粋にある result 行は最終報告の引用でありうるため、疑似とは判定しない。
+function isSimulatedOutput(t) {
+  if (isPersistedOutput(t)) return false;
+  const r = lastResultLine(t);
+  return r !== null && r.simulated;
+}
 
 // 起動の結果がその場で分からない場合に、後で子が読む出力を見分ける手がかりを返す。
 // バックグラウンドへ移った起動は ID と出力ファイルのパス、退避された出力は保存先のパスである。
@@ -235,6 +434,7 @@ function trackingClues(t) {
 }
 
 // codex-agent.sh を起動した Bash の tool_result 1 件を、委譲の結果の分類へ写す。
+// 疑似の起動は呼び出し側で除いてあり、ここへは渡らない。
 function classifyInvocation(c) {
   const t = textOf(c);
   // 退避された出力は冒頭の抜粋しか本文に無く、抜粋には最終報告が引用した result 行が入ることがある。
@@ -242,8 +442,8 @@ function classifyInvocation(c) {
   if (isPersistedOutput(t)) return 'unknown';
   // ラッパーは result 行を出力の最後に出すので、退避されていない本文の result 行は確定した結果である。
   // バックグラウンドの文言より先に見るのは、最終報告の本文がその文言に触れていることがあるためである。
-  const fromLine = outcomeFromResultLine(t);
-  if (fromLine) return fromLine;
+  const r = lastResultLine(t);
+  if (r) return outcomeOfResult(r);
   if (/moved to the background|Command running in background with ID:/.test(t)) return 'unknown';
   if (/^Exit code \d+/.test(t)) return 'gptFailed';
   // 拒否は文言でなく構造で見分ける。文言は拒否した仕組みごとに違うためである。
@@ -283,7 +483,9 @@ function lastInvocationOutcome(subs) {
 
 // start 以上 endExclusive 未満を期間とする。文字列で比べると、
 // ミリ秒を持つ時刻(`...T00:00:00.000Z`)が `...T00:00:00Z` より小さくなり、開始日の先頭が落ちる。
-function collect(files, start, endExclusive) {
+// options.copiesOf は dedupeSessionCopies の返り値で、残した記録の meta ファイルが無いときに複製の脇を探すために使う。
+function collect(files, start, endExclusive, options = {}) {
+  const copiesOf = options.copiesOf || new Map();
   const seen = new Set();
   // at は「ファイル名と行番号」である。日時が必要な集計だけがこれを呼ぶ。
   // 日時を持たない記録や読めない記録は、黙って実績 0 へ混ぜず件数を出す。
@@ -306,7 +508,9 @@ function collect(files, start, endExclusive) {
   const m = {
     runs: 0,
     results: {},
+    simulated: 0,
     background: 0,
+    startedInBackground: 0,
     offloaded: [],
     waitCalls: 0,
     byAgent: {},
@@ -329,10 +533,10 @@ function collect(files, start, endExclusive) {
       continue;
     }
     const pending = new Map();
-    let calledCodex = 0;
     let committed = 0;
     const waitKeys = [];
     // 子の記録にある codex-agent.sh の起動を出現順に持つ。結果の分類は期間で絞らない。
+    // 疑似かどうかは tool_result で分かるので、ファイルを読み終えてから除く。
     const invocations = [];
     const invocationById = new Map();
     // 結果がその場で分からず、後の読み取りで確定を待つ起動と、その手がかり。
@@ -366,12 +570,13 @@ function collect(files, start, endExclusive) {
         if (c.type === 'tool_result' && linkedReads.has(c.tool_use_id)) {
           const hits = linkedReads.get(c.tool_use_id);
           linkedReads.delete(c.tool_use_id);
-          const fromLine = c.is_error === true ? null : outcomeFromResultLine(textOf(c));
-          if (fromLine) {
+          const r = c.is_error === true ? null : lastResultLine(textOf(c));
+          if (r && !r.simulated) {
+            const outcome = outcomeOfResult(r);
             for (const tr of hits) {
               const idx = tracking.indexOf(tr);
               if (idx < 0) continue; // 先に別の読み取りで確定した。
-              tr.inv.outcome = fromLine;
+              tr.inv.outcome = outcome;
               tracking.splice(idx, 1);
             }
           }
@@ -382,16 +587,15 @@ function collect(files, start, endExclusive) {
           if (isCodexInvocation(raw)) {
             pending.set(c.id, { ts: o.timestamp, at, file });
             if (isSub(file)) {
-              calledCodex += 1;
-              const inv = { ts: o.timestamp, seq: invocationSeq, outcome: 'unknown' };
+              const inv = { ts: o.timestamp, seq: invocationSeq, outcome: 'unknown', simulated: false };
               invocationSeq += 1;
               invocations.push(inv);
               invocationById.set(c.id, inv);
             }
-          } else if (isSub(file) && /\.output|\bsleep\b|\buntil\b/.test(cmd) && inRange(o.timestamp, at)) {
+          } else if (isSub(file) && isWaitCommand(cmd) && inRange(o.timestamp, at)) {
             // 待つためだけの Bash。定義に待ち方を書く前は、これが毎回繰り返されていた。
             // Codex の起動そのものは待機に数えない。
-            waitKeys.push(`wait|${file}|${c.id}`);
+            waitKeys.push(`wait|${c.id}`);
           }
           // 委譲は親の起動時刻で期間を選ぶ。子の実行が日付をまたぐことがあるため、
           // 子の側では期間で絞らない。
@@ -399,7 +603,8 @@ function collect(files, start, endExclusive) {
         }
         if (c.type === 'tool_use' && c.name === 'Agent' && !isSub(file)) {
           const st = String((c.input && c.input.subagent_type) || '');
-          if (WRAPPER_AGENTS.includes(st) && inRange(o.timestamp, at)) {
+          // 会話を引き継いだセッションの記録には、前のセッションの委譲が同じ識別子で写っている。
+          if (WRAPPER_AGENTS.includes(st) && inRange(o.timestamp, at) && once(`agent|${c.id}`)) {
             m.agentCalls.push({
               type: st,
               toolUseId: c.id,
@@ -409,10 +614,16 @@ function collect(files, start, endExclusive) {
         }
         if (c.type === 'tool_result' && invocationById.has(c.tool_use_id)) {
           const inv = invocationById.get(c.tool_use_id);
-          inv.outcome = classifyInvocation(c);
-          if (inv.outcome === 'unknown') {
-            const clues = trackingClues(textOf(c));
-            if (clues.length > 0) tracking.push({ inv, clues });
+          const t = textOf(c);
+          if (isSimulatedOutput(t)) {
+            // Codex を起動していないので、委譲の結果の起動にしない。追跡もしない。
+            inv.simulated = true;
+          } else {
+            inv.outcome = classifyInvocation(c);
+            if (inv.outcome === 'unknown') {
+              const clues = trackingClues(t);
+              if (clues.length > 0) tracking.push({ inv, clues });
+            }
           }
         }
         if (c.type === 'tool_result' && pending.has(c.tool_use_id)) {
@@ -420,17 +631,31 @@ function collect(files, start, endExclusive) {
           pending.delete(c.tool_use_id);
           if (!inRange(run.ts, run.at)) continue;
           const t = textOf(c);
-          // 起動は Bash の呼び出しごとに 1 件である。時刻でまとめると、
+          // 起動は Bash の呼び出しごとに 1 件で、識別子でまとめる。会話を引き継いだセッションの記録には、
+          // 前のセッションの呼び出しが同じ識別子で写っている。時刻でまとめると、
           // 同じ分に並行して起動した別々の実行が失われる。
-          if (!once(`run|${run.file}|${c.tool_use_id}`)) continue;
+          if (!once(`run|${c.tool_use_id}`)) continue;
 
+          if (isSimulatedOutput(t)) {
+            // 試験用フックは Codex を起動しない。実起動と分けて数える。
+            m.simulated += 1;
+            continue;
+          }
           if (/moved to the background/.test(t)) {
             m.background += 1;
             continue; // 結果はこの時点では分からない。
           }
+          // Bash の run_in_background で最初からバックグラウンドに置いた起動も、結果がこの時点では分からない。
+          // 上限を超えて移った起動とは分けて数える。移った件数は Codex の実行時間を表すためである。
+          if (/^Command running in background with ID:/.test(t)) {
+            m.startedInBackground += 1;
+            continue;
+          }
           m.runs += 1;
-          const res = (/codex-agent: result=(ok|rate-limited|unavailable|failed exit=\d+)/.exec(t) || [])[1]
-            || '(結果行なし)';
+          // 退避された本文の抜粋にある result 行は最終報告の引用でありうるので、内訳には使わない。
+          // 委譲の結果の分類が退避された本文の result 行で確定しないのと揃える。
+          const r = isPersistedOutput(t) ? null : lastResultLine(t);
+          const res = r ? r.value : '(結果行なし)';
           m.results[res] = (m.results[res] || 0) + 1;
           const big = /Output too large \(([0-9.]+)KB\)/.exec(t);
           if (big) m.offloaded.push(Number(big[1]));
@@ -438,6 +663,9 @@ function collect(files, start, endExclusive) {
       }
     }
 
+    // 疑似の起動は Codex を起動していないので、Codex を呼んだかの判定と委譲の結果から除く。
+    const realInvocations = invocations.filter((inv) => !inv.simulated);
+    const calledCodex = realInvocations.length;
     // 待ち方を数えるのは、実際に Codex を呼んだサブエージェントだけである。
     if (calledCodex > 0) {
       for (const key of waitKeys) {
@@ -447,10 +675,10 @@ function collect(files, start, endExclusive) {
     if (isSub(file)) {
       // 記録の脇にある meta ファイルが、その実行を起こした親の tool_use を持つ。
       // これで親子を一意に結べるので、依頼文の一致で推測しない。
-      const link = readAgentMeta(file, m);
+      const link = readAgentMeta(file, m, copiesOf.get(file));
       if (link && link.toolUseId) {
         const list = m.subByToolUse.get(link.toolUseId) || [];
-        list.push({ calledCodex, committed, invocations });
+        list.push({ calledCodex, committed, invocations: realInvocations });
         m.subByToolUse.set(link.toolUseId, list);
       }
     }
@@ -478,6 +706,7 @@ function collect(files, start, endExclusive) {
       row.unlinked += 1;
       continue;
     }
+    // 未起動と Codex 未呼出は、どちらも疑似を除いた起動が子のどこにも無いことで決まり、件数が一致する。
     if (subs.every((s) => s.calledCodex === 0)) row.noCodex += 1;
     if (subs.some((s) => s.committed > 0)) row.committed += 1;
     const outcome = lastInvocationOutcome(subs);
@@ -498,17 +727,22 @@ function main() {
     console.log(head.slice(2, end).join('\n').replace(/^\/\/ ?/gm, '').trimEnd());
     return;
   }
-  // 終了日は「翌日の 00:00:00.000 未満」とする。終了日の最後のミリ秒まで含める。
-  const endExclusive = opts.until === undefined ? Date.now() : parseDay(opts.until, '--until') + DAY;
-  const start = opts.since === undefined ? endExclusive - 7 * DAY : parseDay(opts.since, '--since');
-  if (start >= endExclusive) throw new Error('--since が --until より後になっている');
+  // 終了は「未満」で持つ。日付で指定した終了日は翌日の 00:00:00.000 未満とし、最後のミリ秒まで含める。
+  // 日時で指定した終了はその時刻を含まない。
+  const until = opts.until === undefined ? null : parseBoundary(opts.until, '--until');
+  const endExclusive = until === null ? Date.now() : until.time + (until.isDay ? DAY : 0);
+  const start = opts.since === undefined ? endExclusive - 7 * DAY : parseBoundary(opts.since, '--since').time;
+  if (start >= endExclusive) throw new Error('--since が --until と同じか後になっている');
 
   const dir = projectsDir();
   if (!fs.existsSync(dir)) throw new Error(`記録の置き場が無い: ${dir}`);
   const failures = [];
+  // 別のプロジェクト置き場へ複製された同じセッションの記録を 1 本にする。両方を読むと二重に数える。
+  // 更新時刻で絞る前に行う。先に絞ると古い置き場の複製だけが落ち、その脇の meta ファイルを使えなくなるためである。
+  const deduped = dedupeSessionCopies(walk(dir, [], failures), dir);
   // ファイルの更新時刻で粗く絞る。個々の出来事の時刻は collect が見る。
   const cutoff = new Date(start - 2 * DAY);
-  const files = walk(dir, [], failures).filter((f) => {
+  const files = deduped.files.filter((f) => {
     try {
       return fs.statSync(f).mtime >= cutoff;
     } catch (err) {
@@ -517,8 +751,8 @@ function main() {
     }
   });
 
-  const m = collect(files, start, endExclusive);
-  // 表示は指定と同じ UTC で行う。終了は「未満」なので、最後に含まれる瞬間を出す。
+  const m = collect(files, start, endExclusive, { copiesOf: deduped.copiesOf });
+  // 表示は UTC で行う。終了は「未満」なので、最後に含まれる瞬間を出す。
   const shown = `${new Date(start).toISOString()} 〜 ${new Date(endExclusive - 1).toISOString()}`;
   const unreadable = failures.concat(m.unreadable);
   const unparseableLines = {
@@ -528,10 +762,15 @@ function main() {
   const offloaded = m.offloaded;
   const summary = {
     期間: shown,
+    数え方の版: COUNTING_RULES_VERSION,
     対象ファイル数: files.length,
+    複製として除いた記録: deduped.dropped,
+    前方一致しない複製: deduped.divergent,
     実起動: m.runs,
     結果の内訳: m.results,
+    疑似の起動: m.simulated,
     バックグラウンドへの移行: m.background,
+    バックグラウンドで起動: m.startedInBackground,
     出力の退避: {
       回数: offloaded.length,
       最大KB: offloaded.length ? Math.max(...offloaded) : 0,
@@ -548,13 +787,21 @@ function main() {
     return;
   }
   console.log(`期間: ${shown}`);
+  console.log(`数え方の版: ${COUNTING_RULES_VERSION}`);
   console.log(`対象ファイル: ${files.length} 本`);
+  console.log(`複製として除いた記録: ${deduped.dropped} 本`);
+  if (deduped.divergent.length) {
+    console.log(`前方一致しない複製: ${deduped.divergent.length} 本(除かずに数えた)`);
+    for (const x of deduped.divergent.slice(0, 5)) console.log(`  ${x}`);
+  }
   console.log('');
   console.log(`codex-agent.sh の実起動(結果が記録に残ったもの): ${m.runs}`);
   for (const [k, v] of Object.entries(m.results).sort((a, b) => b[1] - a[1])) {
     console.log(`  ${k.padEnd(20)} ${v}`);
   }
+  console.log(`疑似の起動(試験用フックの結果で、実起動に含めない): ${m.simulated}`);
   console.log(`バックグラウンドへ移された起動: ${m.background}`);
+  console.log(`最初からバックグラウンドで起動した起動(実起動に含めない): ${m.startedInBackground}`);
   console.log(
     `出力が退避された回数: ${offloaded.length}` +
       (offloaded.length ? ` (最大 ${Math.max(...offloaded)}KB)` : ''),
@@ -599,4 +846,12 @@ if (require.main === module) {
   }
 }
 
-module.exports = { stripHeredocs, splitCommands, isCodexInvocation, parseDay, collect };
+module.exports = {
+  stripHeredocs,
+  splitCommands,
+  isCodexInvocation,
+  parseDay,
+  parseBoundary,
+  dedupeSessionCopies,
+  collect,
+};
