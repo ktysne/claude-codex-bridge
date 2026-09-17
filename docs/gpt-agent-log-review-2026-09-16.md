@@ -282,7 +282,7 @@ node tools/agent-log-metrics.js --since 2026-09-16T04:58:44Z --until 2026-09-17T
 境界を日時で指定し、配布前の時間を混ぜない。
 
 ```bash
-node tools/agent-log-metrics.js --since 2026-09-16T04:58:44Z --until 2026-09-23
+node tools/agent-log-metrics.js --since 2026-09-16T04:58:44Z --until 2026-09-23T01:00:00Z
 ```
 
 出力の「数え方の版」が 2 であることを確かめる。
