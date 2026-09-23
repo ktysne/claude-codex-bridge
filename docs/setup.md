@@ -147,7 +147,7 @@ GPT 側定義(`.claude/gpt-agents/`)と `tools/codex-agent.sh` は、`codex-agen
 設定コンソールでは、`codex-review` と `codex-subagent` の GPT 側モデルと effort も変更できる。
 `gui\build.bat` をダブルクリックすると `gui\dist\CodexBridgeConsole.exe` ができる。
 ビルドには .NET SDK が要る。
-以後は exe をダブルクリックして起動し、手順 3 で配置したユーザ定義側の 8 ファイルを編集する。
+以後は exe をダブルクリックして起動し、手順 3 で配置したユーザ定義側の定義(最大 8 ファイル)をタブごとに編集する。パターン 1 のように `codex-review` と `codex-subagent` を配置していない場合、レビューと実装補助タブは使えない。
 詳細は [設定コンソールの使い方](gui.md) を参照する。
 定義ファイルを手で編集する運用でも差し支えないため、この手順は省略できる。
 
