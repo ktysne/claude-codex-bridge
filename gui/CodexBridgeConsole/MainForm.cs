@@ -20,6 +20,9 @@ namespace CodexBridgeConsole
 
         private const float BaseFontSize = 10F;
 
+        // 目録由来の GPT モデルが増えても、一覧が画面の高さを超えない上限。
+        private const int MaxVisibleDropDownItems = 20;
+
         // GPT モデルが未設定であることを表す選択肢の表示名。値としては空文字を意味する。
         // モデル名に使える文字は英数字と . _ - / だけである(ConsoleSettings が保存時に検証する)ため、
         // 括弧を含むこの表示名が実在のモデル名と衝突することはない。この不変条件があるので、
@@ -525,7 +528,7 @@ namespace CodexBridgeConsole
 
         private ComboBox CreateComboBox(int width)
         {
-            var comboBox = new ComboBox
+            var comboBox = new SelectionPreservingComboBox
             {
                 DropDownStyle = ComboBoxStyle.DropDown,
                 Anchor = AnchorStyles.Left | AnchorStyles.Right,
@@ -724,6 +727,8 @@ namespace CodexBridgeConsole
                 comboBox.Items.Insert(Math.Min(unlistedIndex, comboBox.Items.Count), currentValue);
             }
 
+            // 一覧がスクロールすると、選択中の値より上の候補が隠れて選択肢に無いように見えるため、全件を並べる。
+            comboBox.MaxDropDownItems = Math.Max(1, Math.Min(comboBox.Items.Count, MaxVisibleDropDownItems));
             comboBox.Text = currentValue ?? string.Empty;
         }
 
