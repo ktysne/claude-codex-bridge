@@ -29,6 +29,12 @@ namespace CodexBridgeConsole
         // 表示名と値の変換を文字列の一致だけで行える。
         private const string UnsetGptModelText = "(未設定)";
 
+        private const string UnsetValueText = "(未設定)";
+
+        private const string CheckingVersionText = "確認中...";
+
+        private const string FetchingCatalogText = "取得中...";
+
         // agent-limit-checker の画面 (renderer/style.css) と同じ優先順で選ぶ。
         // 同じ利用者が並べて使う道具であり、見た目を揃える。
         // 先頭の Segoe UI は日本語の字を持たないが、日本語の部分は Windows の
@@ -39,6 +45,8 @@ namespace CodexBridgeConsole
             "Yu Gothic UI",
             "Meiryo"
         };
+
+        private static readonly Color WarningForeColor = Color.Firebrick;
 
         private static string _baseFontFamily;
 
@@ -53,47 +61,55 @@ namespace CodexBridgeConsole
         private CheckBox _codexEnabledCheckBox;
         private ComboBox _hardModelComboBox;
         private ComboBox _hardEffortComboBox;
-        private ComboBox _hardGptModelComboBox;
-        private ComboBox _hardGptEffortComboBox;
+        private GptRow _hardGptRow;
         private ComboBox _standardModelComboBox;
         private ComboBox _standardEffortComboBox;
-        private ComboBox _standardGptModelComboBox;
-        private ComboBox _standardGptEffortComboBox;
+        private GptRow _standardGptRow;
         private ComboBox _lightModelComboBox;
         private ComboBox _lightEffortComboBox;
-        private ComboBox _lightGptModelComboBox;
-        private ComboBox _lightGptEffortComboBox;
+        private GptRow _lightGptRow;
+        private GptRow[] _subagentGptRows;
+        private CodexAgentRow[] _codexAgentRows;
+        private GptRow[] _reviewGptRows;
+        private Label _reviewVersionLabel;
+        private Label _reviewCatalogLabel;
+        private Label _reviewMissingFilesLabel;
         private Button _reloadButton;
         private Button _saveButton;
         private Button _closeButton;
         private Label _missingFilesLabel;
+        private Label _noticeLabel;
         private Label _saveStatusLabel;
         private Color _saveStatusDefaultForeColor;
         private bool _loadingControls;
         private bool _codexVersionStarted;
 
-        // codex debug models から取れた目録。取れなかった間は null で、_choices の既定値を使う。
-        private CodexModelCatalog _codexModelCatalog;
-
         // 認証ホームの選択欄に並べた項目の値。表示は注記を添えることがあるため、値を別に持つ。
         private readonly List<string> _codexHomeValues = new List<string>();
 
-        // 認証ホームごとの取得結果。切り替えて戻したときに同じ問い合わせを繰り返さない。
-        private readonly Dictionary<string, string> _codexVersionByHome =
-            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        private readonly Dictionary<string, CatalogResult> _codexCatalogByHome =
-            new Dictionary<string, CatalogResult>(StringComparer.OrdinalIgnoreCase);
+        // 認証ホームごとの取得。取得中のものも入れておき、両タブが同じホームを求めても codex を 1 回だけ起動する。
+        // 切り替えて戻したときや再読込のときも、同じ問い合わせを繰り返さない。
+        private readonly Dictionary<string, Task<string>> _codexVersionByHome =
+            new Dictionary<string, Task<string>>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, Task<CatalogResult>> _codexCatalogByHome =
+            new Dictionary<string, Task<CatalogResult>>(StringComparer.OrdinalIgnoreCase);
 
         // 取得を始めたときのホーム。結果を画面へ反映してよいのは、それがまだ選ばれているときだけである。
         private string _currentCodexHomeKey = string.Empty;
 
-        private string _codexVersionText = "確認中...";
+        private string _codexVersionText = CheckingVersionText;
 
         // codex debug models の取得結果に応じた文言。GPT モデル一覧が目録由来か既定値かを利用者に示す。
-        private string _codexCatalogText = "取得中...";
+        private string _codexCatalogText = FetchingCatalogText;
 
         private Control _layout;
+        private Control _targetPanel;
+        private TabControl _tabControl;
+        private Control _subagentContent;
+        private Control _reviewContent;
+        private Control _buttonPanel;
         private TableLayoutPanel _definitionsTable;
+        private TableLayoutPanel _reviewTable;
 
         public MainForm()
         {
@@ -138,11 +154,86 @@ namespace CodexBridgeConsole
                 Padding = new Padding(12)
             };
 
-            // 横幅の基準は定義の表とする。画面の中で最も広い中身であるためである。
-            _definitionsTable = (TableLayoutPanel)BuildDefinitionsTable();
-            int contentWidth = _definitionsTable.PreferredSize.Width;
+            // 横幅の基準は 2 つのタブの表のうち広いほうとする。画面の中で最も広い中身であるためである。
+            _definitionsTable = BuildDefinitionsTable();
+            _reviewTable = BuildReviewTable();
+            int contentWidth = Math.Max(_definitionsTable.PreferredSize.Width, _reviewTable.PreferredSize.Width);
 
-            layout.Controls.Add(BuildTargetPanel(contentWidth));
+            _targetPanel = BuildTargetPanel();
+            layout.Controls.Add(_targetPanel);
+
+            _subagentContent = BuildSubagentContent(contentWidth);
+            _reviewContent = BuildReviewContent(contentWidth);
+
+            // 大きさは AdjustWindowSize が決める。
+            _tabControl = new TabControl
+            {
+                Margin = new Padding(0, 6, 0, 6)
+            };
+            _tabControl.TabPages.Add(CreateTabPage("サブエージェント", _subagentContent));
+            _tabControl.TabPages.Add(CreateTabPage("レビューと実装補助", _reviewContent));
+            _tabControl.SelectedIndexChanged += TabControl_SelectedIndexChanged;
+            layout.Controls.Add(_tabControl);
+
+            // 幅を内容の幅に留めて折り返す。制限しないと、この文言の幅でダイアログの幅が決まり、画面からはみ出す。
+            _noticeLabel = new Label
+            {
+                Text = "保存した値は次の委譲から効きます(GPT 側は次の Codex 呼び出しから、Claude 側は数秒後から)。再起動が要る条件は docs/setup.md の共通手順 6 を参照。",
+                AutoSize = true,
+                Margin = new Padding(3, 6, 3, 3)
+            };
+            layout.Controls.Add(_noticeLabel);
+
+            _saveStatusLabel = new Label
+            {
+                AutoSize = false,
+                AutoEllipsis = true,
+                Height = SingleLineHeight(),
+                TextAlign = ContentAlignment.MiddleLeft,
+                Margin = new Padding(3, 3, 3, 3)
+            };
+            _saveStatusDefaultForeColor = _saveStatusLabel.ForeColor;
+            layout.Controls.Add(_saveStatusLabel);
+
+            _buttonPanel = BuildButtonPanel();
+            layout.Controls.Add(_buttonPanel);
+            SetSharedWidth(contentWidth);
+
+            _layout = layout;
+            Controls.Add(layout);
+        }
+
+        private static TabPage CreateTabPage(string text, Control content)
+        {
+            var page = new TabPage(text)
+            {
+                Padding = new Padding(0),
+                UseVisualStyleBackColor = true
+            };
+
+            // 中身はページに合わせて伸縮させず、自分の希望する大きさで置く。
+            // タブの大きさは 2 つの中身の希望する大きさから決めるためである。
+            content.Location = Point.Empty;
+            page.Controls.Add(content);
+            return page;
+        }
+
+        private static FlowLayoutPanel CreateTabContent()
+        {
+            return new FlowLayoutPanel
+            {
+                FlowDirection = FlowDirection.TopDown,
+                WrapContents = false,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Margin = new Padding(0),
+                Padding = new Padding(6)
+            };
+        }
+
+        private Control BuildSubagentContent(int width)
+        {
+            FlowLayoutPanel content = CreateTabContent();
 
             _codexEnabledCheckBox = new CheckBox
             {
@@ -151,55 +242,52 @@ namespace CodexBridgeConsole
                 Margin = new Padding(3, 6, 3, 6)
             };
             _codexEnabledCheckBox.CheckedChanged += CodexEnabledCheckBox_CheckedChanged;
-            layout.Controls.Add(_codexEnabledCheckBox);
+            content.Controls.Add(_codexEnabledCheckBox);
 
-            layout.Controls.Add(_definitionsTable);
-            layout.Controls.Add(BuildStatusPanel(contentWidth));
+            content.Controls.Add(_definitionsTable);
 
-            // 警告が無いときは場所を取らない。空の行が余白として残ると読みにくい。
-            // 高さは行数で固定するため、収まらない文字列は末尾を省略記号にする。
-            // 中断までに保存されたファイルの一覧など、長い文言が切れて読めなくなるのを防ぐ。
-            _missingFilesLabel = new Label
+            _codexVersionLabel = CreateStatusLabel(width);
+            _codexCatalogLabel = CreateStatusLabel(width);
+            content.Controls.Add(BuildStatusPanel(width, BuildCodexHomePanel(), _codexVersionLabel, _codexCatalogLabel));
+
+            _missingFilesLabel = CreateWarningLabel(width);
+            content.Controls.Add(_missingFilesLabel);
+            return content;
+        }
+
+        private Control BuildReviewContent(int width)
+        {
+            FlowLayoutPanel content = CreateTabContent();
+            content.Controls.Add(_reviewTable);
+
+            _reviewVersionLabel = CreateWrappingStatusLabel(width);
+            _reviewCatalogLabel = CreateWrappingStatusLabel(width);
+            content.Controls.Add(BuildStatusPanel(width, _reviewVersionLabel, _reviewCatalogLabel));
+
+            _reviewMissingFilesLabel = CreateWarningLabel(width);
+            content.Controls.Add(_reviewMissingFilesLabel);
+            return content;
+        }
+
+        // 警告が無いときは場所を取らない。空の行が余白として残ると読みにくい。
+        // 高さは行数で固定するため、収まらない文字列は末尾を省略記号にする。
+        // 中断までに保存されたファイルの一覧など、長い文言が切れて読めなくなるのを防ぐ。
+        private Label CreateWarningLabel(int width)
+        {
+            return new Label
             {
                 AutoSize = false,
                 AutoEllipsis = true,
                 Visible = false,
-                Width = contentWidth,
+                Width = width,
                 Height = SingleLineHeight() * 2,
-                ForeColor = Color.Firebrick,
+                ForeColor = WarningForeColor,
                 TextAlign = ContentAlignment.MiddleLeft,
                 Margin = new Padding(3, 3, 3, 3)
             };
-            layout.Controls.Add(_missingFilesLabel);
-
-            // 幅を内容の幅に留めて折り返す。制限しないと、この文言の幅でダイアログの幅が決まり、画面からはみ出す。
-            var noticeLabel = new Label
-            {
-                Text = "保存した値は次の委譲から効きます(GPT 側は次の Codex 呼び出しから、Claude 側は数秒後から)。再起動が要る条件は docs/setup.md の共通手順 6 を参照。",
-                AutoSize = true,
-                MaximumSize = new Size(contentWidth, 0),
-                Margin = new Padding(3, 6, 3, 3)
-            };
-            layout.Controls.Add(noticeLabel);
-
-            _saveStatusLabel = new Label
-            {
-                AutoSize = false,
-                AutoEllipsis = true,
-                Width = contentWidth,
-                Height = SingleLineHeight(),
-                TextAlign = ContentAlignment.MiddleLeft,
-                Margin = new Padding(3, 3, 3, 3)
-            };
-            _saveStatusDefaultForeColor = _saveStatusLabel.ForeColor;
-            layout.Controls.Add(_saveStatusLabel);
-            layout.Controls.Add(BuildButtonPanel(contentWidth));
-
-            _layout = layout;
-            Controls.Add(layout);
         }
 
-        private Control BuildTargetPanel(int width)
+        private Control BuildTargetPanel()
         {
             _reloadButton = CreateActionButton("再読込");
             _reloadButton.Anchor = AnchorStyles.Right;
@@ -214,7 +302,6 @@ namespace CodexBridgeConsole
                 // 子へ伝わっておらず、必要な高さを正しく測れない。
                 AutoSize = true,
                 AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                MinimumSize = new Size(width, 0),
                 Margin = new Padding(0),
                 Padding = new Padding(0)
             };
@@ -237,12 +324,12 @@ namespace CodexBridgeConsole
             return panel;
         }
 
-        private Control BuildDefinitionsTable()
+        private static TableLayoutPanel CreateDefinitionTable(int columnCount, int rowCount)
         {
             var table = new TableLayoutPanel
             {
-                ColumnCount = 5,
-                RowCount = 4,
+                ColumnCount = columnCount,
+                RowCount = rowCount,
 
                 // 縦に積む入れ物の中では、自分の大きさを自分で決める必要がある。
                 AutoSize = true,
@@ -253,15 +340,22 @@ namespace CodexBridgeConsole
             };
             // 列幅と行の高さは中身に決めさせる。見出しの文字が最も長いことが多く、
             // 画素で決めると書体を変えたときに切れる。
-            for (int i = 0; i < 5; i++)
+            for (int i = 0; i < columnCount; i++)
             {
                 table.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             }
 
-            for (int i = 0; i < 4; i++)
+            for (int i = 0; i < rowCount; i++)
             {
                 table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             }
+
+            return table;
+        }
+
+        private TableLayoutPanel BuildDefinitionsTable()
+        {
+            TableLayoutPanel table = CreateDefinitionTable(5, 4);
 
             int claudeModelWidth = ComboBoxWidth(
                 _choices.ClaudeModels,
@@ -294,48 +388,109 @@ namespace CodexBridgeConsole
             table.Controls.Add(CreateRowLabel("hard"), 0, 1);
             _hardModelComboBox = CreateComboBox(claudeModelWidth);
             _hardEffortComboBox = CreateComboBox(claudeEffortWidth);
-            _hardGptModelComboBox = CreateComboBox(gptModelWidth);
-            _hardGptEffortComboBox = CreateComboBox(gptEffortWidth);
+            _hardGptRow = CreateGptRow(gptModelWidth, gptEffortWidth, true);
             _hardModelComboBox.TextChanged += ClaudeModelTextChanged;
-            _hardGptModelComboBox.TextChanged += GptModelTextChanged;
             table.Controls.Add(_hardModelComboBox, 1, 1);
             table.Controls.Add(_hardEffortComboBox, 2, 1);
-            table.Controls.Add(_hardGptModelComboBox, 3, 1);
-            table.Controls.Add(_hardGptEffortComboBox, 4, 1);
+            table.Controls.Add(_hardGptRow.ModelComboBox, 3, 1);
+            table.Controls.Add(_hardGptRow.EffortComboBox, 4, 1);
 
             table.Controls.Add(CreateRowLabel("standard"), 0, 2);
             _standardModelComboBox = CreateComboBox(claudeModelWidth);
             _standardEffortComboBox = CreateComboBox(claudeEffortWidth);
-            _standardGptModelComboBox = CreateComboBox(gptModelWidth);
-            _standardGptEffortComboBox = CreateComboBox(gptEffortWidth);
+            _standardGptRow = CreateGptRow(gptModelWidth, gptEffortWidth, true);
             _standardModelComboBox.TextChanged += ClaudeModelTextChanged;
-            _standardGptModelComboBox.TextChanged += GptModelTextChanged;
             table.Controls.Add(_standardModelComboBox, 1, 2);
             table.Controls.Add(_standardEffortComboBox, 2, 2);
-            table.Controls.Add(_standardGptModelComboBox, 3, 2);
-            table.Controls.Add(_standardGptEffortComboBox, 4, 2);
+            table.Controls.Add(_standardGptRow.ModelComboBox, 3, 2);
+            table.Controls.Add(_standardGptRow.EffortComboBox, 4, 2);
 
             table.Controls.Add(CreateRowLabel("light"), 0, 3);
             _lightModelComboBox = CreateComboBox(claudeModelWidth);
             _lightEffortComboBox = CreateComboBox(claudeEffortWidth);
-            _lightGptModelComboBox = CreateComboBox(gptModelWidth);
-            _lightGptEffortComboBox = CreateComboBox(gptEffortWidth);
+            _lightGptRow = CreateGptRow(gptModelWidth, gptEffortWidth, true);
             _lightModelComboBox.TextChanged += ClaudeModelTextChanged;
-            _lightGptModelComboBox.TextChanged += GptModelTextChanged;
             table.Controls.Add(_lightModelComboBox, 1, 3);
             table.Controls.Add(_lightEffortComboBox, 2, 3);
-            table.Controls.Add(_lightGptModelComboBox, 3, 3);
-            table.Controls.Add(_lightGptEffortComboBox, 4, 3);
+            table.Controls.Add(_lightGptRow.ModelComboBox, 3, 3);
+            table.Controls.Add(_lightGptRow.EffortComboBox, 4, 3);
+
+            _subagentGptRows = new[] { _hardGptRow, _standardGptRow, _lightGptRow };
+            return table;
+        }
+
+        // codex_home と codex_sandbox は表示だけにする。書き換えない理由は
+        // docs/gui-console-design.md「レビューと実装補助タブで書き換えない項目」にある。
+        private TableLayoutPanel BuildReviewTable()
+        {
+            TableLayoutPanel table = CreateDefinitionTable(5, 3);
+
+            int gptModelWidth = ComboBoxWidth(
+                _choices.GptModels,
+                _settings.CodexReview.CodexModel,
+                _settings.CodexSubagent.CodexModel);
+            int gptEffortWidth = ComboBoxWidth(
+                _choices.GptEfforts,
+                _settings.CodexReview.CodexReasoningEffort,
+                _settings.CodexSubagent.CodexReasoningEffort);
+
+            table.Controls.Add(CreateHeaderLabel("定義"), 0, 0);
+            table.Controls.Add(CreateHeaderLabel("GPT モデル"), 1, 0);
+            table.Controls.Add(CreateHeaderLabel("effort"), 2, 0);
+            table.Controls.Add(CreateHeaderLabel("codex_home"), 3, 0);
+            table.Controls.Add(CreateHeaderLabel("codex_sandbox"), 4, 0);
+
+            _codexAgentRows = new[]
+            {
+                AddCodexAgentRow(table, 1, "codex-review", () => _settings.CodexReview, gptModelWidth, gptEffortWidth),
+                AddCodexAgentRow(table, 2, "codex-subagent", () => _settings.CodexSubagent, gptModelWidth, gptEffortWidth)
+            };
+
+            _reviewGptRows = new GptRow[_codexAgentRows.Length];
+            for (int i = 0; i < _codexAgentRows.Length; i++)
+            {
+                _reviewGptRows[i] = _codexAgentRows[i].Gpt;
+            }
 
             return table;
         }
 
-        private Control BuildStatusPanel(int width)
+        private CodexAgentRow AddCodexAgentRow(
+            TableLayoutPanel table,
+            int rowIndex,
+            string definitionName,
+            Func<CodexAgentSettings> settings,
+            int gptModelWidth,
+            int gptEffortWidth)
+        {
+            // 「(未設定)」は加えない。この定義は codex_model が空だとフォールバックせずに失敗するためである。
+            GptRow gpt = CreateGptRow(gptModelWidth, gptEffortWidth, false);
+
+            // 表の幅を組み立ての時点で測るため、値は先に入れておく。
+            Label homeLabel = CreateValueLabel(FormatDefinitionValue(settings().CodexHome));
+            Label sandboxLabel = CreateValueLabel(FormatDefinitionValue(settings().CodexSandbox));
+
+            table.Controls.Add(CreateRowLabel(definitionName), 0, rowIndex);
+            table.Controls.Add(gpt.ModelComboBox, 1, rowIndex);
+            table.Controls.Add(gpt.EffortComboBox, 2, rowIndex);
+            table.Controls.Add(homeLabel, 3, rowIndex);
+            table.Controls.Add(sandboxLabel, 4, rowIndex);
+            return new CodexAgentRow(settings, gpt, homeLabel, sandboxLabel);
+        }
+
+        private GptRow CreateGptRow(int modelWidth, int effortWidth, bool allowsUnset)
+        {
+            var row = new GptRow(CreateComboBox(modelWidth), CreateComboBox(effortWidth), allowsUnset);
+            row.ModelComboBox.TextChanged += GptModelTextChanged;
+            return row;
+        }
+
+        private Control BuildStatusPanel(int width, params Control[] rows)
         {
             var panel = new TableLayoutPanel
             {
                 ColumnCount = 1,
-                RowCount = 3,
+                RowCount = rows.Length,
 
                 // 認証ホームの行はコンボボックスを持つため、1 行分の高さに収まらない。
                 // 高さは中身に決めさせる。
@@ -345,16 +500,12 @@ namespace CodexBridgeConsole
                 Margin = new Padding(3, 6, 3, 6),
                 Padding = new Padding(0)
             };
-            for (int i = 0; i < 3; i++)
+            for (int i = 0; i < rows.Length; i++)
             {
                 panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                panel.Controls.Add(rows[i], 0, i);
             }
 
-            _codexVersionLabel = CreateStatusLabel(width);
-            _codexCatalogLabel = CreateStatusLabel(width);
-            panel.Controls.Add(BuildCodexHomePanel(), 0, 0);
-            panel.Controls.Add(_codexVersionLabel, 0, 1);
-            panel.Controls.Add(_codexCatalogLabel, 0, 2);
             return panel;
         }
 
@@ -366,6 +517,20 @@ namespace CodexBridgeConsole
                 AutoEllipsis = true,
                 Width = width,
                 Height = SingleLineHeight(),
+                TextAlign = ContentAlignment.MiddleLeft,
+                Margin = new Padding(3, 0, 3, 0)
+            };
+        }
+
+        // 2 つのホームの結果を並べる行は長くなりやすいため、省略せずに折り返す。
+        // 1 行で収まるときは他の状態行と同じ高さにする。
+        private Label CreateWrappingStatusLabel(int width)
+        {
+            return new Label
+            {
+                AutoSize = true,
+                MinimumSize = new Size(width, SingleLineHeight()),
+                MaximumSize = new Size(width, 0),
                 TextAlign = ContentAlignment.MiddleLeft,
                 Margin = new Padding(3, 0, 3, 0)
             };
@@ -442,7 +607,12 @@ namespace CodexBridgeConsole
                 : value + "  (存在しない)";
         }
 
-        private Control BuildButtonPanel(int width)
+        private static string FormatDefinitionValue(string value)
+        {
+            return string.IsNullOrEmpty(value) ? UnsetValueText : value;
+        }
+
+        private Control BuildButtonPanel()
         {
             _closeButton = CreateActionButton("閉じる");
             _closeButton.Margin = new Padding(6, 0, 0, 0);
@@ -463,7 +633,6 @@ namespace CodexBridgeConsole
                 WrapContents = false,
                 AutoSize = true,
                 AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                MinimumSize = new Size(width, 0),
                 Margin = new Padding(3, 12, 3, 3),
                 Padding = new Padding(0)
             };
@@ -487,13 +656,36 @@ namespace CodexBridgeConsole
             };
         }
 
-        // 中身の高さに画面を合わせる。警告の行が出入りすると必要な高さが変わる。
+        // タブの外の行はタブと同じ幅にし、どちらのタブを開いていても同じ位置に見せる。
+        private void SetSharedWidth(int width)
+        {
+            _targetPanel.MinimumSize = new Size(width - _targetPanel.Margin.Horizontal, 0);
+            _noticeLabel.MaximumSize = new Size(width - _noticeLabel.Margin.Horizontal, 0);
+            _saveStatusLabel.Width = width - _saveStatusLabel.Margin.Horizontal;
+            _buttonPanel.MinimumSize = new Size(width - _buttonPanel.Margin.Horizontal, 0);
+        }
+
+        // タブの大きさは 2 つの中身の大きいほうで決め、どちらのタブを開いていても変えない。
+        // 画面は全体の中身に合わせる。警告の行が出入りすると必要な大きさが変わる。
         private void AdjustWindowSize()
         {
             if (!IsHandleCreated || _layout == null)
             {
                 return;
             }
+
+            Size subagent = _subagentContent.PreferredSize;
+            Size review = _reviewContent.PreferredSize;
+            Rectangle display = _tabControl.DisplayRectangle;
+            var tabSize = new Size(
+                Math.Max(subagent.Width, review.Width) + _tabControl.Width - display.Width,
+                Math.Max(subagent.Height, review.Height) + _tabControl.Height - display.Height);
+            if (_tabControl.Size != tabSize)
+            {
+                _tabControl.Size = tabSize;
+            }
+
+            SetSharedWidth(tabSize.Width);
 
             Size preferred = _layout.PreferredSize;
             if (ClientSize != preferred)
@@ -573,6 +765,18 @@ namespace CodexBridgeConsole
             };
         }
 
+        private static Label CreateValueLabel(string text)
+        {
+            return new Label
+            {
+                Text = text,
+                AutoSize = true,
+                Anchor = AnchorStyles.Left,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Margin = new Padding(8, 6, 8, 6)
+            };
+        }
+
         private static Font CreateBaseFont(FontStyle style)
         {
             if (_baseFontFamily == null)
@@ -623,33 +827,32 @@ namespace CodexBridgeConsole
                     _hardEffortComboBox,
                     _choices.ClaudeEffortsFor(_settings.ImplHard.ClaudeModel),
                     _settings.ImplHard.ClaudeEffort);
-                SetGptModelItems(_hardGptModelComboBox, _choices.GptModels, _settings.ImplHard.CodexModel);
-                SetComboItems(
-                    _hardGptEffortComboBox,
-                    _choices.GptEfforts,
-                    _settings.ImplHard.CodexReasoningEffort);
+                LoadGptRow(_hardGptRow, _settings.ImplHard.CodexModel, _settings.ImplHard.CodexReasoningEffort);
                 SetComboItems(_standardModelComboBox, _choices.ClaudeModels, _settings.ImplStandard.ClaudeModel);
                 SetComboItems(
                     _standardEffortComboBox,
                     _choices.ClaudeEffortsFor(_settings.ImplStandard.ClaudeModel),
                     _settings.ImplStandard.ClaudeEffort);
-                SetGptModelItems(_standardGptModelComboBox, _choices.GptModels, _settings.ImplStandard.CodexModel);
-                SetComboItems(
-                    _standardGptEffortComboBox,
-                    _choices.GptEfforts,
+                LoadGptRow(
+                    _standardGptRow,
+                    _settings.ImplStandard.CodexModel,
                     _settings.ImplStandard.CodexReasoningEffort);
                 SetComboItems(_lightModelComboBox, _choices.ClaudeModels, _settings.ImplLight.ClaudeModel);
                 SetComboItems(
                     _lightEffortComboBox,
                     _choices.ClaudeEffortsFor(_settings.ImplLight.ClaudeModel),
                     _settings.ImplLight.ClaudeEffort);
-                SetGptModelItems(_lightGptModelComboBox, _choices.GptModels, _settings.ImplLight.CodexModel);
-                SetComboItems(
-                    _lightGptEffortComboBox,
-                    _choices.GptEfforts,
-                    _settings.ImplLight.CodexReasoningEffort);
+                LoadGptRow(_lightGptRow, _settings.ImplLight.CodexModel, _settings.ImplLight.CodexReasoningEffort);
                 _codexEnabledCheckBox.Checked = _settings.CodexEnabled;
                 LoadCodexHomeItems();
+
+                for (int i = 0; i < _codexAgentRows.Length; i++)
+                {
+                    CodexAgentRow row = _codexAgentRows[i];
+                    CodexAgentSettings agent = row.Settings;
+                    row.SetHomeKey(_settings.ExpandCodexHome(agent.CodexHome) ?? string.Empty);
+                    LoadGptRow(row.Gpt, agent.CodexModel, agent.CodexReasoningEffort);
+                }
             }
             finally
             {
@@ -658,17 +861,20 @@ namespace CodexBridgeConsole
 
             // 選択肢を組み立て直したので、取得済みの目録を当て直す。
             // 当てないと、再読込のたびに GPT 側が既定の選択肢へ戻る。
-            if (_codexModelCatalog != null)
-            {
-                ApplyGptChoices();
-            }
+            ApplyGptChoices(AllGptRows());
 
             UpdateStatusDisplay();
-            UpdateGptControlState();
             UpdateControlState();
 
             // 読み直しで認証ホームが変わっていることがある。表示中の取得結果を持ち越さない。
             RefreshCodexHomeInfo();
+            RefreshReviewCodexHomeInfo();
+        }
+
+        private void LoadGptRow(GptRow row, string model, string effort)
+        {
+            SetGptModelItems(row, model);
+            SetComboItems(row.EffortComboBox, _choices.GptEfforts, effort);
         }
 
         private void LoadCodexHomeItems()
@@ -734,13 +940,17 @@ namespace CodexBridgeConsole
             comboBox.Text = currentValue ?? string.Empty;
         }
 
-        // GPT モデルの選択肢は先頭を「(未設定)」で固定する。目録に切り替わっても、
+        // サブエージェントタブの GPT モデルは先頭を「(未設定)」で固定する。目録に切り替わっても、
         // choices.json の既定値を使っても、GPT 側を使わない設定を選べる状態を保つためである。
-        private static void SetGptModelItems(
-            ComboBox comboBox,
-            IReadOnlyList<string> models,
-            string currentValue)
+        private void SetGptModelItems(GptRow row, string currentValue)
         {
+            IReadOnlyList<string> models = GptModelsFor(row);
+            if (!row.AllowsUnset)
+            {
+                SetComboItems(row.ModelComboBox, models, currentValue);
+                return;
+            }
+
             var items = new List<string> { UnsetGptModelText };
             for (int i = 0; i < models.Count; i++)
             {
@@ -751,7 +961,12 @@ namespace CodexBridgeConsole
             }
 
             // 一覧に無い現在値は「(未設定)」の次に置き、先頭の固定枠を押し出さない。
-            SetComboItems(comboBox, items, ToGptModelText(currentValue), 1);
+            SetComboItems(row.ModelComboBox, items, ToGptModelText(currentValue), 1);
+        }
+
+        private IReadOnlyList<string> GptModelsFor(GptRow row)
+        {
+            return row.Catalog != null ? row.Catalog.Models : _choices.GptModels;
         }
 
         // 定義ファイルの値から選択欄の表示名へ直す。空値と未設定は「(未設定)」である。
@@ -769,13 +984,27 @@ namespace CodexBridgeConsole
                 : text;
         }
 
-        // GPT モデルが選ばれている行かどうか。未設定の行は GPT 側を呼ばない。
-        private static bool IsGptModelSet(ComboBox modelComboBox)
+        private static string GptModelValue(GptRow row)
         {
-            return ToGptModelValue(modelComboBox.Text).Length > 0;
+            return row.AllowsUnset
+                ? ToGptModelValue(row.ModelComboBox.Text)
+                : row.ModelComboBox.Text;
+        }
+
+        // GPT モデルが選ばれている行かどうか。未設定の行は GPT 側を呼ばない。
+        private static bool IsGptModelSet(GptRow row)
+        {
+            return GptModelValue(row).Length > 0;
         }
 
         private void UpdateStatusDisplay()
+        {
+            UpdateSubagentStatusDisplay();
+            UpdateReviewStatusDisplay();
+            AdjustWindowSize();
+        }
+
+        private void UpdateSubagentStatusDisplay()
         {
             // 認証ホームは選択欄が値と注記を示すため、ここでは sandbox だけを出す。
             _codexSandboxLabel.Text = "codex_sandbox: " + (_settings.CodexSandbox ?? "(未設定)");
@@ -784,23 +1013,10 @@ namespace CodexBridgeConsole
             // 目録の取得も起動時の 1 回だけなので、再読込では取得済みの結果を出し直す。
             _codexCatalogLabel.Text = "GPT モデル一覧: " + _codexCatalogText;
 
-            if (_settings.MissingFiles.Count > 0)
+            string unavailableText = FormatUnavailableFiles(_settings.MissingFiles, _settings.UnreadableFiles);
+            if (unavailableText.Length > 0)
             {
-                // ラベルは 2 行固定で末尾が省略記号になる。ファイル一覧は長くなりやすく、
-                // 後ろに置くと配置手順の案内ごと切れてしまうため、案内を一覧より前に置く。
-                var text = new StringBuilder("保存できない。定義の配置は docs/setup.md の手順に従う。");
-                text.Append("見つからない: ").Append(string.Join(", ", _settings.MissingFiles)).Append('。');
-                if (_settings.UnreadableFiles.Count > 0)
-                {
-                    text.Append("読めない: ").Append(string.Join(" / ", _settings.UnreadableFiles));
-                }
-
-                _missingFilesLabel.Text = text.ToString();
-            }
-            else if (_settings.UnreadableFiles.Count > 0)
-            {
-                // 読めないだけの場合、置き場所は分かっていて中身が壊れているだけなので配置手順は無関係である。
-                _missingFilesLabel.Text = "保存できない。読めない: " + string.Join(" / ", _settings.UnreadableFiles);
+                _missingFilesLabel.Text = unavailableText;
             }
             else if (_settings.CodexEnabledInvalidFiles.Count > 0)
             {
@@ -828,7 +1044,94 @@ namespace CodexBridgeConsole
 
             // 警告が無いときは行ごと隠す。空の行が余白として残ると読みにくい。
             _missingFilesLabel.Visible = _missingFilesLabel.Text.Length > 0;
+        }
+
+        private void UpdateReviewStatusDisplay()
+        {
+            for (int i = 0; i < _codexAgentRows.Length; i++)
+            {
+                CodexAgentRow row = _codexAgentRows[i];
+                row.HomeLabel.Text = FormatDefinitionValue(row.Settings.CodexHome);
+                row.SandboxLabel.Text = FormatDefinitionValue(row.Settings.CodexSandbox);
+            }
+
+            UpdateReviewCodexStatusLabels();
+
+            _reviewMissingFilesLabel.Text = FormatUnavailableFiles(
+                _settings.ReviewMissingFiles,
+                _settings.ReviewUnreadableFiles);
+            _reviewMissingFilesLabel.Visible = _reviewMissingFilesLabel.Text.Length > 0;
+        }
+
+        // 2 定義の認証ホームが同じなら 1 つにまとめる。取得も 1 回だけであり、同じ結果を 2 度並べない。
+        // 目録の取得元が同じホームも 1 つにまとめる。状態行は 1 行固定で、長いと末尾が省略されるためである。
+        private void UpdateReviewCodexStatusLabels()
+        {
+            var homes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var versions = new List<string>();
+            var catalogTexts = new List<string>();
+            var homesByCatalogText = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            for (int i = 0; i < _codexAgentRows.Length; i++)
+            {
+                CodexAgentRow row = _codexAgentRows[i];
+                if (!homes.Add(row.HomeKey))
+                {
+                    continue;
+                }
+
+                string home = FormatDefinitionValue(row.Settings.CodexHome);
+                versions.Add(home + " " + row.VersionText);
+
+                List<string> homesWithSameCatalog;
+                if (!homesByCatalogText.TryGetValue(row.CatalogText, out homesWithSameCatalog))
+                {
+                    homesWithSameCatalog = new List<string>();
+                    homesByCatalogText.Add(row.CatalogText, homesWithSameCatalog);
+                    catalogTexts.Add(row.CatalogText);
+                }
+
+                homesWithSameCatalog.Add(home);
+            }
+
+            var catalogs = new List<string>();
+            for (int i = 0; i < catalogTexts.Count; i++)
+            {
+                catalogs.Add(string.Join("、", homesByCatalogText[catalogTexts[i]]) + " は " + catalogTexts[i]);
+            }
+
+            _reviewVersionLabel.Text = "codex --version: " + string.Join(" / ", versions);
+            _reviewCatalogLabel.Text = "GPT モデル一覧: " + string.Join(" / ", catalogs);
+
+            // 折り返しで行数が変わると、タブの中身の高さが変わる。
             AdjustWindowSize();
+        }
+
+        // 対象ファイルが欠けたタブに出す警告。欠けていなければ空を返す。
+        private static string FormatUnavailableFiles(
+            IReadOnlyList<string> missingFiles,
+            IReadOnlyList<string> unreadableFiles)
+        {
+            if (missingFiles.Count > 0)
+            {
+                // ラベルは 2 行固定で末尾が省略記号になる。ファイル一覧は長くなりやすく、
+                // 後ろに置くと配置手順の案内ごと切れてしまうため、案内を一覧より前に置く。
+                var text = new StringBuilder("このタブは保存できない。定義の配置は docs/setup.md の手順に従う。");
+                text.Append("見つからない: ").Append(string.Join(", ", missingFiles)).Append('。');
+                if (unreadableFiles.Count > 0)
+                {
+                    text.Append("読めない: ").Append(string.Join(" / ", unreadableFiles));
+                }
+
+                return text.ToString();
+            }
+
+            if (unreadableFiles.Count > 0)
+            {
+                // 読めないだけの場合、置き場所は分かっていて中身が壊れているだけなので配置手順は無関係である。
+                return "このタブは保存できない。読めない: " + string.Join(" / ", unreadableFiles);
+            }
+
+            return string.Empty;
         }
 
         // 未保存の変更が無いときの状態行。修復待ちがあるときは、ボタンが押せる理由を示す。
@@ -855,46 +1158,87 @@ namespace CodexBridgeConsole
         {
             _saveStatusLabel.Text = text;
             _saveStatusLabel.ForeColor = isError
-                ? _missingFilesLabel.ForeColor
+                ? WarningForeColor
                 : _saveStatusDefaultForeColor;
         }
 
         private void UpdateControlState()
         {
             _saveButton.Enabled = _settings.CanSave && _settings.NeedsSave;
-            UpdateGptControlState();
+            UpdateSubagentControlState();
+            UpdateReviewControlState();
         }
 
-        private void UpdateGptControlState()
+        // 対象ファイルが欠けたタブは入力を止める。そのタブは保存の対象から外れ、入力しても書き込まれない。
+        private void UpdateSubagentControlState()
         {
-            bool enabled = _codexEnabledCheckBox.Checked;
-            _hardGptModelComboBox.Enabled = enabled;
-            _standardGptModelComboBox.Enabled = enabled;
-            _lightGptModelComboBox.Enabled = enabled;
+            bool available = _settings.SubagentTabAvailable;
+            _codexEnabledCheckBox.Enabled = available;
+            _codexHomeComboBox.Enabled = available;
+            _hardModelComboBox.Enabled = available;
+            _hardEffortComboBox.Enabled = available;
+            _standardModelComboBox.Enabled = available;
+            _standardEffortComboBox.Enabled = available;
+            _lightModelComboBox.Enabled = available;
+            _lightEffortComboBox.Enabled = available;
 
-            // モデルが未設定の行は GPT 側を呼ばないため effort を使わない。値は保持したまま操作だけを止める。
-            // codex_enabled のチェックを外したときと同じ扱いである。
-            _hardGptEffortComboBox.Enabled = enabled && IsGptModelSet(_hardGptModelComboBox);
-            _standardGptEffortComboBox.Enabled = enabled && IsGptModelSet(_standardGptModelComboBox);
-            _lightGptEffortComboBox.Enabled = enabled && IsGptModelSet(_lightGptModelComboBox);
+            bool gptEnabled = available && _codexEnabledCheckBox.Checked;
+            for (int i = 0; i < _subagentGptRows.Length; i++)
+            {
+                GptRow row = _subagentGptRows[i];
+                row.ModelComboBox.Enabled = gptEnabled;
+
+                // モデルが未設定の行は GPT 側を呼ばないため effort を使わない。値は保持したまま操作だけを止める。
+                // codex_enabled のチェックを外したときと同じ扱いである。
+                row.EffortComboBox.Enabled = gptEnabled && IsGptModelSet(row);
+            }
         }
 
+        private void UpdateReviewControlState()
+        {
+            bool available = _settings.ReviewTabAvailable;
+            for (int i = 0; i < _codexAgentRows.Length; i++)
+            {
+                CodexAgentRow row = _codexAgentRows[i];
+                row.Gpt.ModelComboBox.Enabled = available;
+                row.Gpt.EffortComboBox.Enabled = available;
+                row.HomeLabel.Enabled = available;
+                row.SandboxLabel.Enabled = available;
+            }
+        }
+
+        // 対象ファイルが欠けたタブの欄は書き戻さない。欠けた定義の値は null で読まれるため、欄の空文字を
+        // 書き戻すと未保存の変更に数えられ、もう片方のタブの保存まで検証で止まる。
         private void SyncSettingsFromControls()
         {
-            _settings.ImplHard.ClaudeModel = _hardModelComboBox.Text;
-            _settings.ImplHard.ClaudeEffort = _hardEffortComboBox.Text;
-            _settings.ImplHard.CodexModel = ToGptModelValue(_hardGptModelComboBox.Text);
-            _settings.ImplHard.CodexReasoningEffort = _hardGptEffortComboBox.Text;
-            _settings.ImplStandard.ClaudeModel = _standardModelComboBox.Text;
-            _settings.ImplStandard.ClaudeEffort = _standardEffortComboBox.Text;
-            _settings.ImplStandard.CodexModel = ToGptModelValue(_standardGptModelComboBox.Text);
-            _settings.ImplStandard.CodexReasoningEffort = _standardGptEffortComboBox.Text;
-            _settings.ImplLight.ClaudeModel = _lightModelComboBox.Text;
-            _settings.ImplLight.ClaudeEffort = _lightEffortComboBox.Text;
-            _settings.ImplLight.CodexModel = ToGptModelValue(_lightGptModelComboBox.Text);
-            _settings.ImplLight.CodexReasoningEffort = _lightGptEffortComboBox.Text;
-            _settings.CodexEnabled = _codexEnabledCheckBox.Checked;
-            _settings.CodexHome = SelectedCodexHome();
+            if (_settings.SubagentTabAvailable)
+            {
+                _settings.ImplHard.ClaudeModel = _hardModelComboBox.Text;
+                _settings.ImplHard.ClaudeEffort = _hardEffortComboBox.Text;
+                _settings.ImplHard.CodexModel = GptModelValue(_hardGptRow);
+                _settings.ImplHard.CodexReasoningEffort = _hardGptRow.EffortComboBox.Text;
+                _settings.ImplStandard.ClaudeModel = _standardModelComboBox.Text;
+                _settings.ImplStandard.ClaudeEffort = _standardEffortComboBox.Text;
+                _settings.ImplStandard.CodexModel = GptModelValue(_standardGptRow);
+                _settings.ImplStandard.CodexReasoningEffort = _standardGptRow.EffortComboBox.Text;
+                _settings.ImplLight.ClaudeModel = _lightModelComboBox.Text;
+                _settings.ImplLight.ClaudeEffort = _lightEffortComboBox.Text;
+                _settings.ImplLight.CodexModel = GptModelValue(_lightGptRow);
+                _settings.ImplLight.CodexReasoningEffort = _lightGptRow.EffortComboBox.Text;
+                _settings.CodexEnabled = _codexEnabledCheckBox.Checked;
+                _settings.CodexHome = SelectedCodexHome();
+            }
+
+            if (_settings.ReviewTabAvailable)
+            {
+                for (int i = 0; i < _codexAgentRows.Length; i++)
+                {
+                    CodexAgentRow row = _codexAgentRows[i];
+                    CodexAgentSettings agent = row.Settings;
+                    agent.CodexModel = GptModelValue(row.Gpt);
+                    agent.CodexReasoningEffort = row.Gpt.EffortComboBox.Text;
+                }
+            }
         }
 
         private void CodexHomeComboBox_SelectedIndexChanged(object sender, EventArgs e)
@@ -933,6 +1277,13 @@ namespace CodexBridgeConsole
             SyncSettingsFromControls();
             UpdateControlState();
             SetSaveStatus(_settings.HasChanges ? "未保存の変更があります。" : IdleStatusText(), false);
+        }
+
+        // 表示していなかったタブの中身は、部品のハンドルが作られる前の大きさで測っている。
+        // 初めて表示したときに測り直し、食い違っていたときだけ大きさを直す。
+        private void TabControl_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            AdjustWindowSize();
         }
 
         private void ReloadButton_Click(object sender, EventArgs e)
@@ -1139,6 +1490,7 @@ namespace CodexBridgeConsole
 
             _codexVersionStarted = true;
             RefreshCodexHomeInfo();
+            RefreshReviewCodexHomeInfo();
         }
 
         // 選択中の認証ホームで codex --version と codex debug models を引き直す。
@@ -1157,38 +1509,82 @@ namespace CodexBridgeConsole
             LoadCodexModelCatalogAsync(codexHome);
         }
 
+        // レビューと実装補助タブの 2 定義それぞれの認証ホームで引く。控えはサブエージェントタブと共有する。
+        private void RefreshReviewCodexHomeInfo()
+        {
+            if (!_codexVersionStarted)
+            {
+                return;
+            }
+
+            for (int i = 0; i < _codexAgentRows.Length; i++)
+            {
+                CodexAgentRow row = _codexAgentRows[i];
+                LoadReviewCodexVersionAsync(row, row.HomeKey);
+                LoadReviewCodexModelCatalogAsync(row, row.HomeKey);
+            }
+        }
+
+        private Task<string> CodexVersionFor(string codexHome)
+        {
+            Task<string> task;
+            if (!_codexVersionByHome.TryGetValue(codexHome, out task))
+            {
+                // CODEX_HOME は必ず明示する。既定の ~/.codex への暗黙依存を作らないためである。
+                task = Task.Run(() => GetCodexVersion(codexHome));
+                _codexVersionByHome[codexHome] = task;
+            }
+
+            return task;
+        }
+
+        // 取得できないときの結果も控えに入れる。入れないと、取れないホームへ切り替えるたびに codex を起動し直す。
+        private Task<CatalogResult> CodexCatalogFor(string codexHome)
+        {
+            Task<CatalogResult> task;
+            if (!_codexCatalogByHome.TryGetValue(codexHome, out task))
+            {
+                if (codexHome.Length == 0)
+                {
+                    // codexHome が空だと CodexModelCatalog.Load は必ず null を返すため、起動もしない。
+                    task = Task.FromResult(new CatalogResult(
+                        null,
+                        "認証ホーム未設定のため取得しない。既定値を使用",
+                        "既定値 (認証ホーム未設定)"));
+                }
+                else
+                {
+                    // CODEX_HOME は必ず明示する。既定の ~/.codex への暗黙依存を作らないためである。
+                    task = Task.Run(() =>
+                    {
+                        CodexModelCatalog catalog = CodexModelCatalog.Load(codexHome);
+                        return catalog == null
+                            ? new CatalogResult(null, "取得できないため既定値を使用", "既定値 (取得できない)")
+                            : new CatalogResult(catalog, "codex debug models から取得", "codex debug models から取得");
+                    });
+                }
+
+                _codexCatalogByHome[codexHome] = task;
+            }
+
+            return task;
+        }
+
         // codex debug models の取得は画面の表示を待たせない。
         // 取得できないときは _choices の既定値へ戻す。
         private async void LoadCodexModelCatalogAsync(string codexHome)
         {
-            CatalogResult cached;
-            if (_codexCatalogByHome.TryGetValue(codexHome, out cached))
+            Task<CatalogResult> task = CodexCatalogFor(codexHome);
+            if (!task.IsCompleted)
             {
-                ApplyCatalogResult(cached);
-                return;
+                SetCodexCatalogText(FetchingCatalogText);
             }
 
-            SetCodexCatalogText("取得中...");
-            if (codexHome.Length == 0)
-            {
-                // codexHome が空だと CodexModelCatalog.Load は必ず null を返すため、起動もしない。
-                var unset = new CatalogResult(null, "認証ホーム未設定のため取得しない。既定値を使用");
-                _codexCatalogByHome[codexHome] = unset;
-                ApplyCatalogResult(unset);
-                return;
-            }
-
-            // CODEX_HOME は必ず明示する。既定の ~/.codex への暗黙依存を作らないためである。
-            CodexModelCatalog catalog = await Task.Run(() => CodexModelCatalog.Load(codexHome));
+            CatalogResult result = await task;
             if (IsDisposed || Disposing)
             {
                 return;
             }
-
-            var result = new CatalogResult(
-                catalog,
-                catalog == null ? "取得できないため既定値を使用" : "codex debug models から取得");
-            _codexCatalogByHome[codexHome] = result;
 
             // 取得の間に別のホームへ切り替わっていたら、そちらの表示を上書きしない。
             if (string.Equals(_currentCodexHomeKey, codexHome, StringComparison.OrdinalIgnoreCase))
@@ -1200,8 +1596,12 @@ namespace CodexBridgeConsole
         private void ApplyCatalogResult(CatalogResult result)
         {
             SetCodexCatalogText(result.Text);
-            _codexModelCatalog = result.Catalog;
-            ApplyGptChoices();
+            for (int i = 0; i < _subagentGptRows.Length; i++)
+            {
+                _subagentGptRows[i].Catalog = result.Catalog;
+            }
+
+            ApplyGptChoices(_subagentGptRows);
         }
 
         // 取得結果は保持し、再読込では UpdateStatusDisplay が同じ文言を出し直す。
@@ -1211,24 +1611,81 @@ namespace CodexBridgeConsole
             _codexCatalogLabel.Text = "GPT モデル一覧: " + text;
         }
 
-        // GPT 側の選択肢を目録から組み直す。目録が無いときは _choices の既定値を使う。
-        // 入力中の値は選択肢に無くても残す。開いただけで定義が書き換わるのを避けるためである。
-        private void ApplyGptChoices()
+        private async void LoadReviewCodexVersionAsync(CodexAgentRow row, string codexHome)
         {
-            IReadOnlyList<string> models = _codexModelCatalog != null
-                ? _codexModelCatalog.Models
-                : _choices.GptModels;
+            Task<string> task = CodexVersionFor(codexHome);
+            if (!task.IsCompleted)
+            {
+                row.VersionText = CheckingVersionText;
+                UpdateReviewCodexStatusLabels();
+            }
 
+            string version = await task;
+            if (IsDisposed || Disposing)
+            {
+                return;
+            }
+
+            // 取得の間に再読込でその行の認証ホームが変わっていたら、新しいホームの表示を上書きしない。
+            if (string.Equals(row.HomeKey, codexHome, StringComparison.OrdinalIgnoreCase))
+            {
+                row.VersionText = version;
+                UpdateReviewCodexStatusLabels();
+            }
+        }
+
+        private async void LoadReviewCodexModelCatalogAsync(CodexAgentRow row, string codexHome)
+        {
+            Task<CatalogResult> task = CodexCatalogFor(codexHome);
+            if (!task.IsCompleted)
+            {
+                row.CatalogText = FetchingCatalogText;
+                UpdateReviewCodexStatusLabels();
+            }
+
+            CatalogResult result = await task;
+            if (IsDisposed || Disposing)
+            {
+                return;
+            }
+
+            if (!string.Equals(row.HomeKey, codexHome, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            row.CatalogText = result.Summary;
+            row.Gpt.Catalog = result.Catalog;
+            UpdateReviewCodexStatusLabels();
+            ApplyGptChoices(new[] { row.Gpt });
+        }
+
+        private IEnumerable<GptRow> AllGptRows()
+        {
+            for (int i = 0; i < _subagentGptRows.Length; i++)
+            {
+                yield return _subagentGptRows[i];
+            }
+
+            for (int i = 0; i < _reviewGptRows.Length; i++)
+            {
+                yield return _reviewGptRows[i];
+            }
+        }
+
+        // GPT 側の選択肢を行の目録から組み直す。目録が無いときは _choices の既定値を使う。
+        // 入力中の値は選択肢に無くても残す。開いただけで定義が書き換わるのを避けるためである。
+        private void ApplyGptChoices(IEnumerable<GptRow> rows)
+        {
             bool loading = _loadingControls;
             _loadingControls = true;
             try
             {
-                SetGptModelItems(_hardGptModelComboBox, models, ToGptModelValue(_hardGptModelComboBox.Text));
-                SetGptModelItems(_standardGptModelComboBox, models, ToGptModelValue(_standardGptModelComboBox.Text));
-                SetGptModelItems(_lightGptModelComboBox, models, ToGptModelValue(_lightGptModelComboBox.Text));
-                ApplyGptEffortChoices(_hardGptModelComboBox, _hardGptEffortComboBox);
-                ApplyGptEffortChoices(_standardGptModelComboBox, _standardGptEffortComboBox);
-                ApplyGptEffortChoices(_lightGptModelComboBox, _lightGptEffortComboBox);
+                foreach (GptRow row in rows)
+                {
+                    SetGptModelItems(row, GptModelValue(row));
+                    ApplyGptEffortChoices(row);
+                }
             }
             finally
             {
@@ -1240,17 +1697,17 @@ namespace CodexBridgeConsole
         }
 
         // effort の選べる値はモデルごとに違う。目録が知らないモデルには既定の一覧を残す。
-        private void ApplyGptEffortChoices(ComboBox modelComboBox, ComboBox effortComboBox)
+        private void ApplyGptEffortChoices(GptRow row)
         {
-            IReadOnlyList<string> efforts = _codexModelCatalog != null
-                ? _codexModelCatalog.EffortsFor(modelComboBox.Text)
+            IReadOnlyList<string> efforts = row.Catalog != null
+                ? row.Catalog.EffortsFor(row.ModelComboBox.Text)
                 : _choices.GptEfforts;
             if (efforts.Count == 0)
             {
                 efforts = _choices.GptEfforts;
             }
 
-            SetComboItems(effortComboBox, efforts, effortComboBox.Text);
+            SetComboItems(row.EffortComboBox, efforts, row.EffortComboBox.Text);
         }
 
         private void ClaudeModelTextChanged(object sender, EventArgs e)
@@ -1327,26 +1784,30 @@ namespace CodexBridgeConsole
         {
             // 読み込みの途中でモデル欄に値が入ると、まだ読み直していない effort を見て
             // 既定値へ寄せてしまう。Claude 側の同じハンドラと扱いを揃える。
-            if (_loadingControls || _codexModelCatalog == null)
+            if (_loadingControls)
             {
                 return;
             }
 
-            var modelComboBox = (ComboBox)sender;
-            ComboBox effortComboBox = GptEffortComboBoxFor(modelComboBox);
+            GptRow row = GptRowFor((ComboBox)sender);
+            CodexModelCatalog catalog = row.Catalog;
+            if (catalog == null)
+            {
+                return;
+            }
 
             // 利用者がモデルを変えたときは、そのモデルが受け付けない effort を残さない。
             // 残すと、選べるように見えて Codex 側で弾かれる組み合わせを保存できてしまう。
             // 読み込み直後は値を変えない。開いただけで定義が書き換わるのを避けるためである。
             // 未設定へ変えたときは effort を触らない。GPT 側を呼ばない行の値をここで書き換える理由が無い。
-            if (IsGptModelSet(modelComboBox))
+            if (IsGptModelSet(row))
             {
-                IReadOnlyList<string> efforts = _codexModelCatalog.EffortsFor(modelComboBox.Text);
-                string effort = effortComboBox.Text;
+                IReadOnlyList<string> efforts = catalog.EffortsFor(row.ModelComboBox.Text);
+                string effort = row.EffortComboBox.Text;
                 if (efforts.Count > 0 && !Contains(efforts, effort))
                 {
-                    string defaultEffort = _codexModelCatalog.DefaultEffortFor(modelComboBox.Text);
-                    effortComboBox.Text = string.IsNullOrEmpty(defaultEffort) ? efforts[0] : defaultEffort;
+                    string defaultEffort = catalog.DefaultEffortFor(row.ModelComboBox.Text);
+                    row.EffortComboBox.Text = string.IsNullOrEmpty(defaultEffort) ? efforts[0] : defaultEffort;
                 }
             }
 
@@ -1354,7 +1815,7 @@ namespace CodexBridgeConsole
             _loadingControls = true;
             try
             {
-                ApplyGptEffortChoices(modelComboBox, effortComboBox);
+                ApplyGptEffortChoices(row);
             }
             finally
             {
@@ -1365,16 +1826,17 @@ namespace CodexBridgeConsole
             AdjustWindowSize();
         }
 
-        private ComboBox GptEffortComboBoxFor(ComboBox modelComboBox)
+        private GptRow GptRowFor(ComboBox modelComboBox)
         {
-            if (modelComboBox == _hardGptModelComboBox)
+            foreach (GptRow row in AllGptRows())
             {
-                return _hardGptEffortComboBox;
+                if (row.ModelComboBox == modelComboBox)
+                {
+                    return row;
+                }
             }
 
-            return modelComboBox == _standardGptModelComboBox
-                ? _standardGptEffortComboBox
-                : _lightGptEffortComboBox;
+            throw new ArgumentException("GPT モデルの欄ではない", nameof(modelComboBox));
         }
 
         private static bool Contains(IReadOnlyList<string> values, string value)
@@ -1390,35 +1852,35 @@ namespace CodexBridgeConsole
             return false;
         }
 
-        // 選択肢を差し替えると必要な幅が変わる。列は中身の希望する大きさで決まるため、幅を計算し直す。
         private void ResizeGptComboBoxes()
         {
-            IReadOnlyList<string> models = _codexModelCatalog != null
-                ? _codexModelCatalog.Models
-                : _choices.GptModels;
-            int modelWidth = ComboBoxWidth(
-                models,
-                UnsetGptModelText,
-                _hardGptModelComboBox.Text,
-                _standardGptModelComboBox.Text,
-                _lightGptModelComboBox.Text);
+            ResizeGptComboBoxes(_subagentGptRows);
+            ResizeGptComboBoxes(_reviewGptRows);
+        }
 
+        // 選択肢を差し替えると必要な幅が変わる。列は中身の希望する大きさで決まるため、幅を計算し直す。
+        // 同じ表の行は列の幅を揃える。
+        private void ResizeGptComboBoxes(IReadOnlyList<GptRow> rows)
+        {
+            var models = new List<string>();
             var efforts = new List<string>();
-            CollectItems(efforts, _hardGptEffortComboBox);
-            CollectItems(efforts, _standardGptEffortComboBox);
-            CollectItems(efforts, _lightGptEffortComboBox);
-            int effortWidth = ComboBoxWidth(
-                efforts,
-                _hardGptEffortComboBox.Text,
-                _standardGptEffortComboBox.Text,
-                _lightGptEffortComboBox.Text);
+            var modelTexts = new string[rows.Count];
+            var effortTexts = new string[rows.Count];
+            for (int i = 0; i < rows.Count; i++)
+            {
+                CollectItems(models, rows[i].ModelComboBox);
+                CollectItems(efforts, rows[i].EffortComboBox);
+                modelTexts[i] = rows[i].ModelComboBox.Text;
+                effortTexts[i] = rows[i].EffortComboBox.Text;
+            }
 
-            SetComboBoxWidth(_hardGptModelComboBox, modelWidth);
-            SetComboBoxWidth(_standardGptModelComboBox, modelWidth);
-            SetComboBoxWidth(_lightGptModelComboBox, modelWidth);
-            SetComboBoxWidth(_hardGptEffortComboBox, effortWidth);
-            SetComboBoxWidth(_standardGptEffortComboBox, effortWidth);
-            SetComboBoxWidth(_lightGptEffortComboBox, effortWidth);
+            int modelWidth = ComboBoxWidth(models, modelTexts);
+            int effortWidth = ComboBoxWidth(efforts, effortTexts);
+            for (int i = 0; i < rows.Count; i++)
+            {
+                SetComboBoxWidth(rows[i].ModelComboBox, modelWidth);
+                SetComboBoxWidth(rows[i].EffortComboBox, effortWidth);
+            }
         }
 
         private static void CollectItems(List<string> values, ComboBox comboBox)
@@ -1439,23 +1901,17 @@ namespace CodexBridgeConsole
 
         private async void LoadCodexVersionAsync(string codexHome)
         {
-            string cached;
-            if (_codexVersionByHome.TryGetValue(codexHome, out cached))
+            Task<string> task = CodexVersionFor(codexHome);
+            if (!task.IsCompleted)
             {
-                SetCodexVersionText(cached);
-                return;
+                SetCodexVersionText(CheckingVersionText);
             }
 
-            SetCodexVersionText("確認中...");
-
-            // CODEX_HOME は必ず明示する。既定の ~/.codex への暗黙依存を作らないためである。
-            string version = await Task.Run(() => GetCodexVersion(codexHome));
+            string version = await task;
             if (IsDisposed || Disposing)
             {
                 return;
             }
-
-            _codexVersionByHome[codexHome] = version;
 
             // 取得の間に別のホームへ切り替わっていたら、そちらの表示を上書きしない。
             if (string.Equals(_currentCodexHomeKey, codexHome, StringComparison.OrdinalIgnoreCase))
@@ -1606,19 +2062,98 @@ namespace CodexBridgeConsole
             }
         }
 
+        // GPT モデルと effort の欄の組。目録は行の認証ホームで引くため、行ごとに持つ。
+        private sealed class GptRow
+        {
+            public GptRow(ComboBox modelComboBox, ComboBox effortComboBox, bool allowsUnset)
+            {
+                ModelComboBox = modelComboBox;
+                EffortComboBox = effortComboBox;
+                AllowsUnset = allowsUnset;
+            }
+
+            public ComboBox ModelComboBox { get; private set; }
+
+            public ComboBox EffortComboBox { get; private set; }
+
+            // 「(未設定)」を選択肢に持つかどうか。Claude 側へフォールバックできる定義の行だけが持つ。
+            public bool AllowsUnset { get; private set; }
+
+            // 取れていない間は null で、_choices の既定値を使う。
+            public CodexModelCatalog Catalog { get; set; }
+        }
+
+        // レビューと実装補助タブの 1 行。codex_home は定義ごとに違うため、取得結果も行ごとに持つ。
+        private sealed class CodexAgentRow
+        {
+            private readonly Func<CodexAgentSettings> _settings;
+
+            public CodexAgentRow(
+                Func<CodexAgentSettings> settings,
+                GptRow gpt,
+                Label homeLabel,
+                Label sandboxLabel)
+            {
+                _settings = settings;
+                Gpt = gpt;
+                HomeLabel = homeLabel;
+                SandboxLabel = sandboxLabel;
+                HomeKey = string.Empty;
+                VersionText = CheckingVersionText;
+                CatalogText = FetchingCatalogText;
+            }
+
+            // 再読込で設定クラス側の入れ物が差し替わるため、参照を持たずに毎回引く。
+            public CodexAgentSettings Settings
+            {
+                get { return _settings(); }
+            }
+
+            public GptRow Gpt { get; private set; }
+
+            public Label HomeLabel { get; private set; }
+
+            public Label SandboxLabel { get; private set; }
+
+            // 展開した codex_home。取得結果を反映してよいのは、取得を始めたときの値から変わっていないときだけである。
+            public string HomeKey { get; private set; }
+
+            public string VersionText { get; set; }
+
+            public string CatalogText { get; set; }
+
+            // 認証ホームが変わったら、前のホームの目録と取得結果を持ち越さない。
+            public void SetHomeKey(string homeKey)
+            {
+                if (string.Equals(HomeKey, homeKey, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                HomeKey = homeKey;
+                Gpt.Catalog = null;
+                VersionText = CheckingVersionText;
+                CatalogText = FetchingCatalogText;
+            }
+        }
+
         // 認証ホーム 1 つ分の目録の取得結果。取れなかったことも結果として持つ。
         // 持たないと、取れないホームへ切り替えるたびに codex を起動し直すことになる。
         private sealed class CatalogResult
         {
-            public CatalogResult(CodexModelCatalog catalog, string text)
+            public CatalogResult(CodexModelCatalog catalog, string text, string summary)
             {
                 Catalog = catalog;
                 Text = text;
+                Summary = summary;
             }
 
             public CodexModelCatalog Catalog { get; private set; }
 
             public string Text { get; private set; }
+
+            // 2 つのホームの結果を 1 行に並べるときの短い文言。
+            public string Summary { get; private set; }
         }
     }
 }

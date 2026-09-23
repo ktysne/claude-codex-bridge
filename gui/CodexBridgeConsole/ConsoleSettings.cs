@@ -1469,7 +1469,8 @@ namespace CodexBridgeConsole
             return userProfile;
         }
 
-        private string ExpandCodexHome(string value)
+        // 定義ファイルに書く形の codex_home を実パスへ展開する。空か展開できない値には null を返す。
+        public string ExpandCodexHome(string value)
         {
             if (string.IsNullOrEmpty(value))
             {
