@@ -174,7 +174,7 @@ namespace CodexBridgeConsole
 
             var noticeLabel = new Label
             {
-                Text = "保存後、Claude Code を再起動すると反映されます",
+                Text = "保存した値は次の委譲から効きます(GPT 側は次の Codex 呼び出しから、Claude 側は数秒後から)。再起動が要る条件は docs/setup.md の共通手順 6 を参照。",
                 AutoSize = true,
                 Margin = new Padding(3, 6, 3, 3)
             };

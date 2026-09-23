@@ -110,7 +110,7 @@ GPT 側定義を別名に退避すれば疑似的に無効化できるが、設�
 │ codex_home: [~/.codex-subagent v]  codex_sandbox: workspace-write         │
 │ codex --version: 0.xx.x                                                   │
 │ GPT モデル一覧: codex debug models から取得                               │
-│ 保存後、Claude Code を再起動すると反映される                              │
+│ 保存した値は次の委譲から効く(再起動が要る条件は setup.md 参照)            │
 │                                                            [保存] [閉じる] │
 └───────────────────────────────────────────────────────────────────────────┘
 ```
@@ -327,7 +327,7 @@ bash tools/codex-agent.sh impl-light --effort low <<< "Reply with exactly: PONG-
 
 ## 既知の制約
 
-- 設定コンソールは Claude Code の起動中のセッションには影響しない。反映には再起動が要る。
+- 保存した GPT 側定義は次に `codex-agent.sh` を呼んだときから効き、Claude 側定義はそのディレクトリがセッション開始時から在れば数秒で次の委譲に反映される。再起動が要る条件は [setup.md](setup.md) の共通手順 6 にある。起動済みのサブエージェントには影響しない。
 - 保存時の外部変更の検出には、ごく短い競合の余地が残る。照合を終えてから `File.Replace` で置き換えるまでの間に別のプロセスがそのファイルを保存すると、その変更を検出できない。照合から置換までを排他制御で囲むと、一時ファイルを経由した原子的な置き換えと両立しない。単一の利用者が 6 つのファイルを編集するこの用途では、この競合を許容する。
 - ユーザ定義側だけを対象にするため、利用先プロジェクトの `.claude/` に同名の定義があると、そちらが優先されて設定コンソールの変更が効かない。優先順位は [gpt-agents.md](gpt-agents.md) の「定義の探索」を参照。
 - `codex_enabled: false` は `impl-hard`、`impl-light`、`impl-standard` を Claude 側の実装に切り替えるだけであり、`codex-review` と `codex-subagent` には影響しない。これらは明示的に Codex へ依頼する定義であり、Claude 側が代行すると依頼の意味が変わるためである。
