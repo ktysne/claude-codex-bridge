@@ -1,8 +1,8 @@
 # 設定コンソール(Windows GUI)の設計
 
 bridge が扱う 5 定義(`impl-hard`、`impl-standard`、`impl-light`、`codex-review`、`codex-subagent`)の定義ファイルを Windows の GUI から書き換えるための設定コンソールの設計である。
-実装は済んでおり、この文書は仕様と制約を残す。
-使い方は [gui.md](gui.md) を参照する。
+このうち `impl-hard`、`impl-standard`、`impl-light` を扱うサブエージェントタブは実装済みで、`codex-review` と `codex-subagent` を扱うレビューと実装補助タブは実装予定である。
+この文書は両タブを合わせた仕様と制約を記載し、現在の exe で行える操作は [gui.md](gui.md) に従う。
 末尾の「実装の段階」には、実装時の変更範囲と検証方法を記載している。
 
 ## 目的と範囲
@@ -370,9 +370,11 @@ bash tools/codex-agent.sh impl-light --effort low <<< "Reply with exactly: PONG-
 
 ### 追記：レビューと実装補助タブの追加
 
-`impl-hard` の対応後、`codex-review` と `codex-subagent` の GPT 側定義を対象に加え、画面を 2 つのタブに分けた。
-この節より前の各節は、この対応後の仕様を記載している。
+`impl-hard` の対応後、`codex-review` と `codex-subagent` の GPT 側定義を対象に加え、画面を 2 つのタブに分ける。
+この対応は未実装であり、この節より前の各節はこの対応後の仕様を記載している。
+現在の exe はサブエージェントタブの内容だけをタブ無しの 1 画面で扱い、対象は 6 ファイルである。
 変更は次の 3 段階に分け、段階ごとにブランチと PR を作る。
+段階 3 を終えた時点で、冒頭と本節の「実装予定」「未実装」の記述を外す。
 段階 1 は設定クラスの構造を変えるため `impl-hard` に、段階 2 と 3 は `impl-standard` に委譲できる粒度である。
 
 #### 段階 1：設定クラスの定義単位への一般化
