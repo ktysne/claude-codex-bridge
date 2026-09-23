@@ -488,6 +488,10 @@ CODEX_HOME="$codex_home" codex exec -c approval_policy=never "${codex_args[@]}" 
   | grep --line-buffered -v -e '^WARNING' -e '^hook:' >>"$log_file"
 codex_status="${PIPESTATUS[0]}"
 
+# ツール接続の判定に使う経過(標準エラー)は、最終回答を写す前に取り出す。
+# 最終回答も含めて判定すると、回答の本文に書かれた語で判定が反転する。
+stderr_body="$(log_body)"
+
 # 経過(標準エラー)に続けて最終回答(標準出力)をログへ写す。
 cat "$out_file" >>"$log_file"
 # 最終回答が改行で終わらなくても、あとで追記する result= の行が独立した行になるようにする。
@@ -508,10 +512,9 @@ emit_evidence() {
 # ツール実行の成功行(" succeeded in ")が 1 行でもあれば、接続が復旧して作業できたとみなし ok のままにする。
 # 本文は変数に受けてから調べる。pipefail の下で grep -q へパイプすると、書き手が SIGPIPE で失敗して判定が反転しうるためである。
 if [ "$codex_status" -eq 0 ]; then
-  body="$(log_body)"
-  matched="$(printf '%s\n' "$body" | grep -E 'ERROR' | grep -F 'code-mode host exited during handshake' | head -n 3)"
-  if [ -n "$matched" ] && [[ "$body" != *' succeeded in '* ]]; then
-    printf '%s\n' "$body" | tail -n "$tail_lines"
+  matched="$(printf '%s\n' "$stderr_body" | grep -E 'ERROR' | grep -F 'code-mode host exited during handshake' | head -n 3)"
+  if [ -n "$matched" ] && [[ "$stderr_body" != *' succeeded in '* ]]; then
+    log_body | tail -n "$tail_lines"
     emit_evidence 'unavailable' "$matched"
     finish unavailable 75
   fi

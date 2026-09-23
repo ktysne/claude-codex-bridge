@@ -651,6 +651,11 @@ t_unavailable() {
 t_tool_handshake_failed_exit0() {
   fake_set stderr '2026-09-23T16:03:29.519274Z ERROR codex_core::tools::router: error=code-mode host exited during handshake
 '
+  # 最終回答に成功行と同じ語があっても、判定は経過(標準エラー)だけで行う。
+  fake_set last_message '接続に失敗し、 succeeded in の行を確認できなかった。
+'
+  fake_set stdout '接続に失敗し、 succeeded in の行を確認できなかった。
+'
   run_wrapper "$AGENT"
   expect_fallback_tail unavailable unavailable
   local n prev
