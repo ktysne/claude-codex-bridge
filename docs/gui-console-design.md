@@ -1,7 +1,7 @@
 # 設定コンソール(Windows GUI)の設計
 
 bridge が扱う 5 定義(`impl-hard`、`impl-standard`、`impl-light`、`codex-review`、`codex-subagent`)の定義ファイルを Windows の GUI から書き換えるための設定コンソールの設計である。
-このうち `impl-hard`、`impl-standard`、`impl-light` を扱うサブエージェントタブは実装済みで、`codex-review` と `codex-subagent` を扱うレビューと実装補助タブは実装予定である。
+このうち `impl-hard`、`impl-standard`、`impl-light` を扱う設定画面(サブエージェントタブに相当する。現在の exe はタブ無しの 1 画面である)は実装済みで、`codex-review` と `codex-subagent` を扱うレビューと実装補助タブは実装予定である。
 この文書は両タブを合わせた仕様と制約を記載し、現在の exe で行える操作は [gui.md](gui.md) に従う。
 末尾の「実装の段階」には、実装時の変更範囲と検証方法を記載している。
 
