@@ -316,6 +316,13 @@ chmod 700 "$log_dir" 2>/dev/null || true
 # .last と .out は通常は終了時に消すが、taskkill /F などで強制終了されると EXIT の trap が動かずに残るため、同じ規則で落とす。
 find "$log_dir" -maxdepth 1 -type f \( -name '*.log' -o -name '*.last' -o -name '*.out' \) -mtime +7 -delete 2>/dev/null || true
 
+# 定義がスクラッチパッドを使えないときに依頼文を置く場所。ログと同じ期限で消す。
+# 置き場が無くても実行自体は続けられるため、作成に失敗しても止めない。
+prompts_dir="$(to_slash "$home_dir")/.claude/codex-agent/prompts"
+mkdir -p "$prompts_dir" 2>/dev/null || true
+chmod 700 "$prompts_dir" 2>/dev/null || true
+find "$prompts_dir" -maxdepth 1 -type f -mtime +7 -delete 2>/dev/null || true
+
 # 実行 ID はログファイル名から拡張子を除いたものにする。run= の行と log= の行を突き合わせられるようにするためである。
 run_id="$agent_name-$(date +%Y%m%d-%H%M%S)-$$"
 log_base="$log_dir/$run_id"
