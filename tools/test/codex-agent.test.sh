@@ -40,6 +40,14 @@ trap 'rm -rf "$TEST_TMP"' EXIT
 has_cygpath=0
 command -v cygpath >/dev/null 2>&1 && has_cygpath=1
 
+# 書き込み担当の目印を扱うケースだけ、git のディレクトリを PATH に足す。
+# ケースの PATH は /usr/bin と /bin に絞っているが、Git for Windows の git は /mingw64/bin にあることがあるためである。
+# 他のケースに足さないのは、git の有無で既存のケースの環境を変えないためである。
+GIT_BIN_DIR=""
+if command -v git >/dev/null 2>&1; then
+  GIT_BIN_DIR="$(dirname "$(command -v git)")"
+fi
+
 # ラッパーと同じ規則でパスを揃える。比較の前に両辺へ適用する。
 norm_path() {
   local p="${1//\\//}"
@@ -181,6 +189,9 @@ FAKE
 #   sleep                   stderr を出したあとに待つ秒数
 #   help_delay              exec --help で --output-last-message の行を出したあと、残りを出す前に待つ秒数
 #   exit_code               終了コード(既定 0)
+#   native_wait             stderr を出したあと、Windows の ping.exe をこの回数で exec して待つ
+#                           npm のシム(sh スクリプトが node.exe を exec する形)と同じプロセスの形を作る
+# exec のときは、自分の PID を exec.pid に、Windows の PID が読めれば exec.winpid に書く。
 kind=other
 last_arg=""
 [ $# -gt 0 ] && last_arg="${!#}"
@@ -206,6 +217,10 @@ case "$kind" in
     exit 0
     ;;
   exec)
+    printf '%s\n' "$$" >"$FAKE_DIR/exec.pid"
+    if [ -r "/proc/$$/winpid" ]; then
+      cat "/proc/$$/winpid" >"$FAKE_DIR/exec.winpid"
+    fi
     cat >"$FAKE_DIR/exec.stdin.$$"
     cp "$FAKE_DIR/exec.stdin.$$" "$FAKE_DIR/exec.stdin"
     out=""
@@ -219,6 +234,9 @@ case "$kind" in
     fi
     [ -f "$FAKE_DIR/stdout" ] && cat "$FAKE_DIR/stdout"
     [ -f "$FAKE_DIR/stderr" ] && cat "$FAKE_DIR/stderr" >&2
+    if [ -f "$FAKE_DIR/native_wait" ]; then
+      exec "$(cat "$FAKE_DIR/ping_exe")" -n "$(cat "$FAKE_DIR/native_wait")" 127.0.0.1 >/dev/null
+    fi
     [ -f "$FAKE_DIR/sleep" ] && sleep "$(cat "$FAKE_DIR/sleep")"
     code=0
     [ -f "$FAKE_DIR/exit_code" ] && code="$(cat "$FAKE_DIR/exit_code")"
@@ -267,6 +285,8 @@ new_case_root() {
 2 行目の依頼。'
   EXTRA_ENV=()
   NO_FAKE_BIN=0
+  EXTRA_PATH=""
+  RUN_OUT=""
 }
 
 # fake_set <name> <内容>
@@ -278,18 +298,20 @@ logs_dir() {
   printf '%s' "$root/home/.claude/codex-agent/logs"
 }
 
-# ラッパーを起動する。標準出力は $root/out、標準エラーは $root/err、終了コードは RC に入る。
+# ラッパーを起動する。標準出力は $root/out(RUN_OUT があればそのパス)、標準エラーは $root/err、終了コードは RC に入る。
 # 出力に log= の行があれば、一時ルートの配下を指すことも確かめる。
+# EXTRA_PATH があれば PATH の末尾に足す。
 run_wrapper() {
-  local path="$root/bin:/usr/bin:/bin"
+  local path="$root/bin:/usr/bin:/bin" out="${RUN_OUT:-$root/out}"
   [ "$NO_FAKE_BIN" = 1 ] && path="/usr/bin:/bin"
+  [ -z "$EXTRA_PATH" ] || path="$path:$EXTRA_PATH"
   (
     cd "$root/work" || exit 99
     export USERPROFILE="$root/home" HOME="$root/home" PATH="$path" TMPDIR="$root/tmp"
-    printf '%s' "$REQ" | env ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} "$BASH_BIN" "$WRAPPER" "$@" >"$root/out" 2>"$root/err"
+    printf '%s' "$REQ" | env ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} "$BASH_BIN" "$WRAPPER" "$@" >"$out" 2>"$root/err"
   )
   RC=$?
-  check_log_path "$root/out"
+  check_log_path "$out"
 }
 
 check_log_path() {
@@ -306,6 +328,91 @@ check_log_path() {
 
 only_log_file() {
   ls "$(logs_dir)"/*.log 2>/dev/null | head -n 1
+}
+
+# 標準出力の log= の行が指すログのパス。
+out_log_path() {
+  sed -n 's/^codex-agent: log=//p' "$1" | head -n 1
+}
+
+# ラッパーをバックグラウンドで起動する。標準出力と標準エラーの行き先、PATH などは run_wrapper と同じである。
+# 起動したサブシェルの PID を BG_PID に入れる。終了は finish_bg_wrapper で待つ。
+start_bg_wrapper() {
+  local path="$root/bin:/usr/bin:/bin"
+  [ -z "$EXTRA_PATH" ] || path="$path:$EXTRA_PATH"
+  (
+    cd "$root/work" || exit 99
+    export USERPROFILE="$root/home" HOME="$root/home" PATH="$path" TMPDIR="$root/tmp"
+    printf '%s' "$REQ" | "$BASH_BIN" "$WRAPPER" "$@" >"$root/out" 2>"$root/err"
+  ) &
+  BG_PID=$!
+}
+
+finish_bg_wrapper() {
+  wait "$BG_PID"
+  RC=$?
+  check_log_path "$root/out"
+}
+
+# 条件が成り立つまで 0.1 秒おきに確かめる。上限を過ぎたら 1 を返す。
+# wait_until <上限の秒数> <コマンド...>
+wait_until() {
+  local limit=$(( $1 * 10 )) i=0
+  shift
+  while ! "$@"; do
+    i=$((i + 1))
+    [ "$i" -lt "$limit" ] || return 1
+    sleep 0.1
+  done
+  return 0
+}
+
+# 実行中のラッパーの標準出力に log= の行が出て、そのログに印の行が書かれている。
+running_log_has() {
+  local log
+  log="$(out_log_path "$root/out")"
+  [ -n "$log" ] && [ -f "$log" ] && grep -Fq -- "$1" "$log"
+}
+
+# 実行中の観測に使う偽 codex の振る舞い。印の行を stderr に出したあと待つ。
+set_running_fake() {
+  fake_set stderr 'WARNING: 警告の行
+hook: フックの行
+経過: 実行中の印
+'
+  fake_set last_message '報告
+'
+  fake_set sleep "$1"
+}
+
+# 完了後のログの最後の行が標準出力の最後の行(result= の行)と一致し、
+# 標準出力の result= の行と run= の行がそれぞれちょうど 1 回である。
+expect_log_ends_with_result() {
+  local log last
+  last="$(last_out_line)"
+  case "$last" in
+    "codex-agent: result="*) ;;
+    *) fail "標準出力の最後の行が result= の行でない: [$last]" ;;
+  esac
+  expect_eq "標準出力の result= の行数" "1" "$(grep -c '^codex-agent: result=' "$root/out")"
+  expect_eq "標準出力の run= の行数" "1" "$(grep -c '^codex-agent: run=' "$root/out")"
+  log="$(out_log_path "$root/out")"
+  if [ -z "$log" ] || [ ! -f "$log" ]; then
+    fail "log= の行が指すログが無い: [$log]"
+    return
+  fi
+  expect_eq "ログの最後の行" "$last" "$(tail -n 1 "$log")"
+  expect_eq "ログの result= の行数" "1" "$(grep -c '^codex-agent: result=' "$log")"
+  expect_eq "ログの 1 行目" "$(sed -n 2p "$root/out")" "$(sed -n 1p "$log")"
+}
+
+# Windows のプロセスとして残っているか。tasklist の CSV 出力で PID の列を照合する。
+win_pid_alive() {
+  tasklist //FI "PID eq $1" //NH //FO CSV 2>/dev/null | grep -Fq "\"$1\""
+}
+
+win_pid_gone() {
+  ! win_pid_alive "$1"
 }
 
 # ---------------------------------------------------------------------------
@@ -397,7 +504,7 @@ hook: フックの行
 '
   run_wrapper "$AGENT"
   expect_rc 0
-  expect_eq "標準出力の行数" "5" "$(wc -l <"$root/out" | tr -d ' ')"
+  expect_eq "標準出力の行数" "6" "$(wc -l <"$root/out" | tr -d ' ')"
   local l1
   l1="$(sed -n 1p "$root/out")"
   case "$l1" in
@@ -405,12 +512,16 @@ hook: フックの行
     *) fail "1 行目が監査行でない: [$l1]" ;;
   esac
   case "$(sed -n 2p "$root/out")" in
-    "codex-agent: log="*) ;;
-    *) fail "2 行目が log= の行でない: [$(sed -n 2p "$root/out")]" ;;
+    "codex-agent: run=$AGENT-"*" pid="*" started="*) ;;
+    *) fail "2 行目が run= の行でない: [$(sed -n 2p "$root/out")]" ;;
   esac
-  expect_eq "3 行目" "最終報告の1行目" "$(sed -n 3p "$root/out")"
-  expect_eq "4 行目" "最終報告の2行目" "$(sed -n 4p "$root/out")"
-  expect_eq "5 行目" "codex-agent: result=ok" "$(sed -n 5p "$root/out")"
+  case "$(sed -n 3p "$root/out")" in
+    "codex-agent: log="*) ;;
+    *) fail "3 行目が log= の行でない: [$(sed -n 3p "$root/out")]" ;;
+  esac
+  expect_eq "4 行目" "最終報告の1行目" "$(sed -n 4p "$root/out")"
+  expect_eq "5 行目" "最終報告の2行目" "$(sed -n 5p "$root/out")"
+  expect_eq "6 行目" "codex-agent: result=ok" "$(sed -n 6p "$root/out")"
   expect_out_no_match "経過: 考えている"
   expect_out_no_match "FAKE-STDOUT-MARK"
   if grep -Fq "経過: 考えている" "$root/err"; then
@@ -423,6 +534,9 @@ hook: フックの行
   else
     grep -Fq "経過: 考えている" "$log" || fail "ログに経過(stderr)が無い"
     grep -Fq "FAKE-STDOUT-MARK" "$log" || fail "ログに codex の stdout が無い"
+    if grep -qE '^(WARNING|hook:)' "$log"; then
+      fail "ログに WARNING か hook: の行が残っている"
+    fi
     expect_eq "log= の値" "$(norm_path "$log")" "$(norm_path "$(sed -n 's/^codex-agent: log=//p' "$root/out")")"
   fi
 }
@@ -443,7 +557,7 @@ t_no_output_last_message() {
     for i in $(seq 11 50); do printf 'stdout-line-%s\n' "$i"; done
     printf 'codex-agent: result=ok\n'
   } >"$root/expected_tail"
-  tail -n +3 "$root/out" >"$root/actual_tail"
+  tail -n +4 "$root/out" >"$root/actual_tail"
   if ! cmp -s "$root/expected_tail" "$root/actual_tail"; then
     fail "報告が標準出力の末尾 40 行になっていない: 実際の先頭=[$(head -n 2 "$root/actual_tail" | tr '\n' ' ')] 行数=$(wc -l <"$root/actual_tail" | tr -d ' ')"
   fi
@@ -468,7 +582,7 @@ t_empty_last_message() {
   run_wrapper "$AGENT"
   expect_rc 0
   exec_args | grep -Fxq -- '-o' || fail "-o が渡っていない"
-  expect_eq "3 行目" "report-from-stdout" "$(sed -n 3p "$root/out")"
+  expect_eq "4 行目" "report-from-stdout" "$(sed -n 4p "$root/out")"
   expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
 }
 
@@ -532,6 +646,36 @@ t_unavailable() {
   fake_set exit_code 1
   run_wrapper "$AGENT"
   expect_fallback_tail unavailable unavailable
+}
+
+t_tool_handshake_failed_exit0() {
+  fake_set stderr '2026-09-23T16:03:29.519274Z ERROR codex_core::tools::router: error=code-mode host exited during handshake
+'
+  # 最終回答に成功行と同じ語があっても、判定は経過(標準エラー)だけで行う。
+  fake_set last_message '接続に失敗し、 succeeded in の行を確認できなかった。
+'
+  fake_set stdout '接続に失敗し、 succeeded in の行を確認できなかった。
+'
+  run_wrapper "$AGENT"
+  expect_fallback_tail unavailable unavailable
+  local n prev
+  n="$(wc -l <"$root/out" | tr -d ' ')"
+  prev="$(sed -n "$((n - 1))p" "$root/out")"
+  case "$prev" in
+    *'code-mode host exited during handshake'*) ;;
+    *) fail "result 行の直前の evidence に一致した ERROR 行が無い: [$prev]" ;;
+  esac
+}
+
+t_tool_handshake_recovered_exit0() {
+  fake_set stderr 'ERROR codex_core::tools::router: error=code-mode host exited during handshake
+exec
+bash -lc ls in /work
+ succeeded in 12ms:
+'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
 }
 
 t_plain_failure() {
@@ -797,16 +941,233 @@ hook: フックの行
   cp "$root/out1" "$root/out"
 }
 
-t_log_prune() {
-  mkdir -p "$(logs_dir)"
-  : >"$(logs_dir)/old-9days.log"
-  : >"$(logs_dir)/recent-6days.log"
-  touch -d '9 days ago' "$(logs_dir)/old-9days.log"
-  touch -d '6 days ago' "$(logs_dir)/recent-6days.log"
+# 実行中(偽 codex が stderr を出したあと待っている間)に、標準出力へ run= と log= の行が出ている。
+# 完了の前に確かめたことは、標準出力にまだ result= の行が無いことで裏付ける。
+t_running_out_lines() {
+  set_running_fake 3
+  start_bg_wrapper "$AGENT"
+  if ! wait_until 10 running_log_has '経過: 実行中の印'; then
+    fail "実行中のログに印の行が現れない"
+    finish_bg_wrapper
+    return
+  fi
+  if grep -q '^codex-agent: result=' "$root/out"; then
+    fail "確かめる前にラッパーが終わっていた(偽 codex の待ちが短い)"
+  fi
+  cp "$root/out" "$root/out.running"
+  local run_line log_line run_id pid started log_name
+  run_line="$(sed -n 2p "$root/out.running")"
+  log_line="$(sed -n 3p "$root/out.running")"
+  case "$(sed -n 1p "$root/out.running")" in
+    "codex-agent: agent=$AGENT "*) ;;
+    *) fail "実行中の 1 行目が監査行でない: [$(sed -n 1p "$root/out.running")]" ;;
+  esac
+  case "$run_line" in
+    "codex-agent: run="*) ;;
+    *) fail "実行中の 2 行目が run= の行でない: [$run_line]" ;;
+  esac
+  case "$log_line" in
+    "codex-agent: log="*) ;;
+    *) fail "実行中の 3 行目が log= の行でない: [$log_line]" ;;
+  esac
+  run_id="$(printf '%s\n' "$run_line" | sed -n 's/^codex-agent: run=\([^ ]*\) pid=[^ ]* started=[^ ]*$/\1/p')"
+  pid="$(printf '%s\n' "$run_line" | sed -n 's/^codex-agent: run=[^ ]* pid=\([^ ]*\) started=[^ ]*$/\1/p')"
+  started="$(printf '%s\n' "$run_line" | sed -n 's/^codex-agent: run=[^ ]* pid=[^ ]* started=\([^ ]*\)$/\1/p')"
+  log_name="$(basename "${log_line#codex-agent: log=}")"
+  [ -n "$run_id" ] || fail "run= の行から実行 ID を読めない: [$run_line]"
+  expect_eq "実行 ID とログのファイル名" "$run_id.log" "$log_name"
+  case "$run_id" in
+    "$AGENT-"[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]-*) ;;
+    *) fail "実行 ID が <agent>-<YYYYmmdd-HHMMSS>-<PID> の形でない: [$run_id]" ;;
+  esac
+  case "$pid" in
+    ''|*[!0-9]*) fail "pid= の値が数字でない: [$pid]" ;;
+  esac
+  printf '%s\n' "$started" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' \
+    || fail "started= が UTC の ISO 8601 形式でない: [$started]"
+  finish_bg_wrapper
+  expect_rc 0
+}
+
+# 実行中のログに、偽 codex の stderr の行が既に書かれ、先頭行が run= の行で、WARNING 行と hook 行が無い。
+t_running_log() {
+  set_running_fake 3
+  start_bg_wrapper "$AGENT"
+  if ! wait_until 10 running_log_has '経過: 実行中の印'; then
+    fail "実行中のログに印の行が現れない"
+    finish_bg_wrapper
+    return
+  fi
+  local log
+  log="$(out_log_path "$root/out")"
+  cp "$log" "$root/log.running"
+  if grep -q '^codex-agent: result=' "$root/out"; then
+    fail "確かめる前にラッパーが終わっていた(偽 codex の待ちが短い)"
+  fi
+  expect_eq "実行中のログの 1 行目" "$(sed -n 2p "$root/out")" "$(sed -n 1p "$root/log.running")"
+  case "$(sed -n 1p "$root/log.running")" in
+    "codex-agent: run="*) ;;
+    *) fail "実行中のログの 1 行目が run= の行でない: [$(sed -n 1p "$root/log.running")]" ;;
+  esac
+  if grep -qE '^(WARNING|hook:)' "$root/log.running"; then
+    fail "実行中のログに WARNING か hook: の行が書かれている"
+  fi
+  if grep -q '^codex-agent: result=' "$root/log.running"; then
+    fail "実行中のログに result= の行がある"
+  fi
+  finish_bg_wrapper
+  expect_rc 0
+}
+
+t_log_result_ok() {
+  fake_set last_message '報告
+'
+  fake_set stderr '経過の行
+'
   run_wrapper "$AGENT"
   expect_rc 0
-  [ ! -e "$(logs_dir)/old-9days.log" ] || fail "9 日前のログが消えていない"
-  [ -e "$(logs_dir)/recent-6days.log" ] || fail "6 日前のログが消えている"
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
+  expect_log_ends_with_result
+}
+
+t_log_result_rate_limited() {
+  fake_set stderr "ERROR: You've hit your usage limit.
+"
+  fake_set exit_code 1
+  run_wrapper "$AGENT"
+  expect_rc 75
+  expect_eq "最後の行" "codex-agent: result=rate-limited" "$(last_out_line)"
+  expect_log_ends_with_result
+}
+
+# 最終回答が改行で終わらない失敗でも、ログの result= の行は独立した行になる。
+t_log_result_failed() {
+  fake_set stderr 'ERROR: something went wrong
+'
+  fake_set stdout '改行で終わらない出力'
+  fake_set exit_code 1
+  run_wrapper "$AGENT"
+  expect_rc 1
+  expect_eq "最後の行" "codex-agent: result=failed exit=1" "$(last_out_line)"
+  expect_out_line "改行で終わらない出力"
+  expect_log_ends_with_result
+}
+
+# Windows で、コマンドラインに <実行 ID>.last を含むプロセス(-o で最終報告の受け皿を受け取る Codex 側)の PID を 1 行ずつ出す。
+# 実行 ID は環境変数で渡す。コマンドラインに実行 ID を書くと、問い合わせた PowerShell 自身が一致するためである。
+win_codex_side_pids() {
+  RUN_ID="$1" powershell -NoProfile -NonInteractive -Command \
+    'Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like ("*" + $env:RUN_ID + ".last*") } | ForEach-Object { $_.ProcessId }' \
+    2>/dev/null | tr -d '\r'
+}
+
+# Windows で、指定した PID の直接の子の PID を 1 行ずつ出す。
+win_child_pids() {
+  powershell -NoProfile -NonInteractive -Command \
+    "Get-CimInstance Win32_Process -Filter 'ParentProcessId=$1' | ForEach-Object { \$_.ProcessId }" \
+    2>/dev/null | tr -d '\r'
+}
+
+# 中断の手順を確かめる。docs/gpt-agents.md の「既知の制約」に書いた手順と同じ順で止める。
+#   1. run= の行の pid を taskkill /T /F で止める。ラッパーが result= の行を書かないようにするためである。
+#   2. コマンドラインに実行 ID を含む Codex 側のプロセスを taskkill /T /F で止める。
+# 2 が要るのは、Git Bash が Git Bash 系のプログラム(npm のシムの sh など)を exec すると、
+# 中継のプロセスが終わって Windows 上の親子関係が途切れ、1 の taskkill /T が Codex まで届かないためである。
+# 偽 codex は npm のシムと同じ形(bash スクリプトが Windows の実行ファイルを exec する)をとる。
+# Windows の Git Bash に限る。他の環境では PID の体系と停止の手段が違うため確かめない。
+t_kill_by_run_pid() {
+  local ping_exe=""
+  ping_exe="$(command -v PING.EXE 2>/dev/null || command -v ping.exe 2>/dev/null)"
+  if [ ! -r "/proc/$$/winpid" ] || ! command -v taskkill >/dev/null 2>&1 || ! command -v tasklist >/dev/null 2>&1 \
+    || ! command -v powershell >/dev/null 2>&1 || [ -z "$ping_exe" ]; then
+    skip "/proc/<pid>/winpid、taskkill、tasklist、powershell、ping.exe のいずれかが無い(Windows の Git Bash 以外)"
+    return
+  fi
+  fake_set stderr 'WARNING: 警告の行
+経過: 実行中の印
+'
+  fake_set ping_exe "$ping_exe"
+  fake_set native_wait 30
+  start_bg_wrapper "$AGENT"
+  if ! wait_until 10 running_log_has '経過: 実行中の印' || [ ! -s "$root/fake/exec.winpid" ]; then
+    fail "偽 codex の起動を確かめられない"
+    [ -s "$root/fake/exec.winpid" ] && taskkill //T //F //PID "$(tr -d '\r\n' <"$root/fake/exec.winpid")" >/dev/null 2>&1
+    finish_bg_wrapper
+    return
+  fi
+  local pid run_id fake_pid children side p
+  pid="$(sed -n 's/^codex-agent: run=[^ ]* pid=\([0-9][0-9]*\) started=.*$/\1/p' "$root/out")"
+  run_id="$(sed -n 's/^codex-agent: run=\([^ ]*\) pid=.*$/\1/p' "$root/out")"
+  fake_pid="$(tr -d '\r\n' <"$root/fake/exec.winpid")"
+  children="$(win_child_pids "$fake_pid")"
+  if [ -z "$pid" ] || [ -z "$run_id" ]; then
+    fail "run= の行から pid か実行 ID を読めない"
+    taskkill //T //F //PID "$fake_pid" >/dev/null 2>&1
+    finish_bg_wrapper
+    return
+  fi
+  win_pid_alive "$fake_pid" || fail "停止の前に偽 codex(PID $fake_pid)が見つからない"
+  [ -n "$children" ] || fail "停止の前に偽 codex の子(ping.exe)が見つからない"
+
+  taskkill //T //F //PID "$pid" >"$root/taskkill.out" 2>&1 || fail "ラッパーの taskkill が失敗した"
+  wait_until 5 win_pid_gone "$pid" || fail "taskkill のあともラッパー(PID $pid)が残っている"
+
+  side="$(win_codex_side_pids "$run_id")"
+  printf '%s\n' "$side" | grep -Fxq -- "$fake_pid" \
+    || fail "実行 ID で探した Codex 側のプロセスに偽 codex(PID $fake_pid)が無い: [$(printf '%s' "$side" | tr '\n' ' ')]"
+  for p in $side; do
+    taskkill //T //F //PID "$p" >>"$root/taskkill.out" 2>&1
+  done
+  for p in $fake_pid $children; do
+    if ! wait_until 5 win_pid_gone "$p"; then
+      fail "手順のあとも Codex 側のプロセス(PID $p)が残っている"
+      taskkill //T //F //PID "$p" >/dev/null 2>&1
+    fi
+  done
+  finish_bg_wrapper
+  if grep -q '^codex-agent: result=' "$root/out"; then
+    fail "止めたラッパーが標準出力に result= の行を出している"
+  fi
+  if grep -q '^codex-agent: result=' "$(out_log_path "$root/out")"; then
+    fail "止めたラッパーのログに result= の行がある"
+  fi
+}
+
+# .last と .out は、強制終了で EXIT の trap が動かなかった実行の残りであり、.log と同じ規則で落とす。
+t_log_prune() {
+  mkdir -p "$(logs_dir)"
+  local ext
+  for ext in log last out; do
+    : >"$(logs_dir)/old-9days.$ext"
+    : >"$(logs_dir)/recent-6days.$ext"
+    touch -d '9 days ago' "$(logs_dir)/old-9days.$ext"
+    touch -d '6 days ago' "$(logs_dir)/recent-6days.$ext"
+  done
+  run_wrapper "$AGENT"
+  expect_rc 0
+  for ext in log last out; do
+    [ ! -e "$(logs_dir)/old-9days.$ext" ] || fail "9 日前の .$ext が消えていない"
+    [ -e "$(logs_dir)/recent-6days.$ext" ] || fail "6 日前の .$ext が消えている"
+  done
+}
+
+# 依頼文の置き場は、定義がスクラッチパッドを使えないときの退避先であり、ログと同じ期限で落とす。
+t_prompts_prune() {
+  local dir="$root/home/.claude/codex-agent/prompts"
+  mkdir -p "$dir"
+  : >"$dir/old-9days.md"
+  : >"$dir/recent-6days.md"
+  touch -d '9 days ago' "$dir/old-9days.md"
+  touch -d '6 days ago' "$dir/recent-6days.md"
+  run_wrapper "$AGENT"
+  expect_rc 0
+  [ -d "$dir" ] || fail "依頼文の置き場が無い"
+  [ ! -e "$dir/old-9days.md" ] || fail "9 日前の依頼文が消えていない"
+  [ -e "$dir/recent-6days.md" ] || fail "6 日前の依頼文が消えている"
+  rm -rf "$dir"
+  run_wrapper "$AGENT"
+  expect_rc 0
+  [ -d "$dir" ] || fail "依頼文の置き場が作られていない"
 }
 
 t_no_leftover_temp() {
@@ -822,6 +1183,9 @@ t_no_leftover_temp() {
   local left
   left="$(ls "$(logs_dir)"/*.last 2>/dev/null)"
   [ -z "$left" ] || fail "*.last が残っている: $left"
+  left="$(ls "$(logs_dir)"/*.out 2>/dev/null)"
+  [ -z "$left" ] || fail "*.out が残っている: $left"
+  expect_eq "ログファイルの数" "2" "$(ls "$(logs_dir)"/*.log 2>/dev/null | wc -l | tr -d ' ')"
   left="$(ls -A "$root/tmp" 2>/dev/null)"
   [ -z "$left" ] || fail "TMPDIR に一時ファイルが残っている: $left"
 }
@@ -879,6 +1243,247 @@ t_cross_review_contract() {
   ' "$(norm_path "$CROSS_REVIEW_JS")" "$(norm_path "$WRAPPER")" 2>"$root/err")"
   : >"$root/out"
   expect_eq "scriptPinsApprovalNever の戻り値" "true" "$result"
+}
+
+# ---------------------------------------------------------------------------
+# 書き込み担当の目印
+# ---------------------------------------------------------------------------
+
+# テストの中で使う git。ユーザの設定に左右されないよう、HOME を一時ルートに向け、システムの設定を読まない。
+git_t() {
+  env HOME="$root/home" GIT_CONFIG_NOSYSTEM=1 "$GIT_BIN_DIR/git" \
+    -c user.name=cxa-test -c user.email=cxa-test@example.invalid "$@"
+}
+
+# 目印を扱うケースの準備。git が見つからなければ SKIP にして 1 を返す。
+# work を git のリポジトリにし、空のコミットを 1 つ作る。git worktree add に HEAD が要るためである。
+setup_git_work() {
+  if [ -z "$GIT_BIN_DIR" ]; then
+    skip "git が見つからない(目印は git の管理下でだけ扱う)"
+    return 1
+  fi
+  EXTRA_PATH="$GIT_BIN_DIR"
+  if ! git_t init -q "$root/work" >/dev/null 2>&1 \
+    || ! git_t -C "$root/work" commit -q --allow-empty -m init >/dev/null 2>&1; then
+    fail "一時の git リポジトリを作れない"
+    return 1
+  fi
+  return 0
+}
+
+# 作業ディレクトリの worktree 固有の git ディレクトリにある、目印の置き場。
+# runs_dir_of <作業ディレクトリ>
+runs_dir_of() {
+  printf '%s/codex-agent/runs' "$(git_t -C "$1" rev-parse --absolute-git-dir | tr -d '\r')"
+}
+
+# 他の実行の目印を置く。中身はラッパーが置く目印と同じ 3 行の形にする。
+# plant_marker <置き場> <実行 ID> <ログのパス>
+plant_marker() {
+  mkdir -p "$1"
+  {
+    printf 'codex-agent: run=%s pid=1 started=2026-01-01T00:00:00Z\n' "$2"
+    printf 'codex-agent: log=%s\n' "$3"
+    printf 'codex-agent: agent=cxa-other sandbox=workspace-write\n'
+  } >"$1/$2.run"
+}
+
+count_markers() {
+  ls "$1"/*.run 2>/dev/null | wc -l | tr -d ' '
+}
+
+expect_no_warning() {
+  if grep -q '^codex-agent: warning=' "$1"; then
+    fail "警告の行が出ている: [$(grep '^codex-agent: warning=' "$1" | tr '\n' ' ')]"
+  fi
+}
+
+# 書き込み可能な起動は、実行中に目印を置き、正常終了で消す。
+t_marker_lifecycle() {
+  setup_git_work || return
+  local runs run_id marker
+  runs="$(runs_dir_of "$root/work")"
+  set_running_fake 3
+  start_bg_wrapper "$AGENT"
+  if ! wait_until 10 running_log_has '経過: 実行中の印'; then
+    fail "実行中のログに印の行が現れない"
+    finish_bg_wrapper
+    return
+  fi
+  run_id="$(sed -n 's/^codex-agent: run=\([^ ]*\) .*/\1/p' "$root/out" | head -n 1)"
+  marker="$runs/$run_id.run"
+  if [ -z "$run_id" ] || [ ! -f "$marker" ]; then
+    fail "実行中に目印が無い: [$marker]"
+  else
+    expect_eq "目印の 1 行目" "$(sed -n 2p "$root/out")" "$(sed -n 1p "$marker")"
+    expect_eq "目印の 2 行目" "$(sed -n 3p "$root/out")" "$(sed -n 2p "$marker")"
+    expect_eq "目印の 3 行目" "codex-agent: agent=$AGENT sandbox=workspace-write" "$(sed -n 3p "$marker")"
+    expect_eq "目印の行数" "3" "$(wc -l <"$marker" | tr -d ' ')"
+  fi
+  finish_bg_wrapper
+  expect_rc 0
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
+  [ ! -e "$marker" ] || fail "終了後に目印が残っている: $marker"
+  expect_eq "終了後の置き場のファイル数" "0" "$(ls -A "$runs" 2>/dev/null | wc -l | tr -d ' ')"
+  expect_no_warning "$root/out"
+}
+
+# 同じ worktree で書き込み可能な起動を重ねると、2 つ目にだけ 1 つ目の実行 ID を含む警告が出る。
+t_marker_same_worktree_warns() {
+  setup_git_work || return
+  local id1 log1 log2 warning
+  set_running_fake 3
+  start_bg_wrapper "$AGENT"
+  if ! wait_until 10 running_log_has '経過: 実行中の印'; then
+    fail "実行中のログに印の行が現れない"
+    finish_bg_wrapper
+    return
+  fi
+  id1="$(sed -n 's/^codex-agent: run=\([^ ]*\) .*/\1/p' "$root/out" | head -n 1)"
+  log1="$(out_log_path "$root/out")"
+  warning="codex-agent: warning=concurrent-writer run=$id1 log=$log1"
+  RUN_OUT="$root/out2"
+  run_wrapper "$AGENT"
+  RUN_OUT=""
+  expect_eq "2 つ目の終了コード" "0" "$RC"
+  expect_eq "2 つ目の最後の行" "codex-agent: result=ok" "$(tail -n 1 "$root/out2")"
+  grep -Fxq -- "$warning" "$root/out2" || fail "2 つ目の出力に警告の行が無い: [$warning]"
+  expect_eq "2 つ目の 4 行目(log= の行の後)" "$warning" "$(sed -n 4p "$root/out2")"
+  log2="$(out_log_path "$root/out2")"
+  grep -Fxq -- "$warning" "$log2" || fail "2 つ目のログに警告の行が無い"
+  finish_bg_wrapper
+  expect_rc 0
+  expect_eq "1 つ目の最後の行" "codex-agent: result=ok" "$(last_out_line)"
+  expect_no_warning "$root/out"
+  expect_eq "終了後の目印の数" "0" "$(count_markers "$(runs_dir_of "$root/work")")"
+}
+
+# 同じリポジトリの別の worktree で重ねた起動には、警告が出ない。
+t_marker_other_worktree_no_warn() {
+  setup_git_work || return
+  if ! git_t -C "$root/work" worktree add -q --detach "$root/work2" >/dev/null 2>&1; then
+    fail "2 つ目の worktree を作れない"
+    return
+  fi
+  set_running_fake 3
+  start_bg_wrapper "$AGENT"
+  if ! wait_until 10 running_log_has '経過: 実行中の印'; then
+    fail "実行中のログに印の行が現れない"
+    finish_bg_wrapper
+    return
+  fi
+  RUN_OUT="$root/out2"
+  run_wrapper "$AGENT" -C "$root/work2"
+  RUN_OUT=""
+  expect_eq "2 つ目の終了コード" "0" "$RC"
+  expect_eq "2 つ目の最後の行" "codex-agent: result=ok" "$(tail -n 1 "$root/out2")"
+  expect_no_warning "$root/out2"
+  finish_bg_wrapper
+  expect_rc 0
+  expect_no_warning "$root/out"
+}
+
+# ログの最後の行が result= でない目印(途中で止められた実行)が残っていると、警告を出し、その目印を消さない。
+t_marker_interrupted_warns() {
+  setup_git_work || return
+  local runs stale_log="$root/stale.log"
+  runs="$(runs_dir_of "$root/work")"
+  printf 'codex-agent: run=cxa-stale-1 pid=1 started=2026-01-01T00:00:00Z\n経過の行\n' >"$stale_log"
+  plant_marker "$runs" cxa-stale-1 "$stale_log"
+  fake_set last_message '報告
+'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
+  expect_out_line "codex-agent: warning=concurrent-writer run=cxa-stale-1 log=$stale_log"
+  grep -Fxq -- "codex-agent: warning=concurrent-writer run=cxa-stale-1 log=$stale_log" "$(out_log_path "$root/out")" \
+    || fail "ログに警告の行が無い"
+  [ -f "$runs/cxa-stale-1.run" ] || fail "途中で止められた実行の目印が消された"
+  expect_eq "終了後の目印の数" "1" "$(count_markers "$runs")"
+}
+
+# ログの最後の行が result= の目印と、ログが存在しない目印は、起動時に消され、警告は出ない。
+t_marker_finished_removed() {
+  setup_git_work || return
+  local runs done_log="$root/done.log"
+  runs="$(runs_dir_of "$root/work")"
+  printf 'codex-agent: run=cxa-done-1 pid=1 started=2026-01-01T00:00:00Z\n経過の行\ncodex-agent: result=ok\n' >"$done_log"
+  plant_marker "$runs" cxa-done-1 "$done_log"
+  plant_marker "$runs" cxa-gone-1 "$root/no-such.log"
+  fake_set last_message '報告
+'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
+  expect_no_warning "$root/out"
+  [ ! -e "$runs/cxa-done-1.run" ] || fail "終わった実行の目印が残っている"
+  [ ! -e "$runs/cxa-gone-1.run" ] || fail "ログが無い目印が残っている"
+  expect_eq "終了後の目印の数" "0" "$(count_markers "$runs")"
+}
+
+# read-only の起動は目印を置かず、残った目印があっても調べない。
+t_marker_read_only() {
+  setup_git_work || return
+  local runs stale_log="$root/stale.log"
+  runs="$(runs_dir_of "$root/work")"
+  write_def "$(work_def)" 'codex_home: ~/.codex-test
+codex_model: model-test
+codex_reasoning_effort: low
+codex_sandbox: read-only' "$DEFAULT_BODY"
+  printf 'codex-agent: run=cxa-stale-1 pid=1 started=2026-01-01T00:00:00Z\n経過の行\n' >"$stale_log"
+  plant_marker "$runs" cxa-stale-1 "$stale_log"
+  set_running_fake 2
+  start_bg_wrapper "$AGENT"
+  if ! wait_until 10 running_log_has '経過: 実行中の印'; then
+    fail "実行中のログに印の行が現れない"
+    finish_bg_wrapper
+    return
+  fi
+  expect_eq "実行中の目印の数" "1" "$(count_markers "$runs")"
+  finish_bg_wrapper
+  expect_rc 0
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
+  expect_no_warning "$root/out"
+  [ -f "$runs/cxa-stale-1.run" ] || fail "read-only の起動が残った目印を消した"
+  expect_eq "終了後の置き場のファイル数" "1" "$(ls -A "$runs" | wc -l | tr -d ' ')"
+}
+
+# git の管理下に無い作業ディレクトリでも、従来どおり起動して成功し、目印も警告も無い。
+# 一時ディレクトリの上位にあるリポジトリを見つけないよう、git の探索を一時ルートで止める。
+t_marker_not_git() {
+  if [ -z "$GIT_BIN_DIR" ]; then
+    skip "git が見つからない(git がある環境で管理下に無い場合を確かめるケースである)"
+    return
+  fi
+  EXTRA_PATH="$GIT_BIN_DIR"
+  EXTRA_ENV=(GIT_CEILING_DIRECTORIES="$(norm_path "$root")")
+  fake_set last_message '報告
+'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
+  expect_no_warning "$root/out"
+  local found
+  found="$(find "$root" -path '*codex-agent/runs*' 2>/dev/null)"
+  [ -z "$found" ] || fail "git の管理下に無いのに目印の置き場がある: $found"
+}
+
+# 警告の行に 429 を含む実行 ID とパスが出ても、利用上限と判定しない。警告の行は標準出力に 1 回だけ出る。
+t_marker_warning_not_classified() {
+  setup_git_work || return
+  local runs stale_log="$root/stale-429.log" warning
+  runs="$(runs_dir_of "$root/work")"
+  printf 'codex-agent: run=cxa-429-429 pid=429 started=2026-01-01T00:00:00Z\n経過の行\n' >"$stale_log"
+  plant_marker "$runs" cxa-429-429 "$stale_log"
+  warning="codex-agent: warning=concurrent-writer run=cxa-429-429 log=$stale_log"
+  fake_set stderr 'ERROR: something went wrong
+'
+  fake_set exit_code 1
+  run_wrapper "$AGENT"
+  expect_rc 1
+  expect_eq "最後の行" "codex-agent: result=failed exit=1" "$(last_out_line)"
+  expect_out_no_match "evidence:"
+  expect_eq "標準出力の警告の行数" "1" "$(grep -Fxc -- "$warning" "$root/out")"
 }
 
 # リポジトリに置く GPT 側の定義(出荷既定値)が、CLAUDE.md の「認証ホームの配置」と「権限の固定」に従う。
@@ -966,7 +1571,7 @@ run_case "起動引数: effort の既定は medium、sandbox の既定は read-o
 run_case "起動引数: -C <dir> の値が渡る" t_args_workdir
 run_case "依頼文: 役割文、---、## 依頼、依頼文の順で渡る" t_prompt_with_role
 run_case "依頼文: 役割文が無い定義では依頼文だけが渡る" t_prompt_without_role
-run_case "成功時の出力: 監査行、log=、最終報告、result=ok の順で、経過はログにだけ残る" t_success_output
+run_case "成功時の出力: 監査行、run=、log=、最終報告、result=ok の順で、経過はログにだけ残る" t_success_output
 run_case "--output-last-message が無い版: -o を渡さず標準出力の末尾 40 行を報告にする" t_no_output_last_message
 run_case "--output-last-message の判定: ヘルプの途中で読み手が終わっても有る版と判定する" t_help_detect_late_writer
 run_case "最終報告が空: 標準出力の末尾を報告にする" t_empty_last_message
@@ -975,6 +1580,8 @@ run_case "利用上限(stderr): 75、evidence の直後に result=rate-limited" 
 run_case "利用上限(stdout): 75、evidence の直後に result=rate-limited" t_rate_limit_stdout
 run_case "利用上限(根拠 2 行): evidence を 1 行ずつ接頭辞付きで result の直前に並べる" t_rate_limit_multi_evidence
 run_case "モデルの混雑: 75、evidence の直後に result=unavailable" t_unavailable
+run_case "ツール接続の失敗(終了コード 0、成功行なし): 75、evidence の直後に result=unavailable" t_tool_handshake_failed_exit0
+run_case "ツール接続の失敗後に復旧(終了コード 0、成功行あり): result=ok" t_tool_handshake_recovered_exit0
 run_case "通常の失敗: 1、result=failed exit=1" t_plain_failure
 run_case "Codex 自身の 75: 1 に写像し result=failed exit=75" t_codex_exit_75
 run_case "成功の本文に上限の語があっても result=ok" t_success_body_mentions_limit
@@ -1003,12 +1610,27 @@ run_case "フロントマター: 行末コメントを除く" t_fm_trailing_comm
 run_case "フロントマター: ダブルクォートを除く" t_fm_double_quotes
 run_case "フロントマター: シングルクォートを除く" t_fm_single_quotes
 run_case "ログ: 同時起動でログ名が衝突せず、WARNING と hook: の行を除く" t_log_concurrent
-run_case "ログ: 9 日前のログを消し、6 日前のログを残す" t_log_prune
-run_case "一時ファイル: 成功と失敗のあとに *.last と一時ファイルが残らない" t_no_leftover_temp
+run_case "実行中の出力: Codex の実行中に run= と log= の行が出ており、実行 ID と started= の形が正しい" t_running_out_lines
+run_case "実行中のログ: 先頭が run= の行で、stderr の行が既に書かれ、WARNING と hook: の行が無い" t_running_log
+run_case "完了後のログ(成功): 最後の行が標準出力の result=ok と一致し、result= は 1 回" t_log_result_ok
+run_case "完了後のログ(利用上限): 最後の行が標準出力の result=rate-limited と一致し、result= は 1 回" t_log_result_rate_limited
+run_case "完了後のログ(通常の失敗): 最後の行が標準出力の result=failed と一致し、result= と run= は 1 回" t_log_result_failed
+run_case "停止: run= の pid と実行 ID を含む Codex 側を taskkill /T /F で止めると、偽 codex まで止まり result= が残らない" t_kill_by_run_pid
+run_case "ログ: 9 日前の .log、.last、.out を消し、6 日前のものを残す" t_log_prune
+run_case "依頼文の置き場: 作られ、9 日前のファイルを消し、6 日前のものを残す" t_prompts_prune
+run_case "一時ファイル: 成功と失敗のあとに *.last、*.out、TMPDIR の一時ファイルが残らず、ログは残る" t_no_leftover_temp
 run_case "ログの権限: ログファイル 600、ログ置き場 700" t_log_permissions
 run_case "試験用フック: CODEX_AGENT_SIMULATE_RATE_LIMIT" t_simulate_rate_limit
 run_case "試験用フック: CODEX_AGENT_SIMULATE_UNAVAILABLE" t_simulate_unavailable
 run_case "-h: 終了コード 0 で用法を出す" t_help
+run_case "目印: 書き込み可能な起動は実行中に <git ディレクトリ>/codex-agent/runs/<実行 ID>.run を置き、正常終了で消す" t_marker_lifecycle
+run_case "目印: 同じ worktree で重ねると、2 つ目の出力とログにだけ 1 つ目の実行 ID を含む警告が出て、どちらも result=ok" t_marker_same_worktree_warns
+run_case "目印: 同じリポジトリの別の worktree で重ねた起動には警告が出ない" t_marker_other_worktree_no_warn
+run_case "目印: ログの最後の行が result= でない目印は警告を出し、消さない" t_marker_interrupted_warns
+run_case "目印: ログの最後の行が result= の目印とログが無い目印は消し、警告を出さない" t_marker_finished_removed
+run_case "目印: read-only の起動は目印を置かず、残った目印に警告を出さない" t_marker_read_only
+run_case "目印: git の管理下に無い作業ディレクトリでは目印も警告も無く成功する" t_marker_not_git
+run_case "目印: 警告の行の 429 で利用上限と判定せず、警告の行は標準出力に 1 回" t_marker_warning_not_classified
 run_case "ai-cross-review との契約: scriptPinsApprovalNever が true を返す" t_cross_review_contract
 run_case "出荷既定の定義: 5 定義の codex_home と codex_sandbox が CLAUDE.md の対応に従う" t_shipped_definitions
 run_case "環境の分離: 実ホームのログ置き場にテスト用のログが無い" t_real_home_untouched
