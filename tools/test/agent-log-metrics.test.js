@@ -214,6 +214,7 @@ test('collect は委譲を止める指定を最初の空でない行だけで判
       calls: 6,
       noCodex: 4,
       committed: 0,
+      spawnedAgents: 0,
       unlinked: 1,
       designated: 4,
       designatedNotInvoked: 2,
@@ -496,6 +497,8 @@ test('--json の委譲の内訳は各定義に outcomes と指定のキーを含
     const summary = JSON.parse(result.stdout);
     assert.deepEqual(summary.委譲の内訳['impl-standard'].outcomes, outcomesOf({ gptRan: 1 }));
     assert.deepEqual(summary.委譲の内訳['impl-light'].outcomes, outcomesOf({ denied: 1 }));
+    assert.equal(summary.委譲の内訳['impl-standard'].spawnedAgents, 0);
+    assert.equal(summary.委譲の内訳['impl-light'].spawnedAgents, 0);
     assert.equal(summary.委譲の内訳['impl-standard'].designated, 1);
     assert.equal(summary.委譲の内訳['impl-standard'].designatedNotInvoked, 0);
     assert.equal(summary.委譲の内訳['impl-light'].designated, 0);
@@ -523,6 +526,8 @@ test('テキスト出力は委譲の結果の後ろに委譲を止める指定�
     );
 
     assert.equal(result.status, 0, result.stderr);
+    assert.ok(result.stdout.includes('委譲の内訳(親から見た委譲 / Codex 未呼出 / git commit を実行 / サブエージェント起動 / 紐付け不明)'));
+    assert.match(result.stdout, /impl-standard\s+1\s+0\s+0\s+0\s+1/);
     assert.match(result.stdout, /委譲の結果\(/);
     assert.match(result.stdout, /委譲を止める指定\(指定あり \/ うち Codex 未起動\)/);
     assert.ok(
@@ -656,7 +661,8 @@ test('collect は同一分の起動、結果、待機、親子の紐付けを規
     const crossDayFile = logPath(subagentsDir, 'agent-one.jsonl');
     const noCodexFile = logPath(subagentsDir, 'agent-two.jsonl');
     const measuredFile = logPath(subagentsDir, 'agent-three.jsonl');
-    const unlinkedFile = logPath(subagentsDir, 'agent-four.jsonl');
+    const spawnedFile = logPath(subagentsDir, 'agent-four.jsonl');
+    const unlinkedFile = logPath(subagentsDir, 'agent-five.jsonl');
     const promptPrefix = '同じ接頭辞を持つ依頼文: ';
     const prompt1 = `${promptPrefix}コミットする仕事`;
     const prompt2 = `${promptPrefix}Codexを呼ばない仕事`;
@@ -667,6 +673,7 @@ test('collect は同一分の起動、結果、待機、親子の紐付けを規
       agentEvent('2026-09-10T23:59:59.999Z', 'agent-use-1', 'impl-standard', prompt1),
       agentEvent('2026-09-10T12:00:00.000Z', 'agent-use-2', 'impl-light', prompt2),
       agentEvent('2026-09-10T12:00:01.000Z', 'agent-use-3', 'impl-light', prompt2),
+      agentEvent('2026-09-10T12:00:02.000Z', 'agent-use-4', 'impl-standard', prompt1),
       event('not-a-date', agentUse('agent-use-invalid', 'impl-standard', prompt1)),
       '{"timestamp":"2026-09-10T12:00:02.000Z",',
     ]);
@@ -751,6 +758,11 @@ test('collect は同一分の起動、結果、待機、親子の紐付けを規
     ]);
     writeMeta(noCodexFile, 'agent-use-2');
 
+    writeJsonl(spawnedFile, [
+      agentEvent('2026-09-10T12:37:00.000Z', 'nested-agent-use', 'arbitrary-agent', prompt1),
+    ]);
+    writeMeta(spawnedFile, 'agent-use-4');
+
     writeJsonl(unlinkedFile, [
       bashEvent({
         timestamp: '2026-09-10T12:36:00.000Z',
@@ -762,7 +774,7 @@ test('collect は同一分の起動、結果、待機、親子の紐付けを規
     assert.equal(fs.existsSync(unlinkedFile.replace(/\.jsonl$/, '.meta.json')), false);
 
     const metrics = collect(
-      [parentFile, crossDayFile, noCodexFile, measuredFile, unlinkedFile],
+      [parentFile, crossDayFile, noCodexFile, measuredFile, spawnedFile, unlinkedFile],
       parseDay('2026-09-10', '--since'),
       parseDay('2026-09-11', '--until'),
     );
@@ -780,18 +792,20 @@ test('collect は同一分の起動、結果、待機、親子の紐付けを規
     assert.equal(metrics.waitCalls, 3);
     assert.deepEqual(metrics.byAgent, {
       'impl-standard': {
-        calls: 1,
-        noCodex: 0,
+        calls: 2,
+        noCodex: 1,
         committed: 1,
+        spawnedAgents: 1,
         unlinked: 0,
         designated: 0,
         designatedNotInvoked: 0,
-        outcomes: outcomesOf({ gptRan: 1 }),
+        outcomes: outcomesOf({ gptRan: 1, notInvoked: 1 }),
       },
       'impl-light': {
         calls: 2,
         noCodex: 1,
         committed: 0,
+        spawnedAgents: 0,
         unlinked: 1,
         designated: 0,
         designatedNotInvoked: 0,
@@ -1068,6 +1082,7 @@ test('collect は別の記録に写った同じ識別子の起動、待機、委
       calls: 1,
       noCodex: 0,
       committed: 0,
+      spawnedAgents: 0,
       unlinked: 0,
       designated: 0,
       designatedNotInvoked: 0,

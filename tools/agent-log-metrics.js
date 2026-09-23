@@ -55,6 +55,8 @@
 //     `sleep` を含む行を編集する実行)を待機と取り違えないためである。
 //   - 委譲 1 件は Agent の呼び出し 1 件である。同じ依頼文を出し直した場合も、
 //     それぞれ別の実行を伴うので別の委譲として数える。
+//   - サブエージェント起動は、子の記録にある Agent ツールの呼び出しで数える。
+//     孫の記録は親の tool_use と紐付かないため、孫が Codex を起動しても親から見た委譲は Codex 未呼出のままになる。
 //   - 委譲と実行の紐付けは、サブエージェントの記録の脇にある `<名前>.meta.json` が持つ
 //     親の tool_use の識別子で行う。依頼文の一致で推測すると、同じ依頼文を出した
 //     別の定義や別の時期の実行と取り違える。
@@ -597,6 +599,7 @@ function collect(files, start, endExclusive, options = {}) {
     }
     const pending = new Map();
     let committed = 0;
+    let spawnedAgents = 0;
     const waitKeys = [];
     // 子の記録にある codex-agent.sh の起動を出現順に持つ。結果の分類は期間で絞らない。
     // 疑似かどうかは tool_result で分かるので、ファイルを読み終えてから除く。
@@ -663,6 +666,9 @@ function collect(files, start, endExclusive, options = {}) {
           // 委譲は親の起動時刻で期間を選ぶ。子の実行が日付をまたぐことがあるため、
           // 子の側では期間で絞らない。
           if (/git commit/.test(cmd) && isSub(file)) committed += 1;
+        }
+        if (c.type === 'tool_use' && c.name === 'Agent' && isSub(file) && once(`spawned-agent|${file}|${c.id}`)) {
+          spawnedAgents += 1;
         }
         if (c.type === 'tool_use' && c.name === 'Agent' && !isSub(file)) {
           const st = String((c.input && c.input.subagent_type) || '');
@@ -741,7 +747,7 @@ function collect(files, start, endExclusive, options = {}) {
       const link = readAgentMeta(file, m, copiesOf.get(file));
       if (link && link.toolUseId) {
         const list = m.subByToolUse.get(link.toolUseId) || [];
-        list.push({ calledCodex, committed, invocations: realInvocations });
+        list.push({ calledCodex, committed, spawnedAgents, invocations: realInvocations });
         m.subByToolUse.set(link.toolUseId, list);
       }
     }
@@ -756,6 +762,7 @@ function collect(files, start, endExclusive, options = {}) {
         calls: 0,
         noCodex: 0,
         committed: 0,
+        spawnedAgents: 0,
         unlinked: 0,
         designated: 0,
         designatedNotInvoked: 0,
@@ -772,6 +779,7 @@ function collect(files, start, endExclusive, options = {}) {
     // 未起動と Codex 未呼出は、どちらも疑似を除いた起動が子のどこにも無いことで決まり、件数が一致する。
     if (subs.every((s) => s.calledCodex === 0)) row.noCodex += 1;
     if (subs.some((s) => s.committed > 0)) row.committed += 1;
+    if (subs.some((s) => s.spawnedAgents > 0)) row.spawnedAgents += 1;
     const outcome = lastInvocationOutcome(subs);
     if (call.designated && outcome === 'notInvoked') row.designatedNotInvoked += 1;
     row.outcomes[outcome] += 1;
@@ -871,11 +879,11 @@ function main() {
   );
   console.log(`待つためだけの Bash: ${m.waitCalls}`);
   console.log('');
-  console.log('委譲の内訳(親から見た委譲 / Codex 未呼出 / git commit を実行 / 紐付け不明)');
+  console.log('委譲の内訳(親から見た委譲 / Codex 未呼出 / git commit を実行 / サブエージェント起動 / 紐付け不明)');
   for (const [k, v] of Object.entries(m.byAgent).sort((a, b) => b[1].calls - a[1].calls)) {
     console.log(
       `  ${k.padEnd(16)} ${String(v.calls).padStart(4)} ${String(v.noCodex).padStart(6)}`
-        + ` ${String(v.committed).padStart(6)} ${String(v.unlinked).padStart(6)}`,
+        + ` ${String(v.committed).padStart(6)} ${String(v.spawnedAgents).padStart(6)} ${String(v.unlinked).padStart(6)}`,
     );
   }
   console.log('');
