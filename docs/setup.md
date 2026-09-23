@@ -144,9 +144,10 @@ GPT 側定義(`.claude/gpt-agents/`)と `tools/codex-agent.sh` は、`codex-agen
 ### 7. 設定コンソールを導入する(任意)
 
 配置した定義のモデル、effort、GPT 経路の有効状態、サブエージェントの認証ホームを GUI から変えるなら、設定コンソールを導入する。
+設定コンソールでは、`codex-review` と `codex-subagent` の GPT 側モデルと effort も変更できる。
 `gui\build.bat` をダブルクリックすると `gui\dist\CodexBridgeConsole.exe` ができる。
 ビルドには .NET SDK が要る。
-以後は exe をダブルクリックして起動し、手順 3 で配置したユーザ定義側の 6 ファイルを編集する。
+以後は exe をダブルクリックして起動し、手順 3 で配置したユーザ定義側の 8 ファイルを編集する。
 詳細は [設定コンソールの使い方](gui.md) を参照する。
 定義ファイルを手で編集する運用でも差し支えないため、この手順は省略できる。
 
@@ -355,3 +356,4 @@ Claude Code の Codex プラグイン(`codex:codex-rescue` など)は、この�
 プラグインが使うのは既定ホームのアカウント、つまり通常利用とレビューに使うアカウントである。
 
 定義ファイルのモデル、effort、GPT 系サブエージェント経路の有効状態、サブエージェントの認証ホームを GUI から変える場合は、共通手順 7 の設定コンソールを使う。
+設定コンソールでは、`codex-review` と `codex-subagent` の GPT 側モデルと effort も変更できる。
