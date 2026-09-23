@@ -28,12 +28,22 @@ namespace CodexBridgeConsole
 
         private static readonly DefinitionPath[] DefinitionPaths =
         {
-            new DefinitionPath(Path.Combine("agents", "impl-hard.md"), DefinitionKind.ClaudeHard),
-            new DefinitionPath(Path.Combine("agents", "impl-standard.md"), DefinitionKind.ClaudeStandard),
-            new DefinitionPath(Path.Combine("agents", "impl-light.md"), DefinitionKind.ClaudeLight),
-            new DefinitionPath(Path.Combine("gpt-agents", "impl-hard.md"), DefinitionKind.GptHard),
-            new DefinitionPath(Path.Combine("gpt-agents", "impl-standard.md"), DefinitionKind.GptStandard),
-            new DefinitionPath(Path.Combine("gpt-agents", "impl-light.md"), DefinitionKind.GptLight)
+            new DefinitionPath(Path.Combine("agents", "impl-hard.md"), DefinitionKind.ClaudeHard, SettingsTab.Subagent),
+            new DefinitionPath(Path.Combine("agents", "impl-standard.md"), DefinitionKind.ClaudeStandard, SettingsTab.Subagent),
+            new DefinitionPath(Path.Combine("agents", "impl-light.md"), DefinitionKind.ClaudeLight, SettingsTab.Subagent),
+            new DefinitionPath(Path.Combine("gpt-agents", "impl-hard.md"), DefinitionKind.GptHard, SettingsTab.Subagent),
+            new DefinitionPath(Path.Combine("gpt-agents", "impl-standard.md"), DefinitionKind.GptStandard, SettingsTab.Subagent),
+            new DefinitionPath(Path.Combine("gpt-agents", "impl-light.md"), DefinitionKind.GptLight, SettingsTab.Subagent),
+            new DefinitionPath(Path.Combine("gpt-agents", "codex-review.md"), DefinitionKind.CodexReview, SettingsTab.Review),
+            new DefinitionPath(Path.Combine("gpt-agents", "codex-subagent.md"), DefinitionKind.CodexSubagent, SettingsTab.Review)
+        };
+
+        // codex_home と codex_enabled を書かない定義。CLAUDE.md の「用途固定の原則」が認証ホームを固定しており、
+        // この 2 定義は Claude 側へフォールバックしないためである。
+        private static readonly DefinitionKind[] CodexAgentKinds =
+        {
+            DefinitionKind.CodexReview,
+            DefinitionKind.CodexSubagent
         };
 
         // codex_enabled と codex_home は、この 3 定義をまとめて 1 つの設定として扱う。
@@ -54,6 +64,8 @@ namespace CodexBridgeConsole
         private AgentSettings _loadedImplHard;
         private AgentSettings _loadedImplStandard;
         private AgentSettings _loadedImplLight;
+        private readonly Dictionary<DefinitionKind, CodexAgentSettings> _loadedCodexAgents =
+            new Dictionary<DefinitionKind, CodexAgentSettings>();
         private bool _loadedCodexEnabled;
         private bool _saveInterrupted;
 
@@ -84,6 +96,10 @@ namespace CodexBridgeConsole
         public AgentSettings ImplStandard { get; private set; }
 
         public AgentSettings ImplLight { get; private set; }
+
+        public CodexAgentSettings CodexReview { get; private set; }
+
+        public CodexAgentSettings CodexSubagent { get; private set; }
 
         public bool CodexEnabled { get; set; }
 
@@ -134,9 +150,42 @@ namespace CodexBridgeConsole
 
         public IReadOnlyList<string> UnreadableFiles { get; private set; }
 
-        public bool CanSave
+        // MissingFiles と UnreadableFiles はサブエージェントタブの 6 ファイルだけを数える。
+        // レビューと実装補助タブの 2 ファイルはこちらで数える。
+        public IReadOnlyList<string> ReviewMissingFiles { get; private set; }
+
+        public IReadOnlyList<string> ReviewUnreadableFiles { get; private set; }
+
+        public bool SubagentTabAvailable
         {
             get { return MissingFiles.Count == 0 && UnreadableFiles.Count == 0; }
+        }
+
+        public bool ReviewTabAvailable
+        {
+            get { return ReviewMissingFiles.Count == 0 && ReviewUnreadableFiles.Count == 0; }
+        }
+
+        // 保存できるタブに保存する意味があるかどうか。片方のタブのファイルが欠けても、もう片方は単独で保存できる。
+        public bool CanSave
+        {
+            get
+            {
+                bool subagentNeedsSave = _saveInterrupted || HasSubagentChanges || HasPendingRepairs;
+                bool reviewNeedsSave = _saveInterrupted || HasReviewChanges;
+                return (SubagentTabAvailable && subagentNeedsSave)
+                    || (ReviewTabAvailable && reviewNeedsSave);
+            }
+        }
+
+        private bool HasSubagentChanges
+        {
+            get { return DescribeSubagentChanges().Count > 0; }
+        }
+
+        private bool HasReviewChanges
+        {
+            get { return DescribeReviewChanges().Count > 0; }
         }
 
         // codex_enabled の不正値と codex_home の食い違いは、利用者が何も変えなくても保存で直す。
@@ -181,6 +230,14 @@ namespace CodexBridgeConsole
                 changes.Add("前回の保存が中断されたため、ディスクと画面の内容が食い違っている");
             }
 
+            changes.AddRange(DescribeSubagentChanges());
+            changes.AddRange(DescribeReviewChanges());
+            return ReadOnly(changes);
+        }
+
+        private List<string> DescribeSubagentChanges()
+        {
+            var changes = new List<string>();
             AddClaudeChanges(
                 changes,
                 _loadedImplHard,
@@ -237,7 +294,27 @@ namespace CodexBridgeConsole
                     + "」を書き戻す");
             }
 
-            return ReadOnly(changes);
+            return changes;
+        }
+
+        private List<string> DescribeReviewChanges()
+        {
+            var changes = new List<string>();
+            for (int i = 0; i < CodexAgentKinds.Length; i++)
+            {
+                DefinitionKind kind = CodexAgentKinds[i];
+                CodexAgentSettings loaded = _loadedCodexAgents[kind];
+                CodexAgentSettings current = GetCodexAgent(kind);
+                AddCodexChanges(
+                    changes,
+                    GetRelativePath(kind),
+                    loaded.CodexModel,
+                    loaded.CodexReasoningEffort,
+                    current.CodexModel,
+                    current.CodexReasoningEffort);
+            }
+
+            return changes;
         }
 
         private static void AddClaudeChanges(
@@ -256,21 +333,38 @@ namespace CodexBridgeConsole
             AgentSettings current,
             string relativePath)
         {
+            AddCodexChanges(
+                changes,
+                relativePath,
+                loaded.CodexModel,
+                loaded.CodexReasoningEffort,
+                current.CodexModel,
+                current.CodexReasoningEffort);
+        }
+
+        private static void AddCodexChanges(
+            List<string> changes,
+            string label,
+            string loadedModel,
+            string loadedEffort,
+            string currentModel,
+            string currentEffort)
+        {
             // codex_model はキーが無いこと(null)と空値が同じ意味である。
-            // tools/codex-agent.sh はどちらも「GPT 側を使わない」として読む。
+            // tools/codex-agent.sh はどちらも未設定として読む。
             // 差分として区別すると、キーの無い定義を開いただけで未保存の変更として並ぶ。
             AddValueChange(
                 changes,
-                relativePath,
+                label,
                 "codex_model",
-                NormalizeCodexModel(loaded.CodexModel),
-                NormalizeCodexModel(current.CodexModel));
+                NormalizeCodexModel(loadedModel),
+                NormalizeCodexModel(currentModel));
             AddValueChange(
                 changes,
-                relativePath,
+                label,
                 "codex_reasoning_effort",
-                loaded.CodexReasoningEffort,
-                current.CodexReasoningEffort);
+                loadedEffort,
+                currentEffort);
         }
 
         private static void AddValueChange(
@@ -327,6 +421,14 @@ namespace CodexBridgeConsole
             bool codexEnabledEdited = CodexEnabledExplicit || CodexEnabled != _loadedCodexEnabled;
             string editedCodexHome = CodexHome;
             string previousCodexHome = _loadedCodexHome;
+            var editedCodexAgents = new Dictionary<DefinitionKind, CodexAgentSettings>();
+            var previousCodexAgents = new Dictionary<DefinitionKind, CodexAgentSettings>();
+            for (int i = 0; i < CodexAgentKinds.Length; i++)
+            {
+                DefinitionKind kind = CodexAgentKinds[i];
+                editedCodexAgents.Add(kind, GetCodexAgent(kind).Clone());
+                previousCodexAgents.Add(kind, _loadedCodexAgents[kind].Clone());
+            }
 
             // codex_enabled は 3 定義の集約値を画面に出すが、外部変更の検出は定義ごとに行う。
             // 集約値だけを比べると、一部だけが外部で変わった場合を見逃す。
@@ -372,6 +474,24 @@ namespace CodexBridgeConsole
                     conflicts, DefinitionKind.GptLight, previousLightEnabled, editedCodexEnabled);
                 CodexEnabled = editedCodexEnabled;
                 CodexEnabledExplicit = true;
+            }
+
+            for (int i = 0; i < CodexAgentKinds.Length; i++)
+            {
+                DefinitionKind kind = CodexAgentKinds[i];
+                CodexAgentSettings target = GetCodexAgent(kind);
+                CodexAgentSettings edited = editedCodexAgents[kind];
+                CodexAgentSettings previous = previousCodexAgents[kind];
+                string definitionName = GetRelativePath(kind);
+                target.CodexModel = RestoreCodexModelEdit(
+                    target.CodexModel, edited.CodexModel, previous.CodexModel, definitionName, conflicts);
+                target.CodexReasoningEffort = RestoreEdit(
+                    target.CodexReasoningEffort,
+                    edited.CodexReasoningEffort,
+                    previous.CodexReasoningEffort,
+                    definitionName,
+                    "codex_reasoning_effort",
+                    conflicts);
             }
 
             return ReadOnly(conflicts);
@@ -439,21 +559,32 @@ namespace CodexBridgeConsole
             string relativePath,
             List<string> conflicts)
         {
-            // キーが無いこと(null)と空値は同じ「未設定」である。区別すると、
-            // 触っていない未設定の欄が編集済みと判定される。
-            target.CodexModel = RestoreEdit(
-                NormalizeCodexModel(target.CodexModel),
-                NormalizeCodexModel(edited.CodexModel),
-                NormalizeCodexModel(previous.CodexModel),
-                relativePath,
-                "codex_model",
-                conflicts);
+            target.CodexModel = RestoreCodexModelEdit(
+                target.CodexModel, edited.CodexModel, previous.CodexModel, relativePath, conflicts);
             target.CodexReasoningEffort = RestoreEdit(
                 target.CodexReasoningEffort,
                 edited.CodexReasoningEffort,
                 previous.CodexReasoningEffort,
                 relativePath,
                 "codex_reasoning_effort",
+                conflicts);
+        }
+
+        private static string RestoreCodexModelEdit(
+            string reloaded,
+            string edited,
+            string previous,
+            string label,
+            List<string> conflicts)
+        {
+            // キーが無いこと(null)と空値は同じ「未設定」である。区別すると、
+            // 触っていない未設定の欄が編集済みと判定される。
+            return RestoreEdit(
+                NormalizeCodexModel(reloaded),
+                NormalizeCodexModel(edited),
+                NormalizeCodexModel(previous),
+                label,
+                "codex_model",
                 conflicts);
         }
 
@@ -486,6 +617,8 @@ namespace CodexBridgeConsole
         {
             var missingFiles = new List<string>();
             var unreadableFiles = new List<string>();
+            var reviewMissingFiles = new List<string>();
+            var reviewUnreadableFiles = new List<string>();
 
             // すべて読み終えてから差し替える。
             // 途中で失敗したときに、ファイル一覧と画面の値が食い違った状態を残さないためである。
@@ -493,10 +626,11 @@ namespace CodexBridgeConsole
             for (int i = 0; i < DefinitionPaths.Length; i++)
             {
                 DefinitionPath definition = DefinitionPaths[i];
+                bool isReviewTab = definition.Tab == SettingsTab.Review;
                 string path = Path.Combine(RootDirectory, definition.RelativePath);
                 if (!File.Exists(path))
                 {
-                    missingFiles.Add(definition.RelativePath);
+                    (isReviewTab ? reviewMissingFiles : missingFiles).Add(definition.RelativePath);
                     continue;
                 }
 
@@ -512,7 +646,8 @@ namespace CodexBridgeConsole
                 {
                     // 読めない定義があっても画面は開く。定義を直すための道具が、
                     // 定義が壊れているときに起動できないと使えないためである。
-                    unreadableFiles.Add(definition.RelativePath + ": " + exception.Message);
+                    (isReviewTab ? reviewUnreadableFiles : unreadableFiles)
+                        .Add(definition.RelativePath + ": " + exception.Message);
                 }
             }
 
@@ -551,8 +686,13 @@ namespace CodexBridgeConsole
             ReadGptSettings(ImplStandard, DefinitionKind.GptStandard);
             ReadGptSettings(ImplLight, DefinitionKind.GptLight);
 
+            CodexReview = ReadCodexAgentSettings(DefinitionKind.CodexReview);
+            CodexSubagent = ReadCodexAgentSettings(DefinitionKind.CodexSubagent);
+
             MissingFiles = ReadOnly(missingFiles);
             UnreadableFiles = ReadOnly(unreadableFiles);
+            ReviewMissingFiles = ReadOnly(reviewMissingFiles);
+            ReviewUnreadableFiles = ReadOnly(reviewUnreadableFiles);
             LastChangedFiles = ReadOnly(new List<string>());
             LastValidationErrors = ReadOnly(new List<string>());
             SaveLoadedValues();
@@ -561,59 +701,95 @@ namespace CodexBridgeConsole
         public IReadOnlyList<string> Validate()
         {
             var errors = new List<string>();
-            for (int i = 0; i < MissingFiles.Count; i++)
+            bool subagentTabAvailable = SubagentTabAvailable;
+            bool reviewTabAvailable = ReviewTabAvailable;
+
+            // 保存できないタブの項目は書き込まない。編集が残っているときだけ理由を返し、
+            // 黙って編集を捨てないようにする。編集の無いタブの欠落はもう片方の保存を止めない。
+            if (!subagentTabAvailable && HasSubagentChanges)
             {
-                errors.Add("定義ファイルが存在しない: " + MissingFiles[i]);
+                AddUnavailableFileErrors(MissingFiles, UnreadableFiles, errors);
             }
 
-            // 読めない定義があるまま保存すると、そのファイルの書き込みで落ちる。
-            // 保存の手前で理由を返す。
-            for (int i = 0; i < UnreadableFiles.Count; i++)
+            if (!reviewTabAvailable && HasReviewChanges)
             {
-                errors.Add("定義ファイルを読めない: " + UnreadableFiles[i]);
+                AddUnavailableFileErrors(ReviewMissingFiles, ReviewUnreadableFiles, errors);
             }
 
             // 読み込み後に外部で消された定義は、書き換えないファイルでは検出できない。
             // 対象のファイルが揃っていることを保存の手前で見る。
             for (int i = 0; i < DefinitionPaths.Length; i++)
             {
-                string relativePath = DefinitionPaths[i].RelativePath;
-                if (IsMissing(relativePath))
+                DefinitionPath definition = DefinitionPaths[i];
+                if (!IsTabAvailable(definition.Tab, subagentTabAvailable, reviewTabAvailable))
                 {
                     continue;
                 }
 
-                if (!File.Exists(Path.Combine(RootDirectory, relativePath)))
+                if (!File.Exists(Path.Combine(RootDirectory, definition.RelativePath)))
                 {
-                    errors.Add("読み込み後に定義ファイルが無くなった: " + relativePath);
+                    errors.Add("読み込み後に定義ファイルが無くなった: " + definition.RelativePath);
                 }
             }
 
-            ValidateClaude(ImplHard, GetRelativePath(DefinitionKind.ClaudeHard), errors);
-            ValidateClaude(ImplStandard, GetRelativePath(DefinitionKind.ClaudeStandard), errors);
-            ValidateClaude(ImplLight, GetRelativePath(DefinitionKind.ClaudeLight), errors);
-
-            ValidateGpt(
-                ImplHard,
-                GetRelativePath(DefinitionKind.GptHard),
-                errors);
-            ValidateGpt(
-                ImplStandard,
-                GetRelativePath(DefinitionKind.GptStandard),
-                errors);
-            ValidateGpt(
-                ImplLight,
-                GetRelativePath(DefinitionKind.GptLight),
-                errors);
-
-            // 選択肢は読み込み時に列挙したものなので、保存の手前で認証ホームがまだ実在するかを見る。
-            // 消えたホームを書くと、次のサブエージェント起動が認証ホーム不足で止まる。
-            if (ShouldWriteCodexHome() && !Directory.Exists(ExpandedCodexHome))
+            if (subagentTabAvailable)
             {
-                errors.Add("認証ホームが存在しない: " + FormatValue(CodexHome));
+                ValidateClaude(ImplHard, GetRelativePath(DefinitionKind.ClaudeHard), errors);
+                ValidateClaude(ImplStandard, GetRelativePath(DefinitionKind.ClaudeStandard), errors);
+                ValidateClaude(ImplLight, GetRelativePath(DefinitionKind.ClaudeLight), errors);
+
+                ValidateGpt(
+                    ImplHard,
+                    GetRelativePath(DefinitionKind.GptHard),
+                    errors);
+                ValidateGpt(
+                    ImplStandard,
+                    GetRelativePath(DefinitionKind.GptStandard),
+                    errors);
+                ValidateGpt(
+                    ImplLight,
+                    GetRelativePath(DefinitionKind.GptLight),
+                    errors);
+
+                // 選択肢は読み込み時に列挙したものなので、保存の手前で認証ホームがまだ実在するかを見る。
+                // 消えたホームを書くと、次のサブエージェント起動が認証ホーム不足で止まる。
+                if (ShouldWriteCodexHome() && !Directory.Exists(ExpandedCodexHome))
+                {
+                    errors.Add("認証ホームが存在しない: " + FormatValue(CodexHome));
+                }
+            }
+
+            if (reviewTabAvailable)
+            {
+                for (int i = 0; i < CodexAgentKinds.Length; i++)
+                {
+                    DefinitionKind kind = CodexAgentKinds[i];
+                    ValidateCodexAgent(GetCodexAgent(kind), GetRelativePath(kind), errors);
+                }
             }
 
             return ReadOnly(errors);
+        }
+
+        private static void AddUnavailableFileErrors(
+            IReadOnlyList<string> missingFiles,
+            IReadOnlyList<string> unreadableFiles,
+            List<string> errors)
+        {
+            for (int i = 0; i < missingFiles.Count; i++)
+            {
+                errors.Add("定義ファイルが存在しない: " + missingFiles[i]);
+            }
+
+            for (int i = 0; i < unreadableFiles.Count; i++)
+            {
+                errors.Add("定義ファイルを読めない: " + unreadableFiles[i]);
+            }
+        }
+
+        private static bool IsTabAvailable(SettingsTab tab, bool subagentTabAvailable, bool reviewTabAvailable)
+        {
+            return tab == SettingsTab.Review ? reviewTabAvailable : subagentTabAvailable;
         }
 
         public ConsoleSettingsSaveResult Save()
@@ -629,12 +805,25 @@ namespace CodexBridgeConsole
                     LastChangedFiles);
             }
 
-            ApplyClaude(ImplHard, DefinitionKind.ClaudeHard);
-            ApplyClaude(ImplStandard, DefinitionKind.ClaudeStandard);
-            ApplyClaude(ImplLight, DefinitionKind.ClaudeLight);
-            ApplyGpt(ImplHard, DefinitionKind.GptHard);
-            ApplyGpt(ImplStandard, DefinitionKind.GptStandard);
-            ApplyGpt(ImplLight, DefinitionKind.GptLight);
+            bool subagentTabAvailable = SubagentTabAvailable;
+            bool reviewTabAvailable = ReviewTabAvailable;
+            if (subagentTabAvailable)
+            {
+                ApplyClaude(ImplHard, DefinitionKind.ClaudeHard);
+                ApplyClaude(ImplStandard, DefinitionKind.ClaudeStandard);
+                ApplyClaude(ImplLight, DefinitionKind.ClaudeLight);
+                ApplyGpt(ImplHard, DefinitionKind.GptHard);
+                ApplyGpt(ImplStandard, DefinitionKind.GptStandard);
+                ApplyGpt(ImplLight, DefinitionKind.GptLight);
+            }
+
+            if (reviewTabAvailable)
+            {
+                for (int i = 0; i < CodexAgentKinds.Length; i++)
+                {
+                    ApplyCodexAgent(CodexAgentKinds[i]);
+                }
+            }
 
             var changedFiles = new List<string>();
             LastChangedFiles = ReadOnly(changedFiles);
@@ -644,6 +833,11 @@ namespace CodexBridgeConsole
                 for (int i = 0; i < DefinitionPaths.Length; i++)
                 {
                     DefinitionPath definition = DefinitionPaths[i];
+                    if (!IsTabAvailable(definition.Tab, subagentTabAvailable, reviewTabAvailable))
+                    {
+                        continue;
+                    }
+
                     FrontMatterFile file;
                     if (_files.TryGetValue(definition.RelativePath, out file) && file.Save())
                     {
@@ -698,11 +892,32 @@ namespace CodexBridgeConsole
             }
 
             settings.CodexModel = file.GetValue("codex_model");
+            settings.CodexReasoningEffort = ReadCodexReasoningEffort(file);
+        }
 
+        private CodexAgentSettings ReadCodexAgentSettings(DefinitionKind kind)
+        {
+            FrontMatterFile file;
+            if (!_files.TryGetValue(GetRelativePath(kind), out file))
+            {
+                return new CodexAgentSettings();
+            }
+
+            return new CodexAgentSettings
+            {
+                CodexModel = file.GetValue("codex_model"),
+                CodexReasoningEffort = ReadCodexReasoningEffort(file),
+                CodexHome = file.GetValue(CodexHomeKey),
+                CodexSandbox = file.GetValue(CodexSandboxKey)
+            };
+        }
+
+        private static string ReadCodexReasoningEffort(FrontMatterFile file)
+        {
             // tools/codex-agent.sh は codex_reasoning_effort の省略と空値を medium として扱う。
             // 画面でも同じ既定値を補う。補わないと、正常に動く定義を開いただけで保存できなくなる。
             string effort = file.GetValue("codex_reasoning_effort");
-            settings.CodexReasoningEffort = string.IsNullOrWhiteSpace(effort)
+            return string.IsNullOrWhiteSpace(effort)
                 ? DefaultGptEffort
                 : effort;
         }
@@ -767,18 +982,49 @@ namespace CodexBridgeConsole
         {
             // 空の codex_model は「GPT 側を使わない」という正常な設定である。
             // tools/codex-agent.sh は未設定の定義を終了コード 3 で止め、Claude 側定義のモデルが実装する。
-            if (!string.IsNullOrWhiteSpace(settings.CodexModel) && !IsSafeScalar(settings.CodexModel))
+            if (!string.IsNullOrWhiteSpace(settings.CodexModel))
             {
-                errors.Add(relativePath + " の codex_model に使えない文字がある: " + settings.CodexModel + ScalarRuleText);
+                ValidateCodexModelCharacters(settings.CodexModel, relativePath, errors);
             }
 
-            if (!IsValidGptEffort(settings.CodexReasoningEffort))
+            ValidateCodexReasoningEffort(settings.CodexReasoningEffort, relativePath, errors);
+        }
+
+        private static void ValidateCodexAgent(
+            CodexAgentSettings settings,
+            string definitionName,
+            List<string> errors)
+        {
+            // この 2 定義は Claude 側へフォールバックしないため、空の codex_model では依頼がそのまま失敗する。
+            if (string.IsNullOrWhiteSpace(settings.CodexModel))
+            {
+                errors.Add(definitionName + " の codex_model が空である");
+            }
+            else
+            {
+                ValidateCodexModelCharacters(settings.CodexModel, definitionName, errors);
+            }
+
+            ValidateCodexReasoningEffort(settings.CodexReasoningEffort, definitionName, errors);
+        }
+
+        private static void ValidateCodexModelCharacters(string codexModel, string label, List<string> errors)
+        {
+            if (!IsSafeScalar(codexModel))
+            {
+                errors.Add(label + " の codex_model に使えない文字がある: " + codexModel + ScalarRuleText);
+            }
+        }
+
+        private static void ValidateCodexReasoningEffort(string effort, string label, List<string> errors)
+        {
+            if (!IsValidGptEffort(effort))
             {
                 errors.Add(
-                    relativePath
+                    label
                     + " の codex_reasoning_effort が不正である: "
-                    + (settings.CodexReasoningEffort ?? "(未設定)")
-                    + " (low、medium、high、xhigh、max のいずれか)");
+                    + (effort ?? "(未設定)")
+                    + " (low、medium、high、xhigh、max、ultra のいずれか)");
             }
         }
 
@@ -810,13 +1056,26 @@ namespace CodexBridgeConsole
             {
                 SetCodexEnabled(file, CodexEnabled);
             }
+
+            ApplyCodexModelAndEffort(file, settings.CodexModel, settings.CodexReasoningEffort);
+        }
+
+        // codex_home と codex_enabled には触れない(CodexAgentKinds を参照)。
+        private void ApplyCodexAgent(DefinitionKind kind)
+        {
+            CodexAgentSettings settings = GetCodexAgent(kind);
+            ApplyCodexModelAndEffort(GetFile(kind), settings.CodexModel, settings.CodexReasoningEffort);
+        }
+
+        private static void ApplyCodexModelAndEffort(FrontMatterFile file, string codexModel, string codexReasoningEffort)
+        {
             // codex_model が空、またはキーが無い定義は「GPT 側を使わない」設定として扱われる。
             // 値が空でキーも無いなら書かない。空のキーを足しても意味は変わらず、変えていないファイルを書き換えるだけになる。
-            string codexModel = NormalizeCodexModel(settings.CodexModel);
+            string normalizedCodexModel = NormalizeCodexModel(codexModel);
             string existingCodexModel;
-            if (codexModel.Length > 0 || file.TryGetValue("codex_model", out existingCodexModel))
+            if (normalizedCodexModel.Length > 0 || file.TryGetValue("codex_model", out existingCodexModel))
             {
-                file.SetValue("codex_model", codexModel);
+                file.SetValue("codex_model", normalizedCodexModel);
             }
 
             // 省略された codex_reasoning_effort は medium として読む。
@@ -824,12 +1083,12 @@ namespace CodexBridgeConsole
             string currentEffort;
             bool hasEffort = file.TryGetValue("codex_reasoning_effort", out currentEffort);
             bool effortIsDefault = string.Equals(
-                settings.CodexReasoningEffort,
+                codexReasoningEffort,
                 DefaultGptEffort,
                 StringComparison.Ordinal);
             if (hasEffort || !effortIsDefault)
             {
-                file.SetValue("codex_reasoning_effort", settings.CodexReasoningEffort);
+                file.SetValue("codex_reasoning_effort", codexReasoningEffort);
             }
         }
 
@@ -1060,19 +1319,6 @@ namespace CodexBridgeConsole
             return false;
         }
 
-        private bool IsMissing(string relativePath)
-        {
-            for (int i = 0; i < MissingFiles.Count; i++)
-            {
-                if (string.Equals(MissingFiles[i], relativePath, StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
         private static bool ReadEffectiveCodexEnabled(FrontMatterFile file)
         {
             // 不正値は安全側の無効として扱う。
@@ -1119,7 +1365,17 @@ namespace CodexBridgeConsole
                 case DefinitionKind.GptLight:
                     CopyGptValues(ImplLight, _loadedImplLight);
                     break;
+                case DefinitionKind.CodexReview:
+                case DefinitionKind.CodexSubagent:
+                    CopyCodexAgentValues(GetCodexAgent(kind), _loadedCodexAgents[kind]);
+                    break;
             }
+        }
+
+        private static void CopyCodexAgentValues(CodexAgentSettings source, CodexAgentSettings target)
+        {
+            target.CodexModel = source.CodexModel;
+            target.CodexReasoningEffort = source.CodexReasoningEffort;
         }
 
         private static void CopyClaudeValues(AgentSettings source, AgentSettings target)
@@ -1151,6 +1407,12 @@ namespace CodexBridgeConsole
             _loadedImplHard = ImplHard.Clone();
             _loadedImplStandard = ImplStandard.Clone();
             _loadedImplLight = ImplLight.Clone();
+            for (int i = 0; i < CodexAgentKinds.Length; i++)
+            {
+                DefinitionKind kind = CodexAgentKinds[i];
+                _loadedCodexAgents[kind] = GetCodexAgent(kind).Clone();
+            }
+
             _loadedCodexEnabled = CodexEnabled;
             _loadedCodexHome = CodexHome;
             CodexEnabledExplicit = false;
@@ -1257,6 +1519,19 @@ namespace CodexBridgeConsole
             throw new ArgumentOutOfRangeException(nameof(kind));
         }
 
+        private CodexAgentSettings GetCodexAgent(DefinitionKind kind)
+        {
+            switch (kind)
+            {
+                case DefinitionKind.CodexReview:
+                    return CodexReview;
+                case DefinitionKind.CodexSubagent:
+                    return CodexSubagent;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(kind));
+            }
+        }
+
         private static IReadOnlyList<string> ReadOnly(List<string> values)
         {
             // 元のリストをそのまま包むと、後から要素を足したときに公開済みの一覧まで変わる。
@@ -1271,20 +1546,56 @@ namespace CodexBridgeConsole
             ClaudeLight,
             GptHard,
             GptStandard,
-            GptLight
+            GptLight,
+            CodexReview,
+            CodexSubagent
+        }
+
+        // 欠落と読み込み失敗はタブ単位で集計し、保存できるかもタブ単位で決める。
+        private enum SettingsTab
+        {
+            Subagent,
+            Review
         }
 
         private sealed class DefinitionPath
         {
-            public DefinitionPath(string relativePath, DefinitionKind kind)
+            public DefinitionPath(string relativePath, DefinitionKind kind, SettingsTab tab)
             {
                 RelativePath = relativePath;
                 Kind = kind;
+                Tab = tab;
             }
 
             public string RelativePath { get; private set; }
 
             public DefinitionKind Kind { get; private set; }
+
+            public SettingsTab Tab { get; private set; }
+        }
+    }
+
+    // codex-review と codex-subagent の GPT 側定義の値。設定コンソールが書き換えるのは codex_model と
+    // codex_reasoning_effort だけで、CodexHome と CodexSandbox は定義ファイルから読んだ値を表示するためにある。
+    public sealed class CodexAgentSettings
+    {
+        public string CodexModel { get; set; }
+
+        public string CodexReasoningEffort { get; set; }
+
+        public string CodexHome { get; internal set; }
+
+        public string CodexSandbox { get; internal set; }
+
+        internal CodexAgentSettings Clone()
+        {
+            return new CodexAgentSettings
+            {
+                CodexModel = CodexModel,
+                CodexReasoningEffort = CodexReasoningEffort,
+                CodexHome = CodexHome,
+                CodexSandbox = CodexSandbox
+            };
         }
     }
 
