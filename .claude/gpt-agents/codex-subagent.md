@@ -1,6 +1,6 @@
 ---
 codex_home: ~/.codex-subagent  # サブエージェント専用アカウント
-codex_model: gpt-5.6-sol
+codex_model: gpt-6-sol
 codex_reasoning_effort: medium
 codex_sandbox: workspace-write
 ---

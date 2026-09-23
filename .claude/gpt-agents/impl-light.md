@@ -1,6 +1,6 @@
 ---
 codex_home: ~/.codex-subagent  # サブエージェント専用アカウント
-codex_model: gpt-5.6-luna
+codex_model: gpt-6-luna
 codex_reasoning_effort: high
 codex_sandbox: workspace-write
 ---
