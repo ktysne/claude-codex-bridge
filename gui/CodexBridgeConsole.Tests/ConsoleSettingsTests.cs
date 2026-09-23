@@ -14,6 +14,8 @@ namespace CodexBridgeConsole.Tests
         private const string GptHardPath = "gpt-agents\\impl-hard.md";
         private const string GptStandardPath = "gpt-agents\\impl-standard.md";
         private const string GptLightPath = "gpt-agents\\impl-light.md";
+        private const string CodexReviewPath = "gpt-agents\\codex-review.md";
+        private const string CodexSubagentPath = "gpt-agents\\codex-subagent.md";
 
         private static readonly string[] DefinitionPaths =
         {
@@ -23,6 +25,18 @@ namespace CodexBridgeConsole.Tests
             GptHardPath,
             GptStandardPath,
             GptLightPath
+        };
+
+        private static readonly string[] AllDefinitionPaths =
+        {
+            ClaudeHardPath,
+            ClaudeStandardPath,
+            ClaudeLightPath,
+            GptHardPath,
+            GptStandardPath,
+            GptLightPath,
+            CodexReviewPath,
+            CodexSubagentPath
         };
 
         [Fact]
@@ -1322,6 +1336,349 @@ namespace CodexBridgeConsole.Tests
                 Assert.Contains("codex_home: \"~/.codex\"", ReadDefinition(directory, GptHardPath));
                 Assert.False(settings.CodexHomeMismatch);
                 Assert.False(settings.NeedsSave);
+            }
+        }
+
+        [Fact]
+        public void Load_ReadsCodexAgentDefinitionsIncludingReadOnlyHomeAndSandbox()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteAllDefinitions(directory);
+
+                var settings = CreateSettings(directory);
+
+                Assert.Equal("gpt-review-model", settings.CodexReview.CodexModel);
+                Assert.Equal("medium", settings.CodexReview.CodexReasoningEffort);
+                Assert.Equal("~/.codex", settings.CodexReview.CodexHome);
+                Assert.Equal("read-only", settings.CodexReview.CodexSandbox);
+                Assert.Equal("gpt-subagent-model", settings.CodexSubagent.CodexModel);
+                Assert.Equal("high", settings.CodexSubagent.CodexReasoningEffort);
+                Assert.Equal("~/.codex-subagent", settings.CodexSubagent.CodexHome);
+                Assert.Equal("workspace-write", settings.CodexSubagent.CodexSandbox);
+                Assert.True(settings.SubagentTabAvailable);
+                Assert.True(settings.ReviewTabAvailable);
+                Assert.Empty(settings.ReviewMissingFiles);
+                Assert.Empty(settings.ReviewUnreadableFiles);
+                Assert.False(settings.HasChanges);
+                Assert.False(settings.CanSave);
+            }
+        }
+
+        [Fact]
+        public void Load_FillsOmittedEffortOfCodexAgentWithScriptDefault()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteAllDefinitions(directory);
+                WriteDefinition(
+                    directory,
+                    CodexSubagentPath,
+                    "---\ncodex_home: ~/.codex-subagent\ncodex_model: gpt-subagent-model\ncodex_sandbox: workspace-write\n---\n本文\n");
+
+                var settings = CreateSettings(directory);
+
+                Assert.Equal("medium", settings.CodexSubagent.CodexReasoningEffort);
+                Assert.Empty(settings.Validate());
+            }
+        }
+
+        [Fact]
+        public void Save_ChangingCodexReviewModelOnlyChangesItsDefinition()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteAllDefinitions(directory);
+                Dictionary<string, byte[]> originals = ReadAllDefinitionBytes(directory);
+                var settings = CreateSettings(directory);
+
+                settings.CodexReview.CodexModel = "gpt-review-updated";
+                Assert.Equal(
+                    new[] { CodexReviewPath + " の codex_model: gpt-review-model → gpt-review-updated" },
+                    settings.DescribeChanges());
+                Assert.True(settings.CanSave);
+
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.True(result.Succeeded);
+                Assert.Equal(new[] { CodexReviewPath }, result.ChangedFiles);
+                string review = ReadDefinition(directory, CodexReviewPath);
+                Assert.Contains("codex_model: \"gpt-review-updated\"", review);
+                Assert.Contains("codex_home: ~/.codex  # 通常利用とレビュー\n", review);
+                AssertUnchangedExcept(directory, originals, CodexReviewPath);
+                Assert.False(settings.HasChanges);
+            }
+        }
+
+        [Fact]
+        public void Save_SubagentTabSavesWhenOnlyCodexReviewDefinitionIsMissing()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteAllDefinitions(directory);
+                File.Delete(GetPath(directory, CodexReviewPath));
+                var settings = CreateSettings(directory);
+
+                Assert.Equal(new[] { CodexReviewPath }, settings.ReviewMissingFiles);
+                Assert.False(settings.ReviewTabAvailable);
+                Assert.Empty(settings.MissingFiles);
+                Assert.True(settings.SubagentTabAvailable);
+
+                settings.ImplHard.ClaudeModel = "claude-hard-model-updated";
+                Assert.True(settings.CanSave);
+
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.True(result.Succeeded);
+                Assert.Equal(new[] { ClaudeHardPath }, result.ChangedFiles);
+                Assert.False(File.Exists(GetPath(directory, CodexReviewPath)));
+            }
+        }
+
+        [Fact]
+        public void Save_ReviewTabSavesWhenASubagentDefinitionIsMissing()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteAllDefinitions(directory);
+                File.Delete(GetPath(directory, ClaudeHardPath));
+                Dictionary<string, byte[]> originals = ReadAllDefinitionBytes(directory);
+                var settings = CreateSettings(directory);
+
+                Assert.Equal(new[] { ClaudeHardPath }, settings.MissingFiles);
+                Assert.False(settings.SubagentTabAvailable);
+                Assert.True(settings.ReviewTabAvailable);
+                Assert.False(settings.CanSave);
+
+                settings.CodexSubagent.CodexReasoningEffort = "xhigh";
+                Assert.True(settings.CanSave);
+
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.True(result.Succeeded);
+                Assert.Equal(new[] { CodexSubagentPath }, result.ChangedFiles);
+                Assert.Contains(
+                    "codex_reasoning_effort: \"xhigh\"",
+                    ReadDefinition(directory, CodexSubagentPath));
+                AssertUnchangedExcept(directory, originals, CodexSubagentPath);
+            }
+        }
+
+        [Fact]
+        public void Save_FailsWhenEditedTabHasMissingDefinition()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteAllDefinitions(directory);
+                var settings = CreateSettings(directory);
+                settings.CodexReview.CodexModel = "gpt-review-edited";
+
+                // 入力を保持したまま読み直すと、欠けたタブにも編集が残る。黙って捨てずに保存を止める。
+                File.Delete(GetPath(directory, CodexReviewPath));
+                settings.ReloadPreservingEdits();
+                settings.ImplHard.ClaudeModel = "claude-hard-model-updated";
+
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.False(result.Succeeded);
+                Assert.Contains("定義ファイルが存在しない: " + CodexReviewPath, result.ValidationErrors);
+                Assert.Contains("claude-hard-model\n", ReadDefinition(directory, ClaudeHardPath));
+            }
+        }
+
+        [Theory]
+        [InlineData("codex-review")]
+        [InlineData("codex-subagent")]
+        public void Save_RejectsEmptyCodexModelOfCodexAgent(string definitionName)
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteAllDefinitions(directory);
+                Dictionary<string, byte[]> originals = ReadAllDefinitionBytes(directory);
+                var settings = CreateSettings(directory);
+                CodexAgentSettings target = definitionName == "codex-review"
+                    ? settings.CodexReview
+                    : settings.CodexSubagent;
+                target.CodexModel = string.Empty;
+                settings.ImplHard.ClaudeModel = "claude-hard-model-updated";
+
+                Assert.Equal(new[] { "gpt-agents\\" + definitionName + ".md の codex_model が空である" }, settings.Validate());
+
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.False(result.Succeeded);
+                Assert.Empty(result.ChangedFiles);
+                AssertUnchangedExcept(directory, originals, null);
+            }
+        }
+
+        [Fact]
+        public void Validate_AppliesCharacterAndEffortRulesToCodexAgents()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteAllDefinitions(directory);
+                var settings = CreateSettings(directory);
+
+                settings.CodexReview.CodexModel = "gpt review";
+                settings.CodexSubagent.CodexReasoningEffort = "invalid";
+
+                IReadOnlyList<string> errors = settings.Validate();
+
+                Assert.Equal(2, errors.Count);
+                Assert.StartsWith(CodexReviewPath + " の codex_model に使えない文字がある: gpt review", errors[0]);
+                Assert.StartsWith(CodexSubagentPath + " の codex_reasoning_effort が不正である: invalid", errors[1]);
+            }
+        }
+
+        [Fact]
+        public void Save_CodexEnabledToggleDoesNotWriteToCodexAgents()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteAllDefinitions(directory);
+                byte[] reviewBefore = File.ReadAllBytes(GetPath(directory, CodexReviewPath));
+                byte[] subagentBefore = File.ReadAllBytes(GetPath(directory, CodexSubagentPath));
+                var settings = CreateSettings(directory);
+
+                settings.CodexEnabled = false;
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.True(result.Succeeded);
+                Assert.Contains(GptLightPath, result.ChangedFiles);
+                Assert.DoesNotContain(CodexReviewPath, result.ChangedFiles);
+                Assert.DoesNotContain(CodexSubagentPath, result.ChangedFiles);
+                Assert.Equal(reviewBefore, File.ReadAllBytes(GetPath(directory, CodexReviewPath)));
+                Assert.Equal(subagentBefore, File.ReadAllBytes(GetPath(directory, CodexSubagentPath)));
+                Assert.DoesNotContain("codex_enabled", ReadDefinition(directory, CodexReviewPath));
+                Assert.DoesNotContain("codex_enabled", ReadDefinition(directory, CodexSubagentPath));
+            }
+        }
+
+        [Fact]
+        public void Save_CodexHomeSelectionDoesNotWriteToCodexAgents()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteAllDefinitions(directory);
+
+                // 2 定義のどちらとも違う値を選び、書き込まれたら差分が出るようにする。
+                CreateCodexHomes(directory, ".codex-other");
+                byte[] reviewBefore = File.ReadAllBytes(GetPath(directory, CodexReviewPath));
+                byte[] subagentBefore = File.ReadAllBytes(GetPath(directory, CodexSubagentPath));
+                var settings = CreateSettings(directory);
+
+                settings.CodexHome = "~/.codex-other";
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.True(result.Succeeded);
+                Assert.Contains("codex_home: \"~/.codex-other\"", ReadDefinition(directory, GptLightPath));
+                Assert.DoesNotContain(CodexReviewPath, result.ChangedFiles);
+                Assert.DoesNotContain(CodexSubagentPath, result.ChangedFiles);
+                Assert.Equal(reviewBefore, File.ReadAllBytes(GetPath(directory, CodexReviewPath)));
+                Assert.Equal(subagentBefore, File.ReadAllBytes(GetPath(directory, CodexSubagentPath)));
+                Assert.Equal("~/.codex", settings.CodexReview.CodexHome);
+                Assert.Equal("~/.codex-subagent", settings.CodexSubagent.CodexHome);
+            }
+        }
+
+        [Fact]
+        public void ReloadPreservingEdits_ReportsExternalChangeOnCodexAgent()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteAllDefinitions(directory);
+                var settings = CreateSettings(directory);
+                settings.CodexReview.CodexModel = "gpt-review-edited";
+
+                // 編集した項目と、編集していない項目をそれぞれ外部で変える。
+                WriteDefinition(
+                    directory,
+                    CodexReviewPath,
+                    CodexReviewDefinition().Replace(
+                        "codex_model: gpt-review-model\n",
+                        "codex_model: gpt-review-external\n"));
+                WriteDefinition(
+                    directory,
+                    CodexSubagentPath,
+                    CodexSubagentDefinition().Replace(
+                        "codex_reasoning_effort: high\n",
+                        "codex_reasoning_effort: low\n"));
+
+                IReadOnlyList<string> conflicts = settings.ReloadPreservingEdits();
+
+                Assert.Equal(
+                    new[]
+                    {
+                        CodexReviewPath + " の codex_model: 外部で gpt-review-external に変わったが、入力中の gpt-review-edited を優先する"
+                    },
+                    conflicts);
+                Assert.Equal("gpt-review-edited", settings.CodexReview.CodexModel);
+                Assert.Equal("low", settings.CodexSubagent.CodexReasoningEffort);
+                Assert.Equal(
+                    new[] { CodexReviewPath + " の codex_model: gpt-review-external → gpt-review-edited" },
+                    settings.DescribeChanges());
+            }
+        }
+
+        private static void WriteAllDefinitions(TemporaryDirectory directory)
+        {
+            WriteDefinitions(directory);
+            WriteDefinition(directory, CodexReviewPath, CodexReviewDefinition());
+            WriteDefinition(directory, CodexSubagentPath, CodexSubagentDefinition());
+        }
+
+        // 実際の .claude/gpt-agents/codex-review.md と同じく codex_home に行内コメントを持たせる。
+        private static string CodexReviewDefinition()
+        {
+            return "---\n"
+                + "codex_home: ~/.codex  # 通常利用とレビュー\n"
+                + "codex_model: gpt-review-model\n"
+                + "codex_reasoning_effort: medium\n"
+                + "codex_sandbox: read-only\n"
+                + "---\n"
+                + "レビューの本文を1行置く。\n";
+        }
+
+        private static string CodexSubagentDefinition()
+        {
+            return "---\n"
+                + "codex_home: ~/.codex-subagent\n"
+                + "codex_model: gpt-subagent-model\n"
+                + "codex_reasoning_effort: high\n"
+                + "codex_sandbox: workspace-write\n"
+                + "---\n"
+                + "実装補助の本文を1行置く。\n";
+        }
+
+        private static Dictionary<string, byte[]> ReadAllDefinitionBytes(TemporaryDirectory directory)
+        {
+            var originals = new Dictionary<string, byte[]>();
+            foreach (string relativePath in AllDefinitionPaths)
+            {
+                string path = GetPath(directory, relativePath);
+                if (File.Exists(path))
+                {
+                    originals.Add(relativePath, File.ReadAllBytes(path));
+                }
+            }
+
+            return originals;
+        }
+
+        private static void AssertUnchangedExcept(
+            TemporaryDirectory directory,
+            Dictionary<string, byte[]> originals,
+            string changedPath)
+        {
+            foreach (KeyValuePair<string, byte[]> original in originals)
+            {
+                if (original.Key == changedPath)
+                {
+                    continue;
+                }
+
+                Assert.Equal(original.Value, File.ReadAllBytes(GetPath(directory, original.Key)));
             }
         }
 
