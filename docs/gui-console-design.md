@@ -1,17 +1,24 @@
 # 設定コンソール(Windows GUI)の設計
 
-`impl-hard`、`impl-standard`、`impl-light` の定義ファイルを Windows の GUI から書き換えるための設定コンソールの設計である。
+bridge が扱う 5 定義(`impl-hard`、`impl-standard`、`impl-light`、`codex-review`、`codex-subagent`)の定義ファイルを Windows の GUI から書き換えるための設定コンソールの設計である。
 実装は済んでおり、この文書は仕様と制約を残す。
 使い方は [gui.md](gui.md) を参照する。
 末尾の「実装の段階」には、実装時の変更範囲と検証方法を記載している。
 
 ## 目的と範囲
 
-設定コンソールは、次の 3 つを GUI から行えるようにする。
+設定コンソールは、次の 4 つを GUI から行えるようにする。
 
 - GPT 系サブエージェント経路(`impl-hard`、`impl-standard`、`impl-light` が Codex へ委譲する経路)の有効と無効を切り替える。
 - hard、standard、light の各区分で使う Claude 側のモデルと effort をプルダウンで選ぶ。
 - hard、standard、light の各区分で使う GPT 側のモデルと effort をプルダウンで選ぶ。GPT モデルの選択肢には「(未設定)」を含み、選ぶとその区分は GPT 側を使わない。
+- `codex-review` と `codex-subagent` が Codex を起動するときのモデルと effort をプルダウンで選ぶ。
+
+画面は 2 つのタブに分かれる。
+**サブエージェントタブ**は前者 3 つ(`impl-hard`、`impl-standard`、`impl-light`)を、**レビューと実装補助タブ**は後者 1 つ(`codex-review`、`codex-subagent`)を扱う。
+タブを分けるのは、2 群の定義で「GPT 側を使わない」状態の意味が違うためである。
+前者 3 定義は GPT 側が使えなければ Claude 側にフォールバックするが、後者 2 定義は明示的に Codex へ依頼する定義であり、フォールバックせずに失敗する。
+同じ表に並べると、前者向けの「(未設定)」や有効無効の切替が後者にも効くように見える。
 
 設定コンソールは Codex も Claude Code も起動しない。
 Claude Code と `tools/codex-agent.sh` がセッション開始時や呼び出し時に読む定義ファイルのフロントマターだけを書き換える設定エディタである。
@@ -24,7 +31,7 @@ Claude Code と `tools/codex-agent.sh` がセッション開始時や呼び出�
 
 C# と Windows Forms で書き、ターゲットフレームワークは .NET Framework 4.8 とする。
 Windows 10 1903 以降と Windows 11 には 4.8 が同梱されているため、ランタイムを別途導入せずに exe 単体で起動する。
-画面はコンボボックスとチェックボックスが十数個の静的なフォームであり、デザイナを使わずコードで組み立てる。
+画面はタブ 2 枚にコンボボックスとチェックボックスが二十個ほど並ぶ静的なフォームであり、デザイナを使わずコードで組み立てる。
 
 ビルドは .NET SDK の `dotnet build` で行う。
 `net48` をターゲットにすると SDK が参照アセンブリの NuGet パッケージを自動で取得するため、Visual Studio や Developer Pack は要らない。
@@ -35,15 +42,26 @@ Windows 10 1903 以降と Windows 11 には 4.8 が同梱されているため�
 二層の役割は [gpt-agents.md](gpt-agents.md) の「定義ファイルの二層」を参照。
 設定コンソールが書き換えるキーは次の表のとおりである。
 
-| 区分 | Claude 側(`agents/<name>.md`) | GPT 側(`gpt-agents/<name>.md`) |
-|---|---|---|
-| hard(`impl-hard`) | `model`、`effort` | `codex_home`、`codex_enabled`、`codex_model`、`codex_reasoning_effort` |
-| standard(`impl-standard`) | `model`、`effort`(フォールバック時に使う) | 同上 |
-| light(`impl-light`) | 同上 | 同上 |
+| タブ | 区分 | Claude 側(`agents/<name>.md`) | GPT 側(`gpt-agents/<name>.md`) |
+|---|---|---|---|
+| サブエージェント | hard(`impl-hard`) | `model`、`effort` | `codex_home`、`codex_enabled`、`codex_model`、`codex_reasoning_effort` |
+| サブエージェント | standard(`impl-standard`) | `model`、`effort`(フォールバック時に使う) | 同上 |
+| サブエージェント | light(`impl-light`) | 同上 | 同上 |
+| レビューと実装補助 | レビュー(`codex-review`) | 書き換えない | `codex_model`、`codex_reasoning_effort` |
+| レビューと実装補助 | 実装補助(`codex-subagent`) | 書き換えない | 同上 |
 
 `codex_sandbox` は表示するだけで編集させない。
 サンドボックスを GUI から緩められると、[CLAUDE.md](../CLAUDE.md) の「権限の固定」の原則に反するためである。
-`codex-review` と `codex-subagent` の 2 定義には触れない。
+
+### レビューと実装補助タブで書き換えない項目
+
+`codex-review` と `codex-subagent` では、GPT 側の `codex_model` と `codex_reasoning_effort` だけを書き換える。
+他の項目を対象から外す理由は次のとおりである。
+
+- **Claude 側の `model`**：この 2 定義の Claude 側は、依頼文を `tools/codex-agent.sh` へ転送するだけの薄い包みである。値は Claude Code のモデル別名(`haiku`)であり、`effort` キーも持たない。転送だけの定義でモデルを選ばせても結果は変わらないため、読み込みも表示もしない。
+- **`codex_home`**：[CLAUDE.md](../CLAUDE.md) の「認証ホームの配置」が、`codex-review` は `~/.codex`、`codex-subagent` は `~/.codex-subagent` と定めている。画面から変えられると「用途固定の原則」に反するため、`codex_sandbox` と同じく表示だけにする。サブエージェントタブの `codex_home` の選択は、この 2 定義には及ばない。
+- **`codex_enabled`**：この 2 定義は明示的に Codex へ依頼する定義であり、Claude 側が代行すると依頼の意味が変わる。サブエージェントタブのトグルはこの 2 定義に書かず、`tools/codex-agent.sh` がこの 2 定義で `codex_enabled` を読む挙動も変えない。
+- **「(未設定)」**：`codex_model` が空だとスクリプトは終了コード 3 で止まり、この 2 定義はフォールバックしないので依頼がそのまま失敗する。GPT モデルの選択肢に「(未設定)」を置かず、保存前の検証で空を拒む。
 
 ### Claude 側の `model` と `effort`
 
@@ -75,10 +93,11 @@ GPT 側定義を別名に退避すれば疑似的に無効化できるが、設�
 
 ### 認証ホームの切り替え
 
-`codex_home` は、`%USERPROFILE%` 直下に実在する `.codex` で始まるディレクトリから選ぶ。
+サブエージェントタブの `codex_home` は、`%USERPROFILE%` 直下に実在する `.codex` で始まるディレクトリから選ぶ。
 値は `~/.codex-subagent` の形で扱い、任意のパスは入力させない。
-設定コンソールの役割はサブエージェント(`impl-hard`、`impl-light`、`impl-standard`)の設定を切り替えることであり、どのホームをどの用途に割り当てるかは縛らない。
+このタブの役割は `impl-hard`、`impl-light`、`impl-standard` の設定を切り替えることであり、どのホームをどの用途に割り当てるかは縛らない。
 用途の割り当ては [CLAUDE.md](../CLAUDE.md) の「用途固定の原則」が定める。
+レビューと実装補助タブでは `codex_home` を定義ごとに表示するだけで、選ばせない(「レビューと実装補助タブで書き換えない項目」を参照)。
 
 選んだ値は、`codex_enabled` と同じく `impl-hard`、`impl-light`、`impl-standard` の 3 つへ書く。
 3 定義を 1 つの設定として扱うためである。
@@ -95,32 +114,50 @@ GPT 側定義を別名に退避すれば疑似的に無効化できるが、設�
 ## 画面
 
 ウィンドウは 1 枚で、リサイズしない。
+タブの切り替えで大きさが変わらないよう、ウィンドウの大きさは 2 つのタブの内容のうち大きいほうに合わせる。
+対象の行、状態行、保存と閉じるのボタンはタブの外に置き、どちらのタブでも同じ位置に見せる。
 
 ```text
 ┌ claude-codex-bridge 設定コンソール ───────────────────────────────────────┐
 │ 対象: C:\Users\<user>\.claude                                    [再読込]  │
-│                                                                           │
-│ [x] GPT 系サブエージェント経路を有効にする (impl-hard / impl-standard / impl-light) │
-│                                                                           │
-│ 区分      Claude モデル        effort     GPT モデル        effort        │
-│ hard      [claude-opus-5-5  v] [high   v]  [(未設定)      v]              │
-│ standard  [claude-opus-5-5  v] [medium v]  [gpt-6-luna    v] [max    v]   │
-│ light     [claude-sonnet-5  v] [medium v]  [gpt-6-luna    v] [xhigh  v]   │
-│                                                                           │
-│ codex_home: [~/.codex-subagent v]  codex_sandbox: workspace-write         │
-│ codex --version: 0.xx.x                                                   │
-│ GPT モデル一覧: codex debug models から取得                               │
+│ ┌ サブエージェント ┐┌ レビューと実装補助 ┐                                 │
+│ │                                                                        │ │
+│ │ [x] GPT 系サブエージェント経路を有効にする (impl-hard / impl-standard / impl-light) │
+│ │                                                                        │ │
+│ │ 区分      Claude モデル        effort     GPT モデル        effort     │ │
+│ │ hard      [claude-opus-5-5  v] [high   v]  [(未設定)      v]           │ │
+│ │ standard  [claude-opus-5-5  v] [medium v]  [gpt-6-luna    v] [max    v]│ │
+│ │ light     [claude-sonnet-5  v] [medium v]  [gpt-6-luna    v] [xhigh  v]│ │
+│ │                                                                        │ │
+│ │ codex_home: [~/.codex-subagent v]  codex_sandbox: workspace-write      │ │
+│ │ codex --version: 0.xx.x                                                │ │
+│ │ GPT モデル一覧: codex debug models から取得                            │ │
+│ └────────────────────────────────────────────────────────────────────────┘ │
 │ 保存後、Claude Code を再起動すると反映される                              │
 │                                                            [保存] [閉じる] │
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **対象**：`%USERPROFILE%\.claude` を固定で表示する。定義ファイルが 1 つでも無ければ、無いファイル名と docs/setup.md に配置手順があることを示して保存ボタンを無効にする。
-- **トグル**：チェックを外すと GPT モデルと effort の列を無効表示(灰色)にする。hard を含む 3 行すべてが対象である。値は保持し、再びチェックを入れると元に戻る。
-- **プルダウン**：モデルと effort は入力可のコンボボックス(`DropDownStyle = DropDown`)にする。選択肢に無いモデル名を将来使えるようにするためである。一覧はスクロールさせずに全件を並べる(上限 20 件)。スクロールすると、選択中の値より上の候補が隠れて選択肢に無いように見えるためである。GPT モデルの選択肢には、`choices.json` や `codex debug models` の内容によらず先頭に固定の「(未設定)」を加える。選ぶとその区分は `codex_model` を空にし、その行の GPT effort を無効にする。認証ホームだけは選ぶだけにする(「認証ホームの切り替え」を参照)。
-- **状態行**：`impl-light` の GPT 側定義から `codex_home` と `codex_sandbox` を読む。`codex_home` は選べるコンボボックス(`DropDownStyle = DropDownList`)にし、`codex_sandbox` は文字列で表示する。`codex --version` と `codex debug models` は、選択中の認証ホームを `CODEX_HOME` に渡して実行する。ホームを切り替えると引き直し、引いた結果はホームごとに持っておく。取得の間は「確認中...」と「取得中...」を表示し、結果が返った時点でそのホームがまだ選ばれているときだけ画面へ反映する。`codex` が無ければ「見つからない」と表示する。`GPT モデル一覧` は、GPT 側のモデルと effort の選択肢が `codex debug models` の目録と既定値のどちらから来ているかを表示する。ログイン状態(`codex login status`)は初版では表示しない。
-- **保存**：6 ファイルが揃っていて、未保存の変更か修復待ちがあるときだけボタンを押せる。修復待ちとは、`codex_enabled` の不正値と、選択中の値で揃えられる `codex_home` の食い違いである。検証に通れば 6 ファイル(Claude 側 3 つ、GPT 側 3 つ)を書き換え、値が変わっていないファイルには触れない。状態行は「未保存の変更があります」「変更はありません」「保存しました。書き換えたファイル: ...」「保存しました。変更はありません」のいずれかを常に示し、検証エラーと保存失敗は赤色で示す。照合に失敗した場合は保存せず、入力を保持する再読込を促すダイアログを出す。
-- **再読込**：ファイルから読み直す。未保存の変更があるときは変更項目を列挙し、「はい」で編集した項目だけ入力中の値を残して読み直し(外部でも変わっていた項目は入力中の値を優先して知らせる)、「いいえ」で入力を捨てて読み直し、「キャンセル」で何もしない。既定ボタンは「キャンセル」とする。未保存の変更がないときは確認ダイアログを出さずに読み直す。
+```text
+│ ┌ サブエージェント ┐┌ レビューと実装補助 ┐                                 │
+│ │                                                                        │ │
+│ │ 定義            GPT モデル        effort     codex_home         codex_sandbox │
+│ │ codex-review    [gpt-6-sol     v] [medium v] ~/.codex           read-only     │
+│ │ codex-subagent  [gpt-6-sol     v] [medium v] ~/.codex-subagent  workspace-write │
+│ │                                                                        │ │
+│ │ codex --version: ~/.codex 0.xx.x / ~/.codex-subagent 0.xx.x            │ │
+│ │ GPT モデル一覧: ~/.codex は codex debug models から取得 / ~/.codex-subagent は既定値 │
+│ └────────────────────────────────────────────────────────────────────────┘ │
+```
+
+- **対象**：`%USERPROFILE%\.claude` を固定で表示する。定義ファイルが無いときの扱いはタブごとに分ける(「タブごとの保存可否」を参照)。
+- **トグル**：チェックを外すと GPT モデルと effort の列を無効表示(灰色)にする。hard を含む 3 行すべてが対象である。値は保持し、再びチェックを入れると元に戻る。レビューと実装補助タブには効かない。
+- **プルダウン**：モデルと effort は入力可のコンボボックス(`DropDownStyle = DropDown`)にする。選択肢に無いモデル名を将来使えるようにするためである。一覧はスクロールさせずに全件を並べる(上限 20 件)。スクロールすると、選択中の値より上の候補が隠れて選択肢に無いように見えるためである。サブエージェントタブの GPT モデルの選択肢には、`choices.json` や `codex debug models` の内容によらず先頭に固定の「(未設定)」を加える。選ぶとその区分は `codex_model` を空にし、その行の GPT effort を無効にする。レビューと実装補助タブの GPT モデルには「(未設定)」を加えない。認証ホームだけは選ぶだけにする(「認証ホームの切り替え」を参照)。
+- **サブエージェントタブの状態行**：`impl-light` の GPT 側定義から `codex_home` と `codex_sandbox` を読む。`codex_home` は選べるコンボボックス(`DropDownStyle = DropDownList`)にし、`codex_sandbox` は文字列で表示する。`codex --version` と `codex debug models` は、選択中の認証ホームを `CODEX_HOME` に渡して実行する。ホームを切り替えると引き直し、引いた結果はホームごとに持っておく。取得の間は「確認中...」と「取得中...」を表示し、結果が返った時点でそのホームがまだ選ばれているときだけ画面へ反映する。`codex` が無ければ「見つからない」と表示する。`GPT モデル一覧` は、GPT 側のモデルと effort の選択肢が `codex debug models` の目録と既定値のどちらから来ているかを表示する。ログイン状態(`codex login status`)は表示しない。
+- **レビューと実装補助タブの状態行**：各定義の GPT 側定義から読んだ `codex_home` と `codex_sandbox` を、その行に文字列で表示する。`codex --version` と `codex debug models` は、2 定義の `codex_home` それぞれについて起動時に引き、結果はサブエージェントタブと同じホーム別の控えに入れる。2 定義の `codex_home` が同じなら 1 回だけ引く。各行の GPT モデルと effort の選択肢は、その行の `codex_home` で引いた目録から作る。目録が引けなければ既定値を使う。状態行は 2 つのホームの結果を並べて表示する。
+- **タブごとの保存可否**：サブエージェントタブは 6 ファイル(Claude 側 3 つ、GPT 側 3 つ)、レビューと実装補助タブは GPT 側 2 ファイルを対象にする。あるタブの対象ファイルが 1 つでも無いか読めなければ、そのタブの入力を無効表示にし、無いファイル名と docs/setup.md に配置手順があることをそのタブに示す。もう一方のタブは影響を受けず、単独で保存できる。片方の欠落でもう片方を止めると、`codex-review` の定義を置いていない利用者がサブエージェントの設定を変えられなくなるためである。
+- **保存**：いずれかのタブに未保存の変更か修復待ちがあるときだけボタンを押せる。修復待ちとは、`codex_enabled` の不正値と、選択中の値で揃えられる `codex_home` の食い違いである(どちらもサブエージェントタブだけにある)。検証に通れば、対象ファイルが揃っているタブの 8 ファイルを書き換え、値が変わっていないファイルには触れない。対象ファイルが欠けているタブは書き換えの対象から外す。状態行は「未保存の変更があります」「変更はありません」「保存しました。書き換えたファイル: ...」「保存しました。変更はありません」のいずれかを常に示し、検証エラーと保存失敗は赤色で示す。変更項目の列挙と検証エラーには、どのタブの項目かが分かるよう定義名を添える。照合に失敗した場合は保存せず、入力を保持する再読込を促すダイアログを出す。
+- **再読込**：8 ファイルを読み直す。未保存の変更があるときは変更項目を列挙し、「はい」で編集した項目だけ入力中の値を残して読み直し(外部でも変わっていた項目は入力中の値を優先して知らせる)、「いいえ」で入力を捨てて読み直し、「キャンセル」で何もしない。既定ボタンは「キャンセル」とする。未保存の変更がないときは確認ダイアログを出さずに読み直す。
 - **閉じる**：未保存の変更があるときは変更項目を列挙した確認ダイアログを出し、保存して閉じるか、変更を破棄して閉じるか、キャンセルするかを選ぶ。
 
 Claude Code はエージェント定義をセッション開始時に読み込むため、保存しても起動中のセッションには反映されない。
@@ -190,9 +227,15 @@ Claude 側のモデルには相当する取得手段が無い。Claude Code に�
 
 - Claude 側の `model` または `effort` が空である。
 - GPT 側の `codex_reasoning_effort` が `low`、`medium`、`high`、`xhigh`、`max`、`ultra` のいずれでもない。
+- `codex-review` または `codex-subagent` の `codex_model` が空である。
 - `model`、`effort`、`codex_model` に、英数字と `.`、`_`、`-`、`/` 以外の文字がある。
 
-GPT 側の `codex_model` は、空でもエラーにしない。空はその区分で GPT 側を使わない設定として扱われ、トグルの有効・無効にかかわらず検査しない。
+対象ファイルが欠けているタブの項目は検査しない。
+そのタブは書き換えの対象から外れるためである。
+
+`impl-hard`、`impl-standard`、`impl-light` の `codex_model` は、空でもエラーにしない。空はその区分で GPT 側を使わない設定として扱われ、トグルの有効・無効にかかわらず検査しない。
+`codex-review` と `codex-subagent` の `codex_model` は空を拒む。
+この 2 定義は空だと依頼が失敗するだけで、空にする用途が無いためである。
 値は二重引用符で囲んで書くため、`true` や `123` のような YAML の予約語と数値もそのまま保存できる。
 使える文字を絞るのは、`fm_get` がエスケープを戻さないためである。
 
@@ -260,7 +303,7 @@ gui/
 │   ├─ Program.cs                    エントリポイント
 │   ├─ MainForm.cs                   画面の組み立てとイベント
 │   ├─ SelectionPreservingComboBox.cs  大きさの変更で選択範囲が変わらないコンボボックス
-│   ├─ ConsoleSettings.cs            6 ファイルの読み込み、検証、保存
+│   ├─ ConsoleSettings.cs            8 ファイルの読み込み、検証、保存
 │   ├─ FrontMatterFile.cs            フロントマターの読み書き
 │   ├─ FrontMatterFileChangedException.cs  読み込み後の外部変更を表す例外
 │   ├─ CodexModelCatalog.cs          codex debug models の目録
@@ -321,13 +364,40 @@ bash tools/codex-agent.sh impl-light --effort low <<< "Reply with exactly: PONG-
 
 ### 追記：`impl-hard` の GPT 側定義への対応
 
-段階 1〜3 の完了後、`impl-hard` にも GPT 側定義(`.claude/gpt-agents/impl-hard.md`)を追加し、対象ファイルを 6 ファイル、GPT 側の区分を 3 つに広げた。
+段階 1〜3 の完了後、`impl-hard` にも GPT 側定義(`.claude/gpt-agents/impl-hard.md`)を追加し、サブエージェントタブの対象ファイルを 6 ファイル、GPT 側の区分を 3 つに広げた。
 `impl-hard` の GPT モデルは既定で「(未設定)」であり、この状態では `codex_model` を書かず Claude 側だけで実装する。
 この節より前の各節は、この対応後の仕様を記載している。
+
+### 追記：レビューと実装補助タブの追加
+
+`impl-hard` の対応後、`codex-review` と `codex-subagent` の GPT 側定義を対象に加え、画面を 2 つのタブに分けた。
+この節より前の各節は、この対応後の仕様を記載している。
+変更は次の 3 段階に分け、段階ごとにブランチと PR を作る。
+段階 1 は設定クラスの構造を変えるため `impl-hard` に、段階 2 と 3 は `impl-standard` に委譲できる粒度である。
+
+#### 段階 1：設定クラスの定義単位への一般化
+
+- **変更対象**：`ConsoleSettings.cs`、`ConsoleSettingsTests.cs`
+- **期待する結果**：対象ファイルの一覧に `gpt-agents/codex-review.md` と `gpt-agents/codex-subagent.md` を加え、読み込み、差分の列挙、検証、保存が定義単位で回る。欠落と読み込み失敗はタブ単位で集計し、片方のタブの欠落でもう片方の保存が止まらない。`codex_enabled` と `codex_home` の一括書き込みは `impl-hard`、`impl-standard`、`impl-light` の 3 定義に限られたままである。`codex-review` と `codex-subagent` の `codex_model` が空のときは検証エラーになる。既存のテストは変更せずに通る。
+- **検証方法**：`dotnet test gui/CodexBridgeConsole.sln -c Release` が成功する。追加するテストには、片方のタブのファイルだけが無い状態での保存、2 定義の `codex_model` が空のときの検証エラー、2 定義の `codex_home` が `codex_enabled` の一括書き込みで変わらないことを含める。
+
+#### 段階 2：画面のタブ化
+
+- **変更対象**：`MainForm.cs`
+- **期待する結果**：「画面」の節のとおりに 2 つのタブが表示される。レビューと実装補助タブの GPT モデルには「(未設定)」が無く、`codex_home` と `codex_sandbox` は文字列で表示される。2 定義の `codex_home` それぞれについて `codex --version` と `codex debug models` を引き、各行の選択肢はその行のホームの目録から作られる。変更項目の列挙と検証エラーに定義名が付く。ウィンドウの大きさはタブの切り替えで変わらない。
+- **検証方法**：`dotnet build` と `dotnet publish` が成功する。発行した exe を起動し、両タブで値を変えて保存した後、対象ファイルの差分を `git diff --no-index` または目視で確認する。`gpt-agents/codex-review.md` を一時的に別名に退避し、サブエージェントタブだけで保存できることも確認する。確認後は元の値に戻す。
+
+#### 段階 3：文書
+
+- **変更対象**：`docs/gui.md`、`README.md` の設定コンソールの説明、`docs/setup.md` の参照
+- **期待する結果**：使い方の文書がタブ 2 枚の画面と、レビューと実装補助タブで書き換えない項目を説明している。
+- **検証方法**：文書の記述が「画面」と「書き換える項目」の節と一致することを目視で確認する。
 
 ## 既知の制約
 
 - 設定コンソールは Claude Code の起動中のセッションには影響しない。反映には再起動が要る。
-- 保存時の外部変更の検出には、ごく短い競合の余地が残る。照合を終えてから `File.Replace` で置き換えるまでの間に別のプロセスがそのファイルを保存すると、その変更を検出できない。照合から置換までを排他制御で囲むと、一時ファイルを経由した原子的な置き換えと両立しない。単一の利用者が 6 つのファイルを編集するこの用途では、この競合を許容する。
+- 保存時の外部変更の検出には、ごく短い競合の余地が残る。照合を終えてから `File.Replace` で置き換えるまでの間に別のプロセスがそのファイルを保存すると、その変更を検出できない。照合から置換までを排他制御で囲むと、一時ファイルを経由した原子的な置き換えと両立しない。単一の利用者が 8 つのファイルを編集するこの用途では、この競合を許容する。
 - ユーザ定義側だけを対象にするため、利用先プロジェクトの `.claude/` に同名の定義があると、そちらが優先されて設定コンソールの変更が効かない。優先順位は [gpt-agents.md](gpt-agents.md) の「定義の探索」を参照。
 - `codex_enabled: false` は `impl-hard`、`impl-light`、`impl-standard` を Claude 側の実装に切り替えるだけであり、`codex-review` と `codex-subagent` には影響しない。これらは明示的に Codex へ依頼する定義であり、Claude 側が代行すると依頼の意味が変わるためである。
+- レビューと実装補助タブは、利用先プロジェクトの `.claude/gpt-agents/` に同名の定義があればそちらに負ける。ai-cross-review も同じ探索順で定義を読むため、この場合は設定コンソールの値がクロスレビューにも効かない。
+- レビューと実装補助タブは `codex_home` を書き換えないため、認証ホームの割り当てを変えるには定義ファイルを手で直す。手順は [gpt-agents.md](gpt-agents.md) の「認証ホームの割り当て」にある。
