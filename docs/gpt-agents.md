@@ -133,7 +133,7 @@ Claude 側の定義(`.claude/agents/<name>.md`)のフロントマターは、Cla
 - **0**：Codex が完了した。出力にある Codex の最終報告をそのまま返し、Claude 側では実装しない。
 - **2**：引数、定義ファイルの内容、環境の不備でスクリプトが起動しなかった。フロントマターのキー不足、effort やサンドボックスの不正値、`codex_home` の不在、作業ディレクトリの不在、端末からの起動、空の依頼文がこれにあたる。実装せず、終了コードと出力の末尾を報告して終わる。
 - **3**：GPT 側が未導入、無効化、または未設定である。`codex` コマンドが PATH に無い、`.claude/gpt-agents/<name>.md` が見つからない、`codex_enabled: false` が書かれている、`codex_model` が無いか空である、のいずれかに当たる場合である。サブエージェント自身が Claude として実装し、その旨を報告の冒頭に書く。キー名の誤記も `codex_model` の未設定と同じ経路で Claude 側へ倒れるため、報告の冒頭には `codex-agent:` の理由行をそのまま添える。
-- **75**：呼び出し側では直せない GPT 側の事情で実行できなかった。利用上限の場合は `codex-agent: result=rate-limited`、それ以外の場合は `codex-agent: result=unavailable` として理由を区別する。`unavailable` は、いまのところモデルの混雑を示す `Selected model is at capacity` を対象にする。利用上限なら `codex-agent: rate-limit evidence: ...`、それ以外なら `codex-agent: unavailable evidence: ...` の行に判定の根拠を残す。サブエージェント自身が Claude として実装し、フォールバックした旨を報告の冒頭に書く。
+- **75**：呼び出し側では直せない GPT 側の事情で実行できなかった。利用上限の場合は `codex-agent: result=rate-limited`、それ以外の場合は `codex-agent: result=unavailable` として理由を区別する。`unavailable` は、いまのところモデルの混雑を示す `Selected model is at capacity` と、終了コード 0 でもツール接続が一度も成立しなかった実行(`code-mode host exited during handshake`)を対象にする。利用上限なら `codex-agent: rate-limit evidence: ...`、それ以外なら `codex-agent: unavailable evidence: ...` の行に判定の根拠を残す。サブエージェント自身が Claude として実装し、フォールバックした旨を報告の冒頭に書く。
 - **権限判定で拒否された場合**：Bash の実行自体が拒否され、終了コードを得られない。
   `impl-hard`、`impl-light`、`impl-standard` は Claude 側で実装し、報告の冒頭に「Codex の呼び出しが権限判定で拒否されたため Claude 側で実装した」と書く。
   `codex-review` と `codex-subagent` は拒否の文言をそのまま報告して停止する。
@@ -195,6 +195,10 @@ GPT 側の事情と判定したときは、その直前に `codex-agent: unavail
 従来のように出力の全文を対象にしないのは、Codex の出力には読み込んだファイルの中身も流れ、テストデータに含まれる文字列で誤検出するからである。
 末尾 10 行を残すのは、失敗の通知が `ERROR` で始まらない版があり得るためである。
 `unavailable` の判定は、上記の対象に `at capacity` が大文字小文字を問わず含まれる場合に限る。
+ただし終了コードが 0 でも、ログの `ERROR` を含む行(先頭にタイムスタンプが付く)に `code-mode host exited during handshake` があり、ツール実行の成功行(` succeeded in ` を含む行)が 1 行も無いときは `unavailable` とする。
+Codex は依頼を果たせなくても自分の応答を返せば 0 で終わるため、ツール接続が一度も成立しなかった実行を終了コードだけでは見分けられないからである。
+成功行が 1 行でもあれば `ok` のままにする。
+接続が一度失敗した後に復旧して作業を終えた実行を、失敗として扱わないためである。
 標準出力と標準エラーのどちらに通知されても判定できるようにするためである。
 標準エラー側は、`WARNING` と `hook:` で始まる行を除いた後の内容だけを見る。
 `429` は単語境界で照合し、ID や桁数の一致で誤検出しないようにしている。

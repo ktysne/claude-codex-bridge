@@ -493,6 +493,30 @@ cat "$out_file" >>"$log_file"
 # 最終回答が改行で終わらなくても、あとで追記する result= の行が独立した行になるようにする。
 end_newline "$log_file" >>"$log_file"
 
+# 根拠は 1 行ずつ接頭辞を付けて出す。
+# 呼び出し側の定義は result 行の直前に evidence 行が来ることを前提にしているため、
+# 接頭辞の無い行を間に挟まない。
+emit_evidence() {
+  printf '%s\n' "$2" | while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    printf 'codex-agent: %s evidence: %s\n' "$1" "$line"
+  done
+}
+
+# 終了コード 0 でも、ツール接続が一度も成立しなかった実行は依頼を果たしていないため 75 に倒す。
+# この ERROR 行は先頭にタイムスタンプが付くため、行頭でなく行内の ERROR で照合する。
+# ツール実行の成功行(" succeeded in ")が 1 行でもあれば、接続が復旧して作業できたとみなし ok のままにする。
+# 本文は変数に受けてから調べる。pipefail の下で grep -q へパイプすると、書き手が SIGPIPE で失敗して判定が反転しうるためである。
+if [ "$codex_status" -eq 0 ]; then
+  body="$(log_body)"
+  matched="$(printf '%s\n' "$body" | grep -E 'ERROR' | grep -F 'code-mode host exited during handshake' | head -n 3)"
+  if [ -n "$matched" ] && [[ "$body" != *' succeeded in '* ]]; then
+    printf '%s\n' "$body" | tail -n "$tail_lines"
+    emit_evidence 'unavailable' "$matched"
+    finish unavailable 75
+  fi
+fi
+
 if [ "$codex_status" -eq 0 ]; then
   if [ -s "$last_msg_file" ]; then
     cat "$last_msg_file"
@@ -524,16 +548,6 @@ evidence="$(
     log_body | tail -n 10
   } 2>/dev/null | awk '!seen[$0]++'
 )"
-
-# 根拠は 1 行ずつ接頭辞を付けて出す。
-# 呼び出し側の定義は result 行の直前に evidence 行が来ることを前提にしているため、
-# 接頭辞の無い行を間に挟まない。
-emit_evidence() {
-  printf '%s\n' "$2" | while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    printf 'codex-agent: %s evidence: %s\n' "$1" "$line"
-  done
-}
 
 # 利用上限の通知は標準出力に出ることも標準エラーに出ることもあるため、両方を見る。
 # 429 は単語境界で照合する。ID や桁数の一致で誤検出しないためである。
