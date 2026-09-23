@@ -1151,6 +1151,25 @@ t_log_prune() {
   done
 }
 
+# 依頼文の置き場は、定義がスクラッチパッドを使えないときの退避先であり、ログと同じ期限で落とす。
+t_prompts_prune() {
+  local dir="$root/home/.claude/codex-agent/prompts"
+  mkdir -p "$dir"
+  : >"$dir/old-9days.md"
+  : >"$dir/recent-6days.md"
+  touch -d '9 days ago' "$dir/old-9days.md"
+  touch -d '6 days ago' "$dir/recent-6days.md"
+  run_wrapper "$AGENT"
+  expect_rc 0
+  [ -d "$dir" ] || fail "依頼文の置き場が無い"
+  [ ! -e "$dir/old-9days.md" ] || fail "9 日前の依頼文が消えていない"
+  [ -e "$dir/recent-6days.md" ] || fail "6 日前の依頼文が消えている"
+  rm -rf "$dir"
+  run_wrapper "$AGENT"
+  expect_rc 0
+  [ -d "$dir" ] || fail "依頼文の置き場が作られていない"
+}
+
 t_no_leftover_temp() {
   fake_set last_message '報告
 '
@@ -1598,6 +1617,7 @@ run_case "完了後のログ(利用上限): 最後の行が標準出力の resul
 run_case "完了後のログ(通常の失敗): 最後の行が標準出力の result=failed と一致し、result= と run= は 1 回" t_log_result_failed
 run_case "停止: run= の pid と実行 ID を含む Codex 側を taskkill /T /F で止めると、偽 codex まで止まり result= が残らない" t_kill_by_run_pid
 run_case "ログ: 9 日前の .log、.last、.out を消し、6 日前のものを残す" t_log_prune
+run_case "依頼文の置き場: 作られ、9 日前のファイルを消し、6 日前のものを残す" t_prompts_prune
 run_case "一時ファイル: 成功と失敗のあとに *.last、*.out、TMPDIR の一時ファイルが残らず、ログは残る" t_no_leftover_temp
 run_case "ログの権限: ログファイル 600、ログ置き場 700" t_log_permissions
 run_case "試験用フック: CODEX_AGENT_SIMULATE_RATE_LIMIT" t_simulate_rate_limit
