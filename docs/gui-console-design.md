@@ -103,9 +103,9 @@ GPT 側定義を別名に退避すれば疑似的に無効化できるが、設�
 │ [x] GPT 系サブエージェント経路を有効にする (impl-hard / impl-standard / impl-light) │
 │                                                                           │
 │ 区分      Claude モデル        effort     GPT モデル        effort        │
-│ hard      [claude-opus-5    v] [high   v]  [(未設定)      v]              │
-│ standard  [claude-opus-5    v] [medium v]  [gpt-5.6-luna  v] [max    v]   │
-│ light     [claude-sonnet-5  v] [medium v]  [gpt-5.6-luna  v] [xhigh  v]   │
+│ hard      [claude-opus-5-5  v] [high   v]  [(未設定)      v]              │
+│ standard  [claude-opus-5-5  v] [medium v]  [gpt-6-luna    v] [max    v]   │
+│ light     [claude-sonnet-5  v] [medium v]  [gpt-6-luna    v] [xhigh  v]   │
 │                                                                           │
 │ codex_home: [~/.codex-subagent v]  codex_sandbox: workspace-write         │
 │ codex --version: 0.xx.x                                                   │
@@ -134,9 +134,9 @@ exe と同じフォルダに `choices.json` があれば、それで既定値を
 
 | 項目 | 選択肢 |
 |---|---|
-| Claude モデル | `claude-fable-5-1`、`claude-fable-5`、`claude-opus-5`、`claude-sonnet-5`、`claude-opus-4-8`、`claude-opus-4-7`、`claude-opus-4-6`、`claude-sonnet-4-6`、`claude-haiku-4-5` |
+| Claude モデル | `claude-fable-5-1`、`claude-fable-5`、`claude-opus-5-5`、`claude-opus-5`、`claude-sonnet-5`、`claude-opus-4-8`、`claude-opus-4-7`、`claude-opus-4-6`、`claude-sonnet-4-6`、`claude-haiku-4-5` |
 | Claude effort | 選ばれているモデルが受け付ける値。対応表に無いモデルでは `low`、`medium`、`high`、`xhigh`、`max` |
-| GPT モデル | `codex debug models` から取得。取れなければ `gpt-6-astra`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5` |
+| GPT モデル | `codex debug models` から取得。取れなければ `gpt-6-astra`、`gpt-6-sol`、`gpt-6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5` |
 | GPT effort | 選ばれているモデルが受け付ける値。取れなければ `low`、`medium`、`high`、`xhigh`、`max`、`ultra` |
 
 GPT 側の 2 つは、起動時に `codex debug models` から取得できればそちらを使う。既定値はその控えである。
@@ -150,12 +150,12 @@ Claude 側のモデルには相当する取得手段が無い。Claude Code に�
 
 ```json
 {
-  "claudeModels": ["claude-opus-5", "claude-sonnet-5"],
+  "claudeModels": ["claude-opus-5-5", "claude-sonnet-5"],
   "claudeEfforts": ["low", "medium", "high", "xhigh", "max"],
   "claudeModelEfforts": [
-    { "model": "claude-opus-5", "efforts": ["low", "medium", "high", "xhigh", "max"] }
+    { "model": "claude-opus-5-5", "efforts": ["low", "medium", "high", "xhigh", "max"] }
   ],
-  "gptModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"],
+  "gptModels": ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"],
   "gptEfforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
 }
 ```
@@ -172,7 +172,7 @@ Claude 側のモデルには相当する取得手段が無い。Claude Code に�
 - キーの値は `<キー>:` の後ろの空白を除いた部分とする。「空白 + `#`」以降は行内コメントとして扱い、値には含めない。値を囲む `"` または `'` は外す。二重引用符の中では `\\` を `\`、`\"` を `"` に戻す。
 - `<キー>:` の後ろに行内コメントしか無い行(例: `codex_enabled:  # まだ決めていない`)は、値が空であるものとして読む。`tools/codex-agent.sh` の `fm_get` はこの行を `# まだ決めていない` という値として読むため、ここだけ読み方が異なる。設定コンソールは保存時に妥当な値を書き戻すため、この相違が残るのは手で書きかけた定義を開いたときだけである。
 - 値を書き換えるときは、対象キーの行だけを置換する。行内コメントは残す(例: `codex_home: ~/.codex-subagent  # サブエージェント専用アカウント` の `#` 以降)。
-- 値を書くときは常に二重引用符で囲む(`model: "claude-opus-5"`、`codex_enabled: "false"`)。引用符が無いと YAML は `true` や `123` を文字列以外として読み、文字列を期待する定義が壊れるためである。`tools/codex-agent.sh` の `fm_get` は外側の引用符を外して読むため、スクリプト側に変更は要らない。
+- 値を書くときは常に二重引用符で囲む(`model: "claude-opus-5-5"`、`codex_enabled: "false"`)。引用符が無いと YAML は `true` や `123` を文字列以外として読み、文字列を期待する定義が壊れるためである。`tools/codex-agent.sh` の `fm_get` は外側の引用符を外して読むため、スクリプト側に変更は要らない。
 - 値に含まれる `\` は `\\` に、`"` は `\"` にエスケープする。`fm_get` は引用符を外すだけでエスケープを戻さないため、この 2 文字を含む値を書くとスクリプトと読みがずれる。設定コンソールは値に使える文字を英数字と `.`、`_`、`-`、`/` に限っており、この 2 文字は入力できない。
 - 読み込んだ値と書き込む値が等しい行には書かない。等しさは引用符を外した後の値で判定する。そのため、値を変えていない行は引用符の付かない元の形のまま残る。
 - キーがフロントマターに無ければ、閉じの `---` の直前に `<キー>: <値>` の行を追加する。`codex_enabled` は既存の定義に無いため、この経路で追加される。

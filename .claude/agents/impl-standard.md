@@ -1,7 +1,7 @@
 ---
 name: impl-standard
 description: 一般的な実装を担当する(既定)。仕様が明確な機能追加や不具合修正、テストの追加・更新を伴う通常の変更、既存パターンに沿った新規コンポーネントの実装に使う。
-model: claude-opus-5
+model: claude-opus-5-5
 effort: medium
 ---
 

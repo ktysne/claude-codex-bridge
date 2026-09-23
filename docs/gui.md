@@ -193,7 +193,7 @@ GPT 側の `codex_reasoning_effort` は、GPT 経路の有効状態にかかわ�
 このとき状態行に「入力に不備があるため保存していません。」と赤色で表示する。
 
 検証に通ると、値が変わったファイルだけを書き換え、書き換えたファイル名を状態行に表示する。
-書き換える行は `model: "claude-opus-5"` のように値を二重引用符で囲む。
+書き換える行は `model: "claude-opus-5-5"` のように値を二重引用符で囲む。
 値が変わっていない行には書き込まないため、引用符の付かない既存の値はそのまま残る。
 保存の前に 6 ファイルが揃っていることを見る。読み込み後に消されたファイルがあれば保存しない。
 書き換えるファイルについては、読み込んだときの内容と現在の内容を照合する。設定コンソールの外で変更されていた場合は、その時点で保存を中断する。
@@ -212,13 +212,13 @@ JSON は次の形で、4 つの配列をすべて指定する。
 
 ```json
 {
-  "claudeModels": ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"],
+  "claudeModels": ["claude-opus-5-5", "claude-sonnet-5", "claude-haiku-4-5"],
   "claudeEfforts": ["low", "medium", "high", "xhigh", "max"],
   "claudeModelEfforts": [
-    { "model": "claude-opus-5", "efforts": ["low", "medium", "high", "xhigh", "max"] },
+    { "model": "claude-opus-5-5", "efforts": ["low", "medium", "high", "xhigh", "max"] },
     { "model": "claude-opus-4-6", "efforts": ["low", "medium", "high", "max"] }
   ],
-  "gptModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"],
+  "gptModels": ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"],
   "gptEfforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
 }
 ```
@@ -263,7 +263,7 @@ effort に対応するモデルと、その値は次のとおりである。
 | モデル | 選べる effort |
 |---|---|
 | `claude-fable-5-1`、`claude-fable-5` | low、medium、high、xhigh、max |
-| `claude-opus-5`、`claude-sonnet-5` | low、medium、high、xhigh、max |
+| `claude-opus-5-5`、`claude-opus-5`、`claude-sonnet-5` | low、medium、high、xhigh、max |
 | `claude-opus-4-8`、`claude-opus-4-7` | low、medium、high、xhigh、max |
 | `claude-opus-4-6`、`claude-sonnet-4-6` | low、medium、high、max |
 
