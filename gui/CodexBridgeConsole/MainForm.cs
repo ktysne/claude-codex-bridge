@@ -172,10 +172,12 @@ namespace CodexBridgeConsole
             };
             layout.Controls.Add(_missingFilesLabel);
 
+            // 幅を内容の幅に留めて折り返す。制限しないと、この文言の幅でダイアログの幅が決まり、画面からはみ出す。
             var noticeLabel = new Label
             {
                 Text = "保存した値は次の委譲から効きます(GPT 側は次の Codex 呼び出しから、Claude 側は数秒後から)。再起動が要る条件は docs/setup.md の共通手順 6 を参照。",
                 AutoSize = true,
+                MaximumSize = new Size(contentWidth, 0),
                 Margin = new Padding(3, 6, 3, 3)
             };
             layout.Controls.Add(noticeLabel);
