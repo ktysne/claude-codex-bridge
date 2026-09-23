@@ -40,6 +40,14 @@ trap 'rm -rf "$TEST_TMP"' EXIT
 has_cygpath=0
 command -v cygpath >/dev/null 2>&1 && has_cygpath=1
 
+# 書き込み担当の目印を扱うケースだけ、git のディレクトリを PATH に足す。
+# ケースの PATH は /usr/bin と /bin に絞っているが、Git for Windows の git は /mingw64/bin にあることがあるためである。
+# 他のケースに足さないのは、git の有無で既存のケースの環境を変えないためである。
+GIT_BIN_DIR=""
+if command -v git >/dev/null 2>&1; then
+  GIT_BIN_DIR="$(dirname "$(command -v git)")"
+fi
+
 # ラッパーと同じ規則でパスを揃える。比較の前に両辺へ適用する。
 norm_path() {
   local p="${1//\\//}"
@@ -277,6 +285,8 @@ new_case_root() {
 2 行目の依頼。'
   EXTRA_ENV=()
   NO_FAKE_BIN=0
+  EXTRA_PATH=""
+  RUN_OUT=""
 }
 
 # fake_set <name> <内容>
@@ -288,18 +298,20 @@ logs_dir() {
   printf '%s' "$root/home/.claude/codex-agent/logs"
 }
 
-# ラッパーを起動する。標準出力は $root/out、標準エラーは $root/err、終了コードは RC に入る。
+# ラッパーを起動する。標準出力は $root/out(RUN_OUT があればそのパス)、標準エラーは $root/err、終了コードは RC に入る。
 # 出力に log= の行があれば、一時ルートの配下を指すことも確かめる。
+# EXTRA_PATH があれば PATH の末尾に足す。
 run_wrapper() {
-  local path="$root/bin:/usr/bin:/bin"
+  local path="$root/bin:/usr/bin:/bin" out="${RUN_OUT:-$root/out}"
   [ "$NO_FAKE_BIN" = 1 ] && path="/usr/bin:/bin"
+  [ -z "$EXTRA_PATH" ] || path="$path:$EXTRA_PATH"
   (
     cd "$root/work" || exit 99
     export USERPROFILE="$root/home" HOME="$root/home" PATH="$path" TMPDIR="$root/tmp"
-    printf '%s' "$REQ" | env ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} "$BASH_BIN" "$WRAPPER" "$@" >"$root/out" 2>"$root/err"
+    printf '%s' "$REQ" | env ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} "$BASH_BIN" "$WRAPPER" "$@" >"$out" 2>"$root/err"
   )
   RC=$?
-  check_log_path "$root/out"
+  check_log_path "$out"
 }
 
 check_log_path() {
@@ -327,6 +339,7 @@ out_log_path() {
 # 起動したサブシェルの PID を BG_PID に入れる。終了は finish_bg_wrapper で待つ。
 start_bg_wrapper() {
   local path="$root/bin:/usr/bin:/bin"
+  [ -z "$EXTRA_PATH" ] || path="$path:$EXTRA_PATH"
   (
     cd "$root/work" || exit 99
     export USERPROFILE="$root/home" HOME="$root/home" PATH="$path" TMPDIR="$root/tmp"
@@ -633,6 +646,36 @@ t_unavailable() {
   fake_set exit_code 1
   run_wrapper "$AGENT"
   expect_fallback_tail unavailable unavailable
+}
+
+t_tool_handshake_failed_exit0() {
+  fake_set stderr '2026-09-23T16:03:29.519274Z ERROR codex_core::tools::router: error=code-mode host exited during handshake
+'
+  # 最終回答に成功行と同じ語があっても、判定は経過(標準エラー)だけで行う。
+  fake_set last_message '接続に失敗し、 succeeded in の行を確認できなかった。
+'
+  fake_set stdout '接続に失敗し、 succeeded in の行を確認できなかった。
+'
+  run_wrapper "$AGENT"
+  expect_fallback_tail unavailable unavailable
+  local n prev
+  n="$(wc -l <"$root/out" | tr -d ' ')"
+  prev="$(sed -n "$((n - 1))p" "$root/out")"
+  case "$prev" in
+    *'code-mode host exited during handshake'*) ;;
+    *) fail "result 行の直前の evidence に一致した ERROR 行が無い: [$prev]" ;;
+  esac
+}
+
+t_tool_handshake_recovered_exit0() {
+  fake_set stderr 'ERROR codex_core::tools::router: error=code-mode host exited during handshake
+exec
+bash -lc ls in /work
+ succeeded in 12ms:
+'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
 }
 
 t_plain_failure() {
@@ -1108,6 +1151,25 @@ t_log_prune() {
   done
 }
 
+# 依頼文の置き場は、定義がスクラッチパッドを使えないときの退避先であり、ログと同じ期限で落とす。
+t_prompts_prune() {
+  local dir="$root/home/.claude/codex-agent/prompts"
+  mkdir -p "$dir"
+  : >"$dir/old-9days.md"
+  : >"$dir/recent-6days.md"
+  touch -d '9 days ago' "$dir/old-9days.md"
+  touch -d '6 days ago' "$dir/recent-6days.md"
+  run_wrapper "$AGENT"
+  expect_rc 0
+  [ -d "$dir" ] || fail "依頼文の置き場が無い"
+  [ ! -e "$dir/old-9days.md" ] || fail "9 日前の依頼文が消えていない"
+  [ -e "$dir/recent-6days.md" ] || fail "6 日前の依頼文が消えている"
+  rm -rf "$dir"
+  run_wrapper "$AGENT"
+  expect_rc 0
+  [ -d "$dir" ] || fail "依頼文の置き場が作られていない"
+}
+
 t_no_leftover_temp() {
   fake_set last_message '報告
 '
@@ -1181,6 +1243,247 @@ t_cross_review_contract() {
   ' "$(norm_path "$CROSS_REVIEW_JS")" "$(norm_path "$WRAPPER")" 2>"$root/err")"
   : >"$root/out"
   expect_eq "scriptPinsApprovalNever の戻り値" "true" "$result"
+}
+
+# ---------------------------------------------------------------------------
+# 書き込み担当の目印
+# ---------------------------------------------------------------------------
+
+# テストの中で使う git。ユーザの設定に左右されないよう、HOME を一時ルートに向け、システムの設定を読まない。
+git_t() {
+  env HOME="$root/home" GIT_CONFIG_NOSYSTEM=1 "$GIT_BIN_DIR/git" \
+    -c user.name=cxa-test -c user.email=cxa-test@example.invalid "$@"
+}
+
+# 目印を扱うケースの準備。git が見つからなければ SKIP にして 1 を返す。
+# work を git のリポジトリにし、空のコミットを 1 つ作る。git worktree add に HEAD が要るためである。
+setup_git_work() {
+  if [ -z "$GIT_BIN_DIR" ]; then
+    skip "git が見つからない(目印は git の管理下でだけ扱う)"
+    return 1
+  fi
+  EXTRA_PATH="$GIT_BIN_DIR"
+  if ! git_t init -q "$root/work" >/dev/null 2>&1 \
+    || ! git_t -C "$root/work" commit -q --allow-empty -m init >/dev/null 2>&1; then
+    fail "一時の git リポジトリを作れない"
+    return 1
+  fi
+  return 0
+}
+
+# 作業ディレクトリの worktree 固有の git ディレクトリにある、目印の置き場。
+# runs_dir_of <作業ディレクトリ>
+runs_dir_of() {
+  printf '%s/codex-agent/runs' "$(git_t -C "$1" rev-parse --absolute-git-dir | tr -d '\r')"
+}
+
+# 他の実行の目印を置く。中身はラッパーが置く目印と同じ 3 行の形にする。
+# plant_marker <置き場> <実行 ID> <ログのパス>
+plant_marker() {
+  mkdir -p "$1"
+  {
+    printf 'codex-agent: run=%s pid=1 started=2026-01-01T00:00:00Z\n' "$2"
+    printf 'codex-agent: log=%s\n' "$3"
+    printf 'codex-agent: agent=cxa-other sandbox=workspace-write\n'
+  } >"$1/$2.run"
+}
+
+count_markers() {
+  ls "$1"/*.run 2>/dev/null | wc -l | tr -d ' '
+}
+
+expect_no_warning() {
+  if grep -q '^codex-agent: warning=' "$1"; then
+    fail "警告の行が出ている: [$(grep '^codex-agent: warning=' "$1" | tr '\n' ' ')]"
+  fi
+}
+
+# 書き込み可能な起動は、実行中に目印を置き、正常終了で消す。
+t_marker_lifecycle() {
+  setup_git_work || return
+  local runs run_id marker
+  runs="$(runs_dir_of "$root/work")"
+  set_running_fake 3
+  start_bg_wrapper "$AGENT"
+  if ! wait_until 10 running_log_has '経過: 実行中の印'; then
+    fail "実行中のログに印の行が現れない"
+    finish_bg_wrapper
+    return
+  fi
+  run_id="$(sed -n 's/^codex-agent: run=\([^ ]*\) .*/\1/p' "$root/out" | head -n 1)"
+  marker="$runs/$run_id.run"
+  if [ -z "$run_id" ] || [ ! -f "$marker" ]; then
+    fail "実行中に目印が無い: [$marker]"
+  else
+    expect_eq "目印の 1 行目" "$(sed -n 2p "$root/out")" "$(sed -n 1p "$marker")"
+    expect_eq "目印の 2 行目" "$(sed -n 3p "$root/out")" "$(sed -n 2p "$marker")"
+    expect_eq "目印の 3 行目" "codex-agent: agent=$AGENT sandbox=workspace-write" "$(sed -n 3p "$marker")"
+    expect_eq "目印の行数" "3" "$(wc -l <"$marker" | tr -d ' ')"
+  fi
+  finish_bg_wrapper
+  expect_rc 0
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
+  [ ! -e "$marker" ] || fail "終了後に目印が残っている: $marker"
+  expect_eq "終了後の置き場のファイル数" "0" "$(ls -A "$runs" 2>/dev/null | wc -l | tr -d ' ')"
+  expect_no_warning "$root/out"
+}
+
+# 同じ worktree で書き込み可能な起動を重ねると、2 つ目にだけ 1 つ目の実行 ID を含む警告が出る。
+t_marker_same_worktree_warns() {
+  setup_git_work || return
+  local id1 log1 log2 warning
+  set_running_fake 3
+  start_bg_wrapper "$AGENT"
+  if ! wait_until 10 running_log_has '経過: 実行中の印'; then
+    fail "実行中のログに印の行が現れない"
+    finish_bg_wrapper
+    return
+  fi
+  id1="$(sed -n 's/^codex-agent: run=\([^ ]*\) .*/\1/p' "$root/out" | head -n 1)"
+  log1="$(out_log_path "$root/out")"
+  warning="codex-agent: warning=concurrent-writer run=$id1 log=$log1"
+  RUN_OUT="$root/out2"
+  run_wrapper "$AGENT"
+  RUN_OUT=""
+  expect_eq "2 つ目の終了コード" "0" "$RC"
+  expect_eq "2 つ目の最後の行" "codex-agent: result=ok" "$(tail -n 1 "$root/out2")"
+  grep -Fxq -- "$warning" "$root/out2" || fail "2 つ目の出力に警告の行が無い: [$warning]"
+  expect_eq "2 つ目の 4 行目(log= の行の後)" "$warning" "$(sed -n 4p "$root/out2")"
+  log2="$(out_log_path "$root/out2")"
+  grep -Fxq -- "$warning" "$log2" || fail "2 つ目のログに警告の行が無い"
+  finish_bg_wrapper
+  expect_rc 0
+  expect_eq "1 つ目の最後の行" "codex-agent: result=ok" "$(last_out_line)"
+  expect_no_warning "$root/out"
+  expect_eq "終了後の目印の数" "0" "$(count_markers "$(runs_dir_of "$root/work")")"
+}
+
+# 同じリポジトリの別の worktree で重ねた起動には、警告が出ない。
+t_marker_other_worktree_no_warn() {
+  setup_git_work || return
+  if ! git_t -C "$root/work" worktree add -q --detach "$root/work2" >/dev/null 2>&1; then
+    fail "2 つ目の worktree を作れない"
+    return
+  fi
+  set_running_fake 3
+  start_bg_wrapper "$AGENT"
+  if ! wait_until 10 running_log_has '経過: 実行中の印'; then
+    fail "実行中のログに印の行が現れない"
+    finish_bg_wrapper
+    return
+  fi
+  RUN_OUT="$root/out2"
+  run_wrapper "$AGENT" -C "$root/work2"
+  RUN_OUT=""
+  expect_eq "2 つ目の終了コード" "0" "$RC"
+  expect_eq "2 つ目の最後の行" "codex-agent: result=ok" "$(tail -n 1 "$root/out2")"
+  expect_no_warning "$root/out2"
+  finish_bg_wrapper
+  expect_rc 0
+  expect_no_warning "$root/out"
+}
+
+# ログの最後の行が result= でない目印(途中で止められた実行)が残っていると、警告を出し、その目印を消さない。
+t_marker_interrupted_warns() {
+  setup_git_work || return
+  local runs stale_log="$root/stale.log"
+  runs="$(runs_dir_of "$root/work")"
+  printf 'codex-agent: run=cxa-stale-1 pid=1 started=2026-01-01T00:00:00Z\n経過の行\n' >"$stale_log"
+  plant_marker "$runs" cxa-stale-1 "$stale_log"
+  fake_set last_message '報告
+'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
+  expect_out_line "codex-agent: warning=concurrent-writer run=cxa-stale-1 log=$stale_log"
+  grep -Fxq -- "codex-agent: warning=concurrent-writer run=cxa-stale-1 log=$stale_log" "$(out_log_path "$root/out")" \
+    || fail "ログに警告の行が無い"
+  [ -f "$runs/cxa-stale-1.run" ] || fail "途中で止められた実行の目印が消された"
+  expect_eq "終了後の目印の数" "1" "$(count_markers "$runs")"
+}
+
+# ログの最後の行が result= の目印と、ログが存在しない目印は、起動時に消され、警告は出ない。
+t_marker_finished_removed() {
+  setup_git_work || return
+  local runs done_log="$root/done.log"
+  runs="$(runs_dir_of "$root/work")"
+  printf 'codex-agent: run=cxa-done-1 pid=1 started=2026-01-01T00:00:00Z\n経過の行\ncodex-agent: result=ok\n' >"$done_log"
+  plant_marker "$runs" cxa-done-1 "$done_log"
+  plant_marker "$runs" cxa-gone-1 "$root/no-such.log"
+  fake_set last_message '報告
+'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
+  expect_no_warning "$root/out"
+  [ ! -e "$runs/cxa-done-1.run" ] || fail "終わった実行の目印が残っている"
+  [ ! -e "$runs/cxa-gone-1.run" ] || fail "ログが無い目印が残っている"
+  expect_eq "終了後の目印の数" "0" "$(count_markers "$runs")"
+}
+
+# read-only の起動は目印を置かず、残った目印があっても調べない。
+t_marker_read_only() {
+  setup_git_work || return
+  local runs stale_log="$root/stale.log"
+  runs="$(runs_dir_of "$root/work")"
+  write_def "$(work_def)" 'codex_home: ~/.codex-test
+codex_model: model-test
+codex_reasoning_effort: low
+codex_sandbox: read-only' "$DEFAULT_BODY"
+  printf 'codex-agent: run=cxa-stale-1 pid=1 started=2026-01-01T00:00:00Z\n経過の行\n' >"$stale_log"
+  plant_marker "$runs" cxa-stale-1 "$stale_log"
+  set_running_fake 2
+  start_bg_wrapper "$AGENT"
+  if ! wait_until 10 running_log_has '経過: 実行中の印'; then
+    fail "実行中のログに印の行が現れない"
+    finish_bg_wrapper
+    return
+  fi
+  expect_eq "実行中の目印の数" "1" "$(count_markers "$runs")"
+  finish_bg_wrapper
+  expect_rc 0
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
+  expect_no_warning "$root/out"
+  [ -f "$runs/cxa-stale-1.run" ] || fail "read-only の起動が残った目印を消した"
+  expect_eq "終了後の置き場のファイル数" "1" "$(ls -A "$runs" | wc -l | tr -d ' ')"
+}
+
+# git の管理下に無い作業ディレクトリでも、従来どおり起動して成功し、目印も警告も無い。
+# 一時ディレクトリの上位にあるリポジトリを見つけないよう、git の探索を一時ルートで止める。
+t_marker_not_git() {
+  if [ -z "$GIT_BIN_DIR" ]; then
+    skip "git が見つからない(git がある環境で管理下に無い場合を確かめるケースである)"
+    return
+  fi
+  EXTRA_PATH="$GIT_BIN_DIR"
+  EXTRA_ENV=(GIT_CEILING_DIRECTORIES="$(norm_path "$root")")
+  fake_set last_message '報告
+'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
+  expect_no_warning "$root/out"
+  local found
+  found="$(find "$root" -path '*codex-agent/runs*' 2>/dev/null)"
+  [ -z "$found" ] || fail "git の管理下に無いのに目印の置き場がある: $found"
+}
+
+# 警告の行に 429 を含む実行 ID とパスが出ても、利用上限と判定しない。警告の行は標準出力に 1 回だけ出る。
+t_marker_warning_not_classified() {
+  setup_git_work || return
+  local runs stale_log="$root/stale-429.log" warning
+  runs="$(runs_dir_of "$root/work")"
+  printf 'codex-agent: run=cxa-429-429 pid=429 started=2026-01-01T00:00:00Z\n経過の行\n' >"$stale_log"
+  plant_marker "$runs" cxa-429-429 "$stale_log"
+  warning="codex-agent: warning=concurrent-writer run=cxa-429-429 log=$stale_log"
+  fake_set stderr 'ERROR: something went wrong
+'
+  fake_set exit_code 1
+  run_wrapper "$AGENT"
+  expect_rc 1
+  expect_eq "最後の行" "codex-agent: result=failed exit=1" "$(last_out_line)"
+  expect_out_no_match "evidence:"
+  expect_eq "標準出力の警告の行数" "1" "$(grep -Fxc -- "$warning" "$root/out")"
 }
 
 # リポジトリに置く GPT 側の定義(出荷既定値)が、CLAUDE.md の「認証ホームの配置」と「権限の固定」に従う。
@@ -1277,6 +1580,8 @@ run_case "利用上限(stderr): 75、evidence の直後に result=rate-limited" 
 run_case "利用上限(stdout): 75、evidence の直後に result=rate-limited" t_rate_limit_stdout
 run_case "利用上限(根拠 2 行): evidence を 1 行ずつ接頭辞付きで result の直前に並べる" t_rate_limit_multi_evidence
 run_case "モデルの混雑: 75、evidence の直後に result=unavailable" t_unavailable
+run_case "ツール接続の失敗(終了コード 0、成功行なし): 75、evidence の直後に result=unavailable" t_tool_handshake_failed_exit0
+run_case "ツール接続の失敗後に復旧(終了コード 0、成功行あり): result=ok" t_tool_handshake_recovered_exit0
 run_case "通常の失敗: 1、result=failed exit=1" t_plain_failure
 run_case "Codex 自身の 75: 1 に写像し result=failed exit=75" t_codex_exit_75
 run_case "成功の本文に上限の語があっても result=ok" t_success_body_mentions_limit
@@ -1312,11 +1617,20 @@ run_case "完了後のログ(利用上限): 最後の行が標準出力の resul
 run_case "完了後のログ(通常の失敗): 最後の行が標準出力の result=failed と一致し、result= と run= は 1 回" t_log_result_failed
 run_case "停止: run= の pid と実行 ID を含む Codex 側を taskkill /T /F で止めると、偽 codex まで止まり result= が残らない" t_kill_by_run_pid
 run_case "ログ: 9 日前の .log、.last、.out を消し、6 日前のものを残す" t_log_prune
+run_case "依頼文の置き場: 作られ、9 日前のファイルを消し、6 日前のものを残す" t_prompts_prune
 run_case "一時ファイル: 成功と失敗のあとに *.last、*.out、TMPDIR の一時ファイルが残らず、ログは残る" t_no_leftover_temp
 run_case "ログの権限: ログファイル 600、ログ置き場 700" t_log_permissions
 run_case "試験用フック: CODEX_AGENT_SIMULATE_RATE_LIMIT" t_simulate_rate_limit
 run_case "試験用フック: CODEX_AGENT_SIMULATE_UNAVAILABLE" t_simulate_unavailable
 run_case "-h: 終了コード 0 で用法を出す" t_help
+run_case "目印: 書き込み可能な起動は実行中に <git ディレクトリ>/codex-agent/runs/<実行 ID>.run を置き、正常終了で消す" t_marker_lifecycle
+run_case "目印: 同じ worktree で重ねると、2 つ目の出力とログにだけ 1 つ目の実行 ID を含む警告が出て、どちらも result=ok" t_marker_same_worktree_warns
+run_case "目印: 同じリポジトリの別の worktree で重ねた起動には警告が出ない" t_marker_other_worktree_no_warn
+run_case "目印: ログの最後の行が result= でない目印は警告を出し、消さない" t_marker_interrupted_warns
+run_case "目印: ログの最後の行が result= の目印とログが無い目印は消し、警告を出さない" t_marker_finished_removed
+run_case "目印: read-only の起動は目印を置かず、残った目印に警告を出さない" t_marker_read_only
+run_case "目印: git の管理下に無い作業ディレクトリでは目印も警告も無く成功する" t_marker_not_git
+run_case "目印: 警告の行の 429 で利用上限と判定せず、警告の行は標準出力に 1 回" t_marker_warning_not_classified
 run_case "ai-cross-review との契約: scriptPinsApprovalNever が true を返す" t_cross_review_contract
 run_case "出荷既定の定義: 5 定義の codex_home と codex_sandbox が CLAUDE.md の対応に従う" t_shipped_definitions
 run_case "環境の分離: 実ホームのログ置き場にテスト用のログが無い" t_real_home_untouched
