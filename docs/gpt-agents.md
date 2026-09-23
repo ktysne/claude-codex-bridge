@@ -120,7 +120,11 @@ GPT 側の定義(`.claude/gpt-agents/<name>.md`)で使うキーは次の 5 つ�
 承認方針はスクリプトが `-c approval_policy=never` で固定し、フロントマターや呼び出し側の `config.toml` では変えられない。
 このスクリプトは非対話の委譲専用で承認を返す相手がいないため、承認待ちで止まる余地を残さない。
 
-Claude 側の定義(`.claude/agents/<name>.md`)のフロントマターは、Claude Code の通常のサブエージェント定義と同じ `name`、`description`、`model`、`effort` である。
+Claude 側の定義(`.claude/agents/<name>.md`)のフロントマターは、Claude Code の通常のサブエージェント定義と同じ `name`、`description`、`model`、`effort` に、`disallowedTools` を加えたものである。
+`impl-hard`、`impl-light`、`impl-standard` は `disallowedTools: Agent` で Agent ツールを外している。
+実装担当が別のサブエージェントを立ててそこへ委譲すると、報告が 2 段になり、メインセッションが起動していない担当の通知が届くためである。
+禁止事項の文だけでは、「委譲」を Codex CLI への依頼でなくサブエージェントへの依頼と読んだモデルを止められないので、ツールの許可で塞ぐ。
+許可リスト(`tools`)でなく `disallowedTools` を使うのは、Bash 以外に継承している MCP ツールを列挙せずに済ませるためである。
 
 ## フォールバックの条件と終了コード
 

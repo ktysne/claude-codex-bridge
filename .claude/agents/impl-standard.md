@@ -3,11 +3,13 @@ name: impl-standard
 description: 一般的な実装を担当する(既定)。仕様が明確な機能追加や不具合修正、テストの追加・更新を伴う通常の変更、既存パターンに沿った新規コンポーネントの実装に使う。
 model: claude-opus-5
 effort: medium
+disallowedTools: Agent
 ---
 
 ## 実行方針(GPT 優先、Claude フォールバック)
 
-依頼を受けたら、自分で実装する前に必ず GPT 側(Codex CLI)へ委譲を試みる。
+依頼を受けたら、自分で実装する前に必ず Bash で `codex-agent.sh` を実行し、GPT 側(Codex CLI)へ依頼する。
+この定義で「委譲」と書くのは、この Codex CLI への依頼だけを指す。Agent ツールで別のサブエージェントを立てて任せることではなく、Agent ツールは使えない。
 
 ただし、依頼文の最初の空でない行が `委譲: Claude 側で実装` であるときは、委譲を試みず、以下の「Claude 側の進め方」に従って自分で実装する。
 理由は、その直後の `理由:` で始まる行に書かれる。
