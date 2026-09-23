@@ -17,6 +17,7 @@ namespace CodexBridgeConsole.Tests
                     {
                         "claude-fable-5-1",
                         "claude-fable-5",
+                        "claude-opus-5-5",
                         "claude-opus-5",
                         "claude-sonnet-5",
                         "claude-opus-4-8",
@@ -27,7 +28,7 @@ namespace CodexBridgeConsole.Tests
                     },
                     choices.ClaudeModels);
                 Assert.Equal(new[] { "low", "medium", "high", "xhigh", "max" }, choices.ClaudeEfforts);
-                Assert.Equal(new[] { "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5" }, choices.GptModels);
+                Assert.Equal(new[] { "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5" }, choices.GptModels);
                 Assert.Equal(new[] { "low", "medium", "high", "xhigh", "max", "ultra" }, choices.GptEfforts);
             }
         }
@@ -75,7 +76,7 @@ namespace CodexBridgeConsole.Tests
 
                 Assert.Equal(
                     new[] { "low", "medium", "high", "xhigh", "max" },
-                    choices.ClaudeEffortsFor("claude-opus-5"));
+                    choices.ClaudeEffortsFor("claude-opus-5-5"));
             }
         }
 

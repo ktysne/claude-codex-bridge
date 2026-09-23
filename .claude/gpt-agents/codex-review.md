@@ -1,6 +1,6 @@
 ---
 codex_home: ~/.codex  # 通常利用とレビューに使うアカウント(既定ホーム)
-codex_model: gpt-5.6-sol
+codex_model: gpt-6-sol
 codex_reasoning_effort: medium
 codex_sandbox: read-only
 ---

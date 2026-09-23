@@ -1,7 +1,7 @@
 ---
 name: impl-hard
 description: 難易度の高い実装を担当する。複数ファイルや複数層にまたがる設計変更、数値精度・並行処理・状態遷移など正しさの検証が難しいロジック、既存設計の理解が前提になる改修に使う。
-model: claude-opus-5
+model: claude-opus-5-5
 effort: high
 ---
 
