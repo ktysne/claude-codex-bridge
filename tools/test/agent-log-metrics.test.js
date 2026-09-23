@@ -599,6 +599,23 @@ test('isCodexInvocation は起動形だけを判定する', () => {
     ),
     false,
   );
+  // 依頼文をファイルから標準入力へ流す形も起動に数える。-C の有無と引用符の有無を問わない。
+  assert.equal(
+    isCodexInvocation(
+      'bash ~/.claude/tools/codex-agent.sh impl-standard < "E:/Temp/scratch/codex-agent-impl-standard-20260924-120000-a1b2c3.md"',
+    ),
+    true,
+  );
+  assert.equal(
+    isCodexInvocation(
+      'bash ~/.claude/tools/codex-agent.sh impl-light -C D:/work < /c/Users/me/.claude/codex-agent/prompts/p.md',
+    ),
+    true,
+  );
+  assert.equal(
+    isCodexInvocation('bash ~/.claude/tools/codex-agent.sh codex-review --help < /tmp/p.md'),
+    false,
+  );
 });
 
 test('isCodexInvocation は構文検査と用法の表示を起動と数えない', () => {
