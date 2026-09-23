@@ -648,6 +648,31 @@ t_unavailable() {
   expect_fallback_tail unavailable unavailable
 }
 
+t_tool_handshake_failed_exit0() {
+  fake_set stderr '2026-09-23T16:03:29.519274Z ERROR codex_core::tools::router: error=code-mode host exited during handshake
+'
+  run_wrapper "$AGENT"
+  expect_fallback_tail unavailable unavailable
+  local n prev
+  n="$(wc -l <"$root/out" | tr -d ' ')"
+  prev="$(sed -n "$((n - 1))p" "$root/out")"
+  case "$prev" in
+    *'code-mode host exited during handshake'*) ;;
+    *) fail "result 行の直前の evidence に一致した ERROR 行が無い: [$prev]" ;;
+  esac
+}
+
+t_tool_handshake_recovered_exit0() {
+  fake_set stderr 'ERROR codex_core::tools::router: error=code-mode host exited during handshake
+exec
+bash -lc ls in /work
+ succeeded in 12ms:
+'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
+}
+
 t_plain_failure() {
   fake_set stderr 'ERROR: something went wrong
 '
@@ -1531,6 +1556,8 @@ run_case "利用上限(stderr): 75、evidence の直後に result=rate-limited" 
 run_case "利用上限(stdout): 75、evidence の直後に result=rate-limited" t_rate_limit_stdout
 run_case "利用上限(根拠 2 行): evidence を 1 行ずつ接頭辞付きで result の直前に並べる" t_rate_limit_multi_evidence
 run_case "モデルの混雑: 75、evidence の直後に result=unavailable" t_unavailable
+run_case "ツール接続の失敗(終了コード 0、成功行なし): 75、evidence の直後に result=unavailable" t_tool_handshake_failed_exit0
+run_case "ツール接続の失敗後に復旧(終了コード 0、成功行あり): result=ok" t_tool_handshake_recovered_exit0
 run_case "通常の失敗: 1、result=failed exit=1" t_plain_failure
 run_case "Codex 自身の 75: 1 に写像し result=failed exit=75" t_codex_exit_75
 run_case "成功の本文に上限の語があっても result=ok" t_success_body_mentions_limit
