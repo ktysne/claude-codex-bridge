@@ -13,6 +13,7 @@
 #   codex-agent: agent=... model=... effort=... sandbox=... codex_home=... workdir=...   監査行
 #   codex-agent: run=<実行 ID> pid=<ラッパーの PID> started=<UTC の ISO 8601>            Codex の起動前に出す
 #   codex-agent: log=<ログのパス>                                                         Codex の起動前に出す
+#   codex-agent: warning=concurrent-writer run=<相手の実行 ID> log=<相手のログのパス>      該当する目印ごとに 1 行(無ければ出さない)
 #   <最終報告>(失敗時はログの末尾と根拠の行)
 #   codex-agent: result=...
 # run= と log= の行を起動前に出すのは、呼び出し側がバックグラウンドへ移ったあとも、
@@ -27,10 +28,23 @@
 # ラッパーの pid への taskkill /T だけでは Codex まで届かないためである。手順は docs/gpt-agents.md の「既知の制約」にある。
 #
 # 実行ログ(~/.claude/codex-agent/logs/<実行 ID>.log):
-#   1 行目は run= の行と同じ内容である。
+#   1 行目は run= の行と同じ内容である。標準出力へ warning= の行を出すときは、続けて同じ行を書く。
 #   Codex の標準エラーは実行中から行ごとに追記する。続けて、終了後に Codex の標準出力を追記する。
 #   最後の行は標準出力へ出すのと同じ result= の行である。ログだけで完了と結果を判定できるようにするためである。
 #   Codex の起動前に止まる経路(終了コード 2、3、試験用フック)ではログを作らない。
+#
+# 書き込み担当の目印(<worktree 固有の git ディレクトリ>/codex-agent/runs/<実行 ID>.run):
+#   1 つの worktree に同時に書き込む担当は 1 つとする。
+#   ファイルを分けても、ビルドの生成物、テストの実行、git の索引は共有されるためである。
+#   codex_sandbox が workspace-write の起動だけが、作業ディレクトリの worktree に目印を置き、終了時に消す。
+#   中身は run= の行、log= の行、agent= と sandbox= の行の 3 行である。
+#   目印を置く前に同じ置き場の他の目印を調べる。
+#   相手のログが無いか、ログの最後の行が result= の行なら、終わった実行の目印として消す。
+#   それ以外は実行中か、強制終了で残った実行の目印なので、消さずに warning=concurrent-writer の行を出す。
+#   警告は観測の補助であり、起動は止めない。
+#   強制終了で残った目印を実行中と区別できないため、止める形にすると、その worktree の委譲が誤って止まりうるためである。
+#   作業ディレクトリが git の管理下に無い場合と、目印の読み書きに失敗した場合は、目印を扱わずに起動する。
+#   同じ worktree を編集するメインセッションは、このラッパーを通らないため目印に現れない。
 #
 # 終了コード:
 #   0   Codex が正常に終了した
@@ -66,6 +80,8 @@ usage() {
 
 標準出力は、監査行、run= の行、log= の行、最終報告、result= の行の順である。
 run= の行と log= の行は Codex の起動前に出す。
+書き込み可能な定義では、同じ worktree に書き込み可能な別の実行が残っていると、
+log= の行の後に codex-agent: warning=concurrent-writer の行を出す(起動は止めない)。
 実行中の委譲を止める手順は docs/gpt-agents.md の「既知の制約」にある。
 
 終了コード:
@@ -300,6 +316,13 @@ chmod 700 "$log_dir" 2>/dev/null || true
 # .last と .out は通常は終了時に消すが、taskkill /F などで強制終了されると EXIT の trap が動かずに残るため、同じ規則で落とす。
 find "$log_dir" -maxdepth 1 -type f \( -name '*.log' -o -name '*.last' -o -name '*.out' \) -mtime +7 -delete 2>/dev/null || true
 
+# 定義がスクラッチパッドを使えないときに依頼文を置く場所。ログと同じ期限で消す。
+# 置き場が無くても実行自体は続けられるため、作成に失敗しても止めない。
+prompts_dir="$(to_slash "$home_dir")/.claude/codex-agent/prompts"
+mkdir -p "$prompts_dir" 2>/dev/null || true
+chmod 700 "$prompts_dir" 2>/dev/null || true
+find "$prompts_dir" -maxdepth 1 -type f -mtime +7 -delete 2>/dev/null || true
+
 # 実行 ID はログファイル名から拡張子を除いたものにする。run= の行と log= の行を突き合わせられるようにするためである。
 run_id="$agent_name-$(date +%Y%m%d-%H%M%S)-$$"
 log_base="$log_dir/$run_id"
@@ -308,8 +331,11 @@ log_file="$log_base.log"
 # 強制終了で残っても、実行 ID から特定して消せるうえ、古いものは上の削除で落ちるためである。
 out_file="$log_base.out"
 last_msg_file="$log_base.last"
+# 書き込み担当の目印のパス。置けたときだけ入る。
+marker_file=""
 # ログ本体だけを残す。他は標準出力へ出すかログへ写した時点で役目を終える。
-trap 'rm -f "$out_file" "$last_msg_file"' EXIT
+# 目印も終了時に消す。強制終了で残った目印は、次の起動が古い目印の規則で扱う。
+trap 'rm -f "$out_file" "$last_msg_file"; [ -z "$marker_file" ] || rm -f "$marker_file" 2>/dev/null' EXIT
 # 先に作って権限を落とす。あとの書き込みは truncate か追記なので、この権限が残る。
 : >"$log_file" || die "実行ログを作れない: $log_file"
 : >"$last_msg_file" || die "最終報告の受け皿を作れない: $last_msg_file"
@@ -331,7 +357,75 @@ printf '%s\n' "$run_line" >>"$log_file"
 
 # Codex の起動前に出す。実行中に呼び出し側がログの場所と止める対象を知るための行である。
 printf '%s\n' "$run_line"
-printf 'codex-agent: log=%s\n' "$(to_windows_path "$log_file")"
+log_line="codex-agent: log=$(to_windows_path "$log_file")"
+printf '%s\n' "$log_line"
+
+# 書き込み担当の目印の置き場を出す。git が無い、または作業ディレクトリが git の管理下に無いときは何も出さない。
+# worktree ごとに置き場を分けるため、共通の git ディレクトリではなく worktree 固有の git ディレクトリを使う。
+run_marker_dir() {
+  local git_dir
+  command -v git >/dev/null 2>&1 || return 0
+  git_dir="$(git -C "$workdir" rev-parse --absolute-git-dir 2>/dev/null | tr -d '\r')"
+  [ -n "$git_dir" ] && [ -d "$git_dir" ] || return 0
+  printf '%s/codex-agent/runs' "$(to_slash "$git_dir")"
+}
+
+# 置き場にある他の目印を調べ、終わった実行の目印を消し、残っている実行ごとに警告の行を出す。
+# 終わったかどうかは相手のログで見分ける。ログの最後の行は、終了した実行に限って result= の行になるためである。
+# ログが無い目印(7 日を過ぎたログの削除で消えた場合を含む)は、見分ける手がかりが無いので終わった実行として消す。
+# check_run_markers <置き場>
+check_run_markers() {
+  local m other_id other_log last warning
+  for m in "$1"/*.run; do
+    [ -f "$m" ] || continue
+    other_id="$(basename "$m" .run)"
+    [ "$other_id" != "$run_id" ] || continue
+    other_log="$(sed -n 's/\r$//; s/^codex-agent: log=//p' "$m" 2>/dev/null | head -n 1)"
+    if [ -z "$other_log" ] || [ ! -f "$other_log" ]; then
+      rm -f "$m" 2>/dev/null
+      continue
+    fi
+    last="$(tail -n 1 "$other_log" 2>/dev/null | tr -d '\r')"
+    case "$last" in
+      "codex-agent: result="*)
+        rm -f "$m" 2>/dev/null
+        continue
+        ;;
+    esac
+    warning="codex-agent: warning=concurrent-writer run=$other_id log=$other_log"
+    printf '%s\n' "$warning"
+    printf '%s\n' "$warning" >>"$log_file"
+  done
+  return 0
+}
+
+# 自分の目印を置く。一時ファイルに書いてから名前を変え、他の起動が書きかけの目印を読まないようにする。
+# 置けなかったときは marker_file を空のままにし、起動は続ける。
+# place_run_marker <置き場>
+place_run_marker() {
+  local tmp="$1/$run_id.run.tmp"
+  if {
+    printf '%s\n' "$run_line"
+    printf '%s\n' "$log_line"
+    printf 'codex-agent: agent=%s sandbox=%s\n' "$agent_name" "$codex_sandbox"
+  } 2>/dev/null >"$tmp" && mv -f "$tmp" "$1/$run_id.run" 2>/dev/null; then
+    marker_file="$1/$run_id.run"
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
+  return 0
+}
+
+# 目印を扱うのは書き込み可能な起動だけである。
+# read-only の起動は worktree を書き換えないため、目印を置かず、他の目印も調べない。
+# 目印の処理に失敗しても起動は止めない。目印は観測の補助であり、委譲そのものより優先しないためである。
+if [ "$codex_sandbox" = "workspace-write" ]; then
+  runs_dir="$(run_marker_dir)"
+  if [ -n "$runs_dir" ] && mkdir -p "$runs_dir" 2>/dev/null; then
+    check_run_markers "$runs_dir"
+    place_run_marker "$runs_dir"
+  fi
+fi
 
 # 失敗時と、最終報告を取り出せない場合に出すログの行数。
 tail_lines=40
@@ -355,11 +449,11 @@ finish() {
   exit "$2"
 }
 
-# ログから先頭の run= の行を除いた本文を出す。
-# 失敗時に標準出力へ出す末尾と、失敗の判定の対象には run= の行を含めない。
-# 前者は標準出力に run= の行を 2 回出さないため、後者は実行 ID や PID の数字が判定の語(429 など)に一致しうるためである。
+# ログから先頭の run= の行と warning= の行を除いた本文を出す。
+# 失敗時に標準出力へ出す末尾と、失敗の判定の対象には、これらの行を含めない。
+# 前者は標準出力に同じ行を 2 回出さないため、後者は実行 ID、PID、ログのパスの数字が判定の語(429 など)に一致しうるためである。
 log_body() {
-  tail -n +2 "$log_file"
+  awk 'NR > 1 && !/^codex-agent: warning=/' "$log_file"
 }
 
 # --output-last-message は Codex の版によって無い。無い版ではログの末尾を報告の代わりに出す。
@@ -401,10 +495,37 @@ CODEX_HOME="$codex_home" codex exec -c approval_policy=never "${codex_args[@]}" 
   | grep --line-buffered -v -e '^WARNING' -e '^hook:' >>"$log_file"
 codex_status="${PIPESTATUS[0]}"
 
+# ツール接続の判定に使う経過(標準エラー)は、最終回答を写す前に取り出す。
+# 最終回答も含めて判定すると、回答の本文に書かれた語で判定が反転する。
+stderr_body="$(log_body)"
+
 # 経過(標準エラー)に続けて最終回答(標準出力)をログへ写す。
 cat "$out_file" >>"$log_file"
 # 最終回答が改行で終わらなくても、あとで追記する result= の行が独立した行になるようにする。
 end_newline "$log_file" >>"$log_file"
+
+# 根拠は 1 行ずつ接頭辞を付けて出す。
+# 呼び出し側の定義は result 行の直前に evidence 行が来ることを前提にしているため、
+# 接頭辞の無い行を間に挟まない。
+emit_evidence() {
+  printf '%s\n' "$2" | while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    printf 'codex-agent: %s evidence: %s\n' "$1" "$line"
+  done
+}
+
+# 終了コード 0 でも、ツール接続が一度も成立しなかった実行は依頼を果たしていないため 75 に倒す。
+# この ERROR 行は先頭にタイムスタンプが付くため、行頭でなく行内の ERROR で照合する。
+# ツール実行の成功行(" succeeded in ")が 1 行でもあれば、接続が復旧して作業できたとみなし ok のままにする。
+# 本文は変数に受けてから調べる。pipefail の下で grep -q へパイプすると、書き手が SIGPIPE で失敗して判定が反転しうるためである。
+if [ "$codex_status" -eq 0 ]; then
+  matched="$(printf '%s\n' "$stderr_body" | grep -E 'ERROR' | grep -F 'code-mode host exited during handshake' | head -n 3)"
+  if [ -n "$matched" ] && [[ "$stderr_body" != *' succeeded in '* ]]; then
+    log_body | tail -n "$tail_lines"
+    emit_evidence 'unavailable' "$matched"
+    finish unavailable 75
+  fi
+fi
 
 if [ "$codex_status" -eq 0 ]; then
   if [ -s "$last_msg_file" ]; then
@@ -437,16 +558,6 @@ evidence="$(
     log_body | tail -n 10
   } 2>/dev/null | awk '!seen[$0]++'
 )"
-
-# 根拠は 1 行ずつ接頭辞を付けて出す。
-# 呼び出し側の定義は result 行の直前に evidence 行が来ることを前提にしているため、
-# 接頭辞の無い行を間に挟まない。
-emit_evidence() {
-  printf '%s\n' "$2" | while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    printf 'codex-agent: %s evidence: %s\n' "$1" "$line"
-  done
-}
 
 # 利用上限の通知は標準出力に出ることも標準エラーに出ることもあるため、両方を見る。
 # 429 は単語境界で照合する。ID や桁数の一致で誤検出しないためである。
