@@ -35,8 +35,8 @@
 //   - result 行は、行頭から行末までが `codex-agent: result=<値>` の行である。値は ok、rate-limited、unavailable、
 //     failed exit=<n> のいずれかで、後ろに ` (simulated)` が付くことがある。本文にいくつもあるときは最後の行を使う。
 //     Codex の最終報告が result 行を引用することがあり、ラッパーは自分の result 行を出力の最後に出すためである。
-//     行頭に `grep -n` の行番号(`32:` か `32-`)が付いた行も result 行とする。出力を `grep -n` で絞った起動の結果を
-//     読むためである。行の途中にある result 行は拾わない。最終報告が行の途中で引用することがあるためである。
+//     行頭に `grep -n` の行番号(`32:` か `32-`)、または Read ツールの行番号(空白、数字、タブ)が付いた行も result 行とする。
+//     行の途中にある result 行は拾わない。最終報告が行の途中で引用することがあるためである。
 //   - 最後の result 行に ` (simulated)` が付く起動は、試験用フックが Codex を起動せずに出したものである。
 //     実起動にも結果の内訳にも入れず、「疑似の起動」として別に数える。期間の判定は実起動と同じである。
 //     委譲の結果、Codex 未呼出、待つための Bash の条件でいう「Codex を起動した」は、疑似でない起動があることである。
@@ -46,13 +46,18 @@
 //     (本文に「moved to the background」が出るもの)と、run_in_background で最初からバックグラウンドに置いた起動
 //     (本文が「Command running in background with ID:」で始まるもの)を、それぞれ別に数える。
 //     前者は Codex の実行時間が Bash の上限を超えた回数を表し、後者は起動した側の選択を表すためである。
-//   - 待つための Bash は、Codex を起動したサブエージェントの記録にある、Codex の起動でない Bash の呼び出しで、
+//   - 「待つためだけの Bash」は、Codex を起動したサブエージェントの記録にある、Codex の起動でない Bash の呼び出しで、
 //     ヒアドキュメントを落としたコマンドが次のどちらかに当たるものである。1 回の呼び出しは、両方に当たっても 1 件と数える。
 //     1 つは、パス区切り(`/` か `\`)に続く語が `.output` で終わるものを含むことである。
 //     Claude Code のバックグラウンドの出力は `.../tasks/<ID>.output` の形であるためである。
 //     もう 1 つは、実行単位の先頭から `do`、`then`、`else`、`{`、`(`、`!` の語を読み飛ばした後の最初の語が、
 //     ちょうど `sleep` か `until` であることである。語を含むだけのコマンド(`--until` を渡す実行や、
 //     `sleep` を含む行を編集する実行)を待機と取り違えないためである。
+//     メインセッションの同じ記録にある待ちは、codex-agent.sh の起動が持つ背景 ID または出力ファイルのパスを
+//     コマンドに含む場合だけ、別の指標として数える。
+//   - 並行書き込み警告は、Codex の起動(バックグラウンドへ移されたものを含む)の出力またはその起動に結び付いた読み取り結果に、行頭から
+//     `codex-agent: warning=concurrent-writer` で始まる行がある起動を 1 件と数える。疑似起動は含めない。
+//     行頭に `grep -n` または Read ツールの行番号が付く場合も認め、同じ起動を二重に数えない。
 //   - 委譲 1 件は Agent の呼び出し 1 件である。同じ依頼文を出し直した場合も、
 //     それぞれ別の実行を伴うので別の委譲として数える。
 //   - サブエージェント起動は、子の記録にある Agent ツールの呼び出しで数える。
@@ -103,7 +108,7 @@ const path = require('path');
 const WRAPPER_AGENTS = ['impl-hard', 'impl-light', 'impl-standard', 'codex-review', 'codex-subagent'];
 
 // 数え方の約束を変えたら上げる。運用記録の値がどの規則で数えたものかを、値の脇に残すためである。
-const COUNTING_RULES_VERSION = 2;
+const COUNTING_RULES_VERSION = 3;
 
 const DAY = 24 * 3600 * 1000;
 
@@ -450,11 +455,12 @@ const textOf = (c) => {
   return '';
 };
 
-const RESULT_LINE = /^(?:\d+[:-])?codex-agent: result=(ok|rate-limited|unavailable|failed exit=(\d+))( \(simulated\))?[ \t\r]*$/gm;
+const RESULT_LINE = /^(?:(?:\d+[:-])|(?:[ \t]*\d+\t))?codex-agent: result=(ok|rate-limited|unavailable|failed exit=(\d+))( \(simulated\))?[ \t\r]*$/gm;
+const CONCURRENT_WRITER_LINE = /^(?:(?:\d+[:-])|(?:[ \t]*\d+\t))?codex-agent: warning=concurrent-writer\b.*$/m;
 
 // 本文の result 行のうち最後のものを読む。無ければ null を返す。
 // 行頭から行末までが result 行の形である行だけを見る。最終報告が行の途中で引用したものを拾わないためである。
-// 行頭の `grep -n` の行番号は読み飛ばす。出力を `grep -n` で絞った起動の結果も読むためである。
+// 行頭の `grep -n` と Read ツールの行番号は読み飛ばす。
 // 最後の行を使うのは、最終報告が前のほうで result 行を引用することがあり、ラッパーは自分の行を最後に出すためである。
 // 実起動の内訳、委譲の結果、バックグラウンドの追跡のすべてでこの読み取りを使い、判定を食い違わせない。
 // value は ok、rate-limited、unavailable、failed exit=<n> のいずれかで、simulated は試験用フックの出力かを表す。
@@ -463,6 +469,10 @@ function lastResultLine(t) {
   for (const r of t.matchAll(RESULT_LINE)) last = r;
   if (!last) return null;
   return { value: last[1], exitCode: last[2], simulated: last[3] !== undefined };
+}
+
+function hasConcurrentWriterWarning(t) {
+  return CONCURRENT_WRITER_LINE.test(t);
 }
 
 // result 行を委譲の結果の分類へ写す。疑似の result 行は呼び出し側で除いてある。
@@ -578,12 +588,22 @@ function collect(files, start, endExclusive, options = {}) {
     startedInBackground: 0,
     offloaded: [],
     waitCalls: 0,
+    mainWaitCalls: 0,
+    concurrentWriterRuns: 0,
     byAgent: {},
     unreadable: [],
     unparseableLines: new Map(),
     badTimestamps: 0,
     subByToolUse: new Map(),
     agentCalls: [],
+  };
+
+  const markConcurrentWriter = (inv) => {
+    if (!inv || inv.simulated || inv.concurrentWriter) return;
+    if (inv.countedInRange === null) inv.countedInRange = inRange(inv.ts, inv.at);
+    if (!inv.countedInRange) return;
+    inv.concurrentWriter = true;
+    if (once(`concurrent-writer|${inv.id}`)) m.concurrentWriterRuns += 1;
   };
 
   // 起動の記録順。子が複数ある委譲で、時刻が同じ起動の前後を決めるために使う。
@@ -601,6 +621,7 @@ function collect(files, start, endExclusive, options = {}) {
     let committed = 0;
     let spawnedAgents = 0;
     const waitKeys = [];
+    const mainWaitKeys = [];
     // 子の記録にある codex-agent.sh の起動を出現順に持つ。結果の分類は期間で絞らない。
     // 疑似かどうかは tool_result で分かるので、ファイルを読み終えてから除く。
     const invocations = [];
@@ -609,6 +630,8 @@ function collect(files, start, endExclusive, options = {}) {
     const tracking = [];
     // 手がかりで起動に結び付けた tool_use の識別子と、結び付いた起動の並び。
     const linkedReads = new Map();
+    // メインセッションの待ちは、同じ記録の起動の手がかりに結び付ける。
+    const mainWaitTracking = [];
     let lineNo = 0;
 
     for (const line of lines) {
@@ -636,6 +659,9 @@ function collect(files, start, endExclusive, options = {}) {
         if (c.type === 'tool_result' && linkedReads.has(c.tool_use_id)) {
           const hits = linkedReads.get(c.tool_use_id);
           linkedReads.delete(c.tool_use_id);
+          if (hasConcurrentWriterWarning(textOf(c))) {
+            for (const tr of hits) markConcurrentWriter(tr.inv);
+          }
           const r = c.is_error === true ? null : lastResultLine(textOf(c));
           if (r && !r.simulated) {
             const outcome = outcomeOfResult(r);
@@ -652,16 +678,31 @@ function collect(files, start, endExclusive, options = {}) {
           const cmd = stripHeredocs(raw);
           if (isCodexInvocation(raw)) {
             pending.set(c.id, { ts: o.timestamp, at, file });
+            const inv = {
+              id: c.id,
+              ts: o.timestamp,
+              at,
+              seq: invocationSeq,
+              outcome: 'unknown',
+              simulated: false,
+              concurrentWriter: false,
+              countedInRange: null,
+            };
             if (isSub(file)) {
-              const inv = { ts: o.timestamp, seq: invocationSeq, outcome: 'unknown', simulated: false };
               invocationSeq += 1;
               invocations.push(inv);
-              invocationById.set(c.id, inv);
             }
-          } else if (isSub(file) && isWaitCommand(cmd) && inRange(o.timestamp, at)) {
-            // 待つためだけの Bash。定義に待ち方を書く前は、これが毎回繰り返されていた。
-            // Codex の起動そのものは待機に数えない。
-            waitKeys.push(`wait|${c.id}`);
+            invocationById.set(c.id, inv);
+          } else if (isWaitCommand(cmd) && inRange(o.timestamp, at)) {
+            if (isSub(file)) {
+              waitKeys.push(`wait|${c.id}`);
+            } else {
+              const normalizedCommand = normalizeClue(cmd);
+              const isLinkedWait = mainWaitTracking.some((tr) => (
+                tr.clues.some((clue) => normalizedCommand.includes(clue))
+              ));
+              if (isLinkedWait) mainWaitKeys.push(`main-wait|${c.id}`);
+            }
           }
           // 委譲は親の起動時刻で期間を選ぶ。子の実行が日付をまたぐことがあるため、
           // 子の側では期間で絞らない。
@@ -688,11 +729,13 @@ function collect(files, start, endExclusive, options = {}) {
             // Codex を起動していないので、委譲の結果の起動にしない。追跡もしない。
             inv.simulated = true;
           } else {
+            if (hasConcurrentWriterWarning(t)) markConcurrentWriter(inv);
             inv.outcome = classifyInvocation(c);
+            const clues = trackingClues(t);
             if (inv.outcome === 'unknown') {
-              const clues = trackingClues(t);
               if (clues.length > 0) tracking.push({ inv, clues });
             }
+            if (!isSub(file) && clues.length > 0) mainWaitTracking.push({ inv, clues });
           }
         }
         if (c.type === 'tool_result' && pending.has(c.tool_use_id)) {
@@ -740,6 +783,9 @@ function collect(files, start, endExclusive, options = {}) {
       for (const key of waitKeys) {
         if (once(key)) m.waitCalls += 1;
       }
+    }
+    for (const key of mainWaitKeys) {
+      if (once(key)) m.mainWaitCalls += 1;
     }
     if (isSub(file)) {
       // 記録の脇にある meta ファイルが、その実行を起こした親の tool_use を持つ。
@@ -847,6 +893,8 @@ function main() {
       最大KB: offloaded.length ? Math.max(...offloaded) : 0,
     },
     待つためのBash: m.waitCalls,
+    メインセッションの待つためのBash: m.mainWaitCalls,
+    並行書き込み警告を含む起動: m.concurrentWriterRuns,
     委譲の内訳: m.byAgent,
     解析できなかった行: unparseableLines,
     日時が読めなかった記録: m.badTimestamps,
@@ -878,6 +926,8 @@ function main() {
       (offloaded.length ? ` (最大 ${Math.max(...offloaded)}KB)` : ''),
   );
   console.log(`待つためだけの Bash: ${m.waitCalls}`);
+  console.log(`メインセッションの待つためだけの Bash: ${m.mainWaitCalls}`);
+  console.log(`並行書き込み警告を含む起動(バックグラウンドへ移された起動を含む): ${m.concurrentWriterRuns}`);
   console.log('');
   console.log('委譲の内訳(親から見た委譲 / Codex 未呼出 / git commit を実行 / サブエージェント起動 / 紐付け不明)');
   for (const [k, v] of Object.entries(m.byAgent).sort((a, b) => b[1].calls - a[1].calls)) {
