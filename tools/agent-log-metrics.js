@@ -27,6 +27,9 @@
 //   - スクリプトパスより後ろに、ちょうど `-h` か `--help` の語がある実行単位は、起動と数えない。
 //     ラッパーは引数のどこにこれがあっても用法を出して終わり、Codex を起動しないためである。
 //     語はシェルと同じく引用符を外して比べ、ヒアストリング(`<<<`)の本文は比べない。
+//   - スクリプトパスより後ろに `--wait` の語がある実行単位も、起動と数えない(`-h` か `--help` もあれば用法の表示)。
+//     完了を待つ入口で Codex を起動せず、起動に数えると 1 件の委譲が待ちの回数だけ起動に見えるためである。
+//     この実行は「待つためだけの Bash」に数える。
 //   - セッションが作業ディレクトリを移ると、同じセッションの記録が別のプロジェクト置き場にも書かれる。
 //     プロジェクト置き場より後ろの相対パスが同じ記録を複製の候補とし、最も大きい記録を残す
 //     (同じ大きさならパスの辞書順で先のもの)。ほかの記録は、残した記録の先頭と全バイトが一致する場合に限って除く。
@@ -47,14 +50,15 @@
 //     (本文が「Command running in background with ID:」で始まるもの)を、それぞれ別に数える。
 //     前者は Codex の実行時間が Bash の上限を超えた回数を表し、後者は起動した側の選択を表すためである。
 //   - 「待つためだけの Bash」は、Codex を起動したサブエージェントの記録にある、Codex の起動でない Bash の呼び出しで、
-//     ヒアドキュメントを落としたコマンドが次のどちらかに当たるものである。1 回の呼び出しは、両方に当たっても 1 件と数える。
+//     ヒアドキュメントを落としたコマンドが次のいずれかに当たるものである。1 回の呼び出しは、複数に当たっても 1 件と数える。
 //     1 つは、パス区切り(`/` か `\`)に続く語が `.output` で終わるものを含むことである。
 //     Claude Code のバックグラウンドの出力は `.../tasks/<ID>.output` の形であるためである。
 //     もう 1 つは、実行単位の先頭から `do`、`then`、`else`、`{`、`(`、`!` の語を読み飛ばした後の最初の語が、
 //     ちょうど `sleep` か `until` であることである。語を含むだけのコマンド(`--until` を渡す実行や、
 //     `sleep` を含む行を編集する実行)を待機と取り違えないためである。
+//     3 つ目は、codex-agent.sh の `--wait <実行 ID>` の実行である。
 //     メインセッションの同じ記録にある待ちは、codex-agent.sh の起動が持つ背景 ID または出力ファイルのパスを
-//     コマンドに含む場合だけ、別の指標として数える。
+//     コマンドに含む場合と、`--wait` に渡した実行 ID がその起動の実行 ID である場合だけ、別の指標として数える。
 //   - 並行書き込み警告は、Codex の起動(バックグラウンドへ移されたものを含む)の出力またはその起動に結び付いた読み取り結果に、行頭から
 //     `codex-agent: warning=concurrent-writer` で始まる行がある起動を 1 件と数える。疑似起動は含めない。
 //     行頭に `grep -n` または Read ツールの行番号が付く場合も認め、同じ起動を二重に数えない。
@@ -91,11 +95,13 @@
 //     最終報告がこのタグを引用しただけの本文を取り違えないためである。
 //     result 行をバックグラウンドの文言より先に見るのは、最終報告の本文がその文言に触れていることがあるためである。
 //   - 起動がバックグラウンドへ移った場合と、出力が退避された場合は、その起動を追跡する。
-//     手がかりは、バックグラウンドの ID と出力ファイルのパス、退避先のパスである。
+//     手がかりは、バックグラウンドの ID と出力ファイルのパス、退避先のパス、実行 ID である。
+//     実行 ID は、起動の結果と、1 つの起動にだけ結び付いた読み取りの結果にある、行頭の
+//     `codex-agent: run=<実行 ID> pid=` の行から取る。`--wait <実行 ID>` で完了を知る起動も確定できるようにするためである。
 //     同じ子の記録で後に現れる tool_use のうち、入力が手がかりを含むもの(種類は問わない)を
 //     その起動に結び付け、その tool_result の最後の result 行で起動の結果を確定する。
-//     パスは区切り文字 `\` と `/` の違いを吸収して照合する。is_error の付いた結果と、
-//     最後の result 行が疑似のものは確定に使わない。
+//     パスは区切り文字 `\` と `/` の違いを吸収して照合する。実行 ID は、前後に英数字、`_`、`-` が続かない位置に
+//     現れたときだけ含むとみなす。is_error の付いた結果と、最後の result 行が疑似のものは確定に使わない。
 //   - 手がかりで結び付かない読み取りの result 行は使わない。差分や文書、別の実行のログを読んだ結果にも
 //     result 行が現れるため、それを拾うと別の起動の結果を流用する。
 //   - 追跡しても確定しなかったもの、結果が記録に無いもの、どの分類にも当たらないものは
@@ -108,7 +114,7 @@ const path = require('path');
 const WRAPPER_AGENTS = ['impl-hard', 'impl-light', 'impl-standard', 'codex-review', 'codex-subagent'];
 
 // 数え方の約束を変えたら上げる。運用記録の値がどの規則で数えたものかを、値の脇に残すためである。
-const COUNTING_RULES_VERSION = 3;
+const COUNTING_RULES_VERSION = 4;
 
 const DAY = 24 * 3600 * 1000;
 
@@ -379,21 +385,21 @@ function shellWords(text) {
   return words;
 }
 
-// 起動の判定は 1 か所に置く。実起動、未呼出、待機の集計で同じ判定を使う。
-// 起動の形でも、Codex を起動しない実行は数えない。
-// bash の短いオプションのまとまりに n を含む実行は構文を検査するだけで、スクリプトを実行しない。
-// スクリプトパスより後ろにちょうど -h か --help の語があれば、ラッパーは用法を出して終わる。
+// codex-agent.sh を実行する実行単位ごとに、スクリプトパスより後ろの語を引用符を外した値で返す。
+// bash の短いオプションのまとまりに n を含む実行は構文を検査するだけで、スクリプトを実行しないので除く。
 // 語はシェルと同じく引用符を外して比べる。シェルは `"--help"` の引用符を外してラッパーへ渡すためである。
-// ヒアストリング(`<<<` と、その本文の語)は標準入力で、ラッパーの引数ではないので比べない。
+// ヒアストリング(`<<<` と、その本文の語)は標準入力で、ラッパーの引数ではないので含めない。
 // `<<<` の前にはファイル記述子の番号(`0<<<`)が付くことがある。
-function isCodexInvocation(cmd) {
-  return splitCommands(stripHeredocs(cmd)).some((seg) => {
+function wrapperArgLists(cmd) {
+  const lists = [];
+  for (const seg of splitCommands(stripHeredocs(cmd))) {
     const trimmed = seg.trim();
     const m = INVOCATION.exec(trimmed);
-    if (!m) return false;
+    if (!m) continue;
     const options = m[1].split(/\s+/).filter(Boolean);
-    if (options.some((option) => /^-[^-\s]*n/.test(option))) return false;
+    if (options.some((option) => /^-[^-\s]*n/.test(option))) continue;
     const words = shellWords(trimmed.slice(m[0].length));
+    const args = [];
     for (let i = 0; i < words.length; i += 1) {
       const { value, raw } = words[i];
       if (/^\d*<<<$/.test(raw)) {
@@ -401,10 +407,31 @@ function isCodexInvocation(cmd) {
         continue;
       }
       if (/^\d*<<</.test(raw)) continue; // 本文が `<<<` に続けて書かれている。
-      if (value === '-h' || value === '--help') return false;
+      args.push(value);
     }
-    return true;
-  });
+    lists.push(args);
+  }
+  return lists;
+}
+
+// ラッパーは引数のどこに -h か --help があっても、用法を出して終わる。
+const isHelpArgs = (args) => args.some((value) => value === '-h' || value === '--help');
+
+// 起動の判定は 1 か所に置く。実起動、未呼出、待機の集計で同じ判定を使う。
+// 用法の表示と --wait(完了を待つ入口)は Codex を起動しないので数えない。
+function isCodexInvocation(cmd) {
+  return wrapperArgLists(cmd).some((args) => !isHelpArgs(args) && !args.includes('--wait'));
+}
+
+// codex-agent.sh --wait <実行 ID> の実行単位から、待つ実行 ID を返す。
+function codexWaitRunIds(cmd) {
+  const ids = [];
+  for (const args of wrapperArgLists(cmd)) {
+    if (isHelpArgs(args)) continue;
+    const i = args.indexOf('--wait');
+    if (i >= 0 && args[i + 1]) ids.push(args[i + 1]);
+  }
+  return ids;
 }
 
 // 出力ファイルを読む Bash の目印。Claude Code のバックグラウンドの出力は `.../tasks/<ID>.output` の形である。
@@ -474,6 +501,36 @@ function lastResultLine(t) {
 function hasConcurrentWriterWarning(t) {
   return CONCURRENT_WRITER_LINE.test(t);
 }
+
+const RUN_LINE = /^(?:(?:\d+[:-])|(?:[ \t]*\d+\t))?codex-agent: run=(\S+) pid=/gm;
+
+// 本文の行頭にある run= の行から実行 ID を返す。警告の行の run= は別の実行のものなので拾わない。
+function runIdsIn(t) {
+  return [...t.matchAll(RUN_LINE)].map((r) => r[1]);
+}
+
+// 実行 ID が語として現れるか。前後に英数字、`_`、`-` が続く位置は一致としない。
+// 部分一致にすると、番号の桁だけが違う別の実行 ID に結び付くためである。
+function containsRunId(text, id) {
+  for (let i = text.indexOf(id); i >= 0; i = text.indexOf(id, i + 1)) {
+    const before = text[i - 1] || '';
+    const after = text[i + id.length] || '';
+    if (!/[\w-]/.test(before) && !/[\w-]/.test(after)) return true;
+  }
+  return false;
+}
+
+// 追跡中の起動に、実行 ID を手がかりとして足す。
+function learnRunIds(inv, t) {
+  for (const id of runIdsIn(t)) {
+    if (!inv.runIds.includes(id)) inv.runIds.push(id);
+  }
+}
+
+// tool_use の入力(区切りをそろえた JSON)が、追跡中の起動の手がかりを含むか。
+const inputMatchesTracking = (input, tr) => (
+  tr.clues.some((clue) => input.includes(clue)) || tr.inv.runIds.some((id) => containsRunId(input, id))
+);
 
 // result 行を委譲の結果の分類へ写す。疑似の result 行は呼び出し側で除いてある。
 function outcomeOfResult(r) {
@@ -653,12 +710,15 @@ function collect(files, start, endExclusive, options = {}) {
         if (c.type === 'tool_use' && tracking.length > 0) {
           // 種類を問わず、入力が追跡中の起動の手がかりを含む tool_use をその起動に結び付ける。
           const input = normalizeClue(JSON.stringify(c.input === undefined ? null : c.input));
-          const hits = tracking.filter((tr) => tr.clues.some((clue) => input.includes(clue)));
+          const hits = tracking.filter((tr) => inputMatchesTracking(input, tr));
           if (hits.length > 0) linkedReads.set(c.id, hits);
         }
         if (c.type === 'tool_result' && linkedReads.has(c.tool_use_id)) {
           const hits = linkedReads.get(c.tool_use_id);
           linkedReads.delete(c.tool_use_id);
+          // 出力ファイルの途中の読み取りで分かった実行 ID で、後の --wait を同じ起動に結び付ける。
+          // 複数の起動に結び付いた読み取りは、どの起動の行かを決められないので使わない。
+          if (hits.length === 1) learnRunIds(hits[0].inv, textOf(c));
           if (hasConcurrentWriterWarning(textOf(c))) {
             for (const tr of hits) markConcurrentWriter(tr.inv);
           }
@@ -676,6 +736,7 @@ function collect(files, start, endExclusive, options = {}) {
         if (c.type === 'tool_use' && c.name === 'Bash') {
           const raw = String((c.input && c.input.command) || '');
           const cmd = stripHeredocs(raw);
+          const waitRunIds = codexWaitRunIds(raw);
           if (isCodexInvocation(raw)) {
             pending.set(c.id, { ts: o.timestamp, at, file });
             const inv = {
@@ -687,19 +748,21 @@ function collect(files, start, endExclusive, options = {}) {
               simulated: false,
               concurrentWriter: false,
               countedInRange: null,
+              runIds: [],
             };
             if (isSub(file)) {
               invocationSeq += 1;
               invocations.push(inv);
             }
             invocationById.set(c.id, inv);
-          } else if (isWaitCommand(cmd) && inRange(o.timestamp, at)) {
+          } else if ((isWaitCommand(cmd) || waitRunIds.length > 0) && inRange(o.timestamp, at)) {
             if (isSub(file)) {
               waitKeys.push(`wait|${c.id}`);
             } else {
               const normalizedCommand = normalizeClue(cmd);
               const isLinkedWait = mainWaitTracking.some((tr) => (
                 tr.clues.some((clue) => normalizedCommand.includes(clue))
+                || waitRunIds.some((id) => tr.inv.runIds.includes(id))
               ));
               if (isLinkedWait) mainWaitKeys.push(`main-wait|${c.id}`);
             }
@@ -731,11 +794,11 @@ function collect(files, start, endExclusive, options = {}) {
           } else {
             if (hasConcurrentWriterWarning(t)) markConcurrentWriter(inv);
             inv.outcome = classifyInvocation(c);
+            learnRunIds(inv, t);
             const clues = trackingClues(t);
-            if (inv.outcome === 'unknown') {
-              if (clues.length > 0) tracking.push({ inv, clues });
-            }
-            if (!isSub(file) && clues.length > 0) mainWaitTracking.push({ inv, clues });
+            const hasClue = clues.length > 0 || inv.runIds.length > 0;
+            if (inv.outcome === 'unknown' && hasClue) tracking.push({ inv, clues });
+            if (!isSub(file) && hasClue) mainWaitTracking.push({ inv, clues });
           }
         }
         if (c.type === 'tool_result' && pending.has(c.tool_use_id)) {
@@ -971,6 +1034,7 @@ module.exports = {
   stripHeredocs,
   splitCommands,
   isCodexInvocation,
+  codexWaitRunIds,
   parseDay,
   parseBoundary,
   dedupeSessionCopies,
