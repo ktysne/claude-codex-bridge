@@ -567,6 +567,11 @@ t_no_output_last_message() {
     fail "報告が標準出力の末尾 40 行になっていない: 実際の先頭=[$(head -n 2 "$root/actual_tail" | tr '\n' ' ')] 行数=$(wc -l <"$root/actual_tail" | tr -d ' ')"
   fi
   expect_out_no_match "使われないはずの報告"
+  # --wait が vanished と unverified を分けるための目印は、ログにだけ書き、標準出力には出さない。
+  if ! grep -Fxq 'codex-agent: note=no-output-last-message' <(tr -d '\r' <"$(only_log_file)"); then
+    fail "--output-last-message の無い版の目印がログに無い"
+  fi
+  expect_out_no_match "note=no-output-last-message"
 }
 
 # ヘルプの --output-last-message の行を読んだ時点で読み手が終わっても、有る版と判定する。
@@ -1462,6 +1467,19 @@ t_wait_vanished() {
   expect_eq "作成時刻が合わない PID の最後の行" "codex-agent: vanished run=$id" "$(last_out_line)"
 }
 
+# --output-last-message の無い版の Codex で起動した実行では、残った Codex を探せないので vanished と断定しない。
+t_wait_unverified() {
+  need_process_probe || return
+  local id
+  id="cxa-unverified-$RANDOM"
+  EXTRA_ENV=(CODEX_AGENT_WAIT_LIMIT_SECONDS=3)
+  plant_unfinished_log "$id" "$(dead_win_pid)" "$(now_utc)"
+  printf 'codex-agent: note=no-output-last-message\n経過: 目印の後の行\n' >>"$(logs_dir)/$id.log"
+  run_wait "$id"
+  expect_rc 1
+  expect_eq "最後の行" "codex-agent: unverified run=$id" "$(last_out_line)"
+}
+
 # ラッパーが消えても、コマンドラインに <実行 ID>.last を含むプロセスが残っていれば orphaned を出す。
 t_wait_orphaned() {
   need_process_probe || return
@@ -1900,6 +1918,7 @@ run_case "--wait(完了済み、利用上限): 根拠の行を含む元の出力
 run_case "--wait(実行中): 上限でログの最後の行と waiting の行を出して 124、完了後は元の出力を返す" t_wait_limit_then_done
 run_case "--wait(実行中): 上限の内側で完了すれば元の出力を返す" t_wait_until_done
 run_case "--wait(結果を書かずに消えた実行): PID が終わっているか別のプロセスなら vanished を出して 1" t_wait_vanished
+run_case "--wait(--output-last-message の無い版の実行): ラッパーが消えても vanished と断定せず unverified を出して 1" t_wait_unverified
 run_case "--wait(ラッパーだけが消えた実行): <実行 ID>.last を含むプロセスが残れば orphaned と止める案内を出して 1" t_wait_orphaned
 run_case "--wait(見つからない実行 ID): not-found を出して 2" t_wait_not_found
 run_case "--wait(報告の写しが無い完了済みの実行): ログの result= の行と、その終了コードを返す" t_wait_log_result_without_report
