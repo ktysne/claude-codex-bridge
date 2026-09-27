@@ -168,7 +168,7 @@ namespace CodexBridgeConsole.Tests
         }
 
         [Fact]
-        public void GptModelChange_UsesNearestSupportedEffortWhenCatalogIsUnavailable()
+        public void GptEffortsFor_ProvidesEffortListForNearestSupportedSelection()
         {
             using (var directory = new TemporaryDirectory())
             {
