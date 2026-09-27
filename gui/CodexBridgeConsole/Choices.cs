@@ -18,6 +18,7 @@ namespace CodexBridgeConsole
         private static readonly string[] EffortOrder = { "low", "medium", "high", "xhigh", "max", "ultra" };
 
         private readonly Dictionary<string, IReadOnlyList<string>> _claudeModelEfforts;
+        private readonly Dictionary<string, IReadOnlyList<string>> _gptModelEfforts;
 
         private Choices(ChoiceDocument document)
         {
@@ -25,7 +26,8 @@ namespace CodexBridgeConsole
             ClaudeEfforts = Copy(document.ClaudeEfforts);
             GptModels = Copy(document.GptModels);
             GptEfforts = Copy(document.GptEfforts);
-            _claudeModelEfforts = BuildClaudeModelEfforts(document.ClaudeModelEfforts);
+            _claudeModelEfforts = BuildModelEfforts(document.ClaudeModelEfforts);
+            _gptModelEfforts = BuildModelEfforts(document.GptModelEfforts);
         }
 
         public IReadOnlyList<string> ClaudeModels { get; private set; }
@@ -35,6 +37,17 @@ namespace CodexBridgeConsole
         public IReadOnlyList<string> GptModels { get; private set; }
 
         public IReadOnlyList<string> GptEfforts { get; private set; }
+
+        public IReadOnlyList<string> GptEffortsFor(string model)
+        {
+            IReadOnlyList<string> efforts;
+            if (!string.IsNullOrEmpty(model) && _gptModelEfforts.TryGetValue(model, out efforts))
+            {
+                return efforts;
+            }
+
+            return GptEfforts;
+        }
 
         // Claude Code には非対話でモデル一覧を返すコマンドが無いため、モデルごとの effort は設定として持つ。
         // 対応表に無いモデルには平坦な一覧を返す。選択肢を消さずに済ませるためである。
@@ -197,9 +210,8 @@ namespace CodexBridgeConsole
             return -1;
         }
 
-        // claudeModelEfforts は任意の項目である。無い場合や項目が壊れている場合は、その項目だけを捨てて空の対応表にする。
-        // 既存の choices.json をそのまま使えるようにするためである。
-        private static Dictionary<string, IReadOnlyList<string>> BuildClaudeModelEfforts(
+        // モデル別 effort 表は任意の項目である。既存の choices.json をそのまま使えるようにする。
+        private static Dictionary<string, IReadOnlyList<string>> BuildModelEfforts(
             List<ModelEffortEntry> entries)
         {
             var map = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
@@ -258,6 +270,9 @@ namespace CodexBridgeConsole
 
             [DataMember(Name = "gptEfforts")]
             public List<string> GptEfforts { get; set; }
+
+            [DataMember(Name = "gptModelEfforts")]
+            public List<ModelEffortEntry> GptModelEfforts { get; set; }
         }
 
         [DataContract]
