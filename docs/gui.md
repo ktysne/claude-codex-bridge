@@ -255,13 +255,18 @@ JSON は次の形で、4 つの配列をすべて指定する。
     { "model": "claude-opus-4-6", "efforts": ["low", "medium", "high", "max"] }
   ],
   "gptModels": ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"],
-  "gptEfforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
+  "gptEfforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
+  "gptModelEfforts": [
+    { "model": "gpt-6-astra", "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"] },
+    { "model": "gpt-5.5", "efforts": ["low", "medium", "high", "xhigh"] }
+  ]
 }
 ```
 
 `claudeModelEfforts` は任意である。書かない場合、Claude 側の effort はモデルによらず `claudeEfforts` の一覧になる。
+`gptModelEfforts` も任意である。書かない場合や対応表に無いモデルでは、GPT 側の effort に `gptEfforts` の一覧を使う。
 
-GPT 側の 2 つは、`codex debug models` から目録を取れた場合はそちらが優先される(次の節を参照)。
+GPT 側のモデルと effort は、`codex debug models` から目録を取れた場合はそちらが優先される(次の節を参照)。
 `choices.json` の GPT 側は、目録を取れなかったときの控えである。
 
 各配列は空にできず、空白だけの選択肢も指定できない。
@@ -278,10 +283,10 @@ GPT 側の 2 つは、`codex debug models` から目録を取れた場合はそ�
 サブエージェントタブで認証ホームを切り替えると、そのホームの目録を取得する。
 取得できた場合、GPT モデルの選択肢は目録のモデル名になり、effort の選択肢はその行で選ばれているモデルが受け付ける値になる。
 
-モデルによって使える effort が違う。
-そのため、GPT モデルを変えると、その行の effort の選択肢が切り替わる。
+目録を取れた場合、GPT モデルを変えると、その行の effort の選択肢が切り替わる。
 変更後のモデルが現在の effort を受け付けない場合は、そのモデルの既定の effort に切り替える。
-選べるように見えて Codex 側で弾かれる組み合わせを保存できないようにするためである。
+目録が無い場合は `gptModelEfforts` の対応表を使い、モデルを変えたときに現在の effort が対応していなければ、指定値以下で最も高い対応済みの値に変える。
+指定値以下に対応済みの値が無い場合は、その一覧の先頭の値にする。
 
 読み込んだ直後は、定義ファイルに書かれている値をそのまま表示する。
 受け付けない値であっても勝手に変えない。開いただけで定義が書き換わるのを避けるためである。
