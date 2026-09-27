@@ -62,7 +62,7 @@ namespace CodexBridgeConsole
             return ClaudeEfforts;
         }
 
-        // Claude Code が「指定値以下で最も高い対応済みの effort へ落とす」と定めているため、その規則に合わせる。
+        // Claude Code の補正規則に合わせ、GPT では Codex が受け付けない値の保存を避けるため、選択中の effort を対応する値に補正する。
         public static string NearestSupportedEffort(IReadOnlyList<string> efforts, string current)
         {
             if (efforts == null || efforts.Count == 0)
@@ -210,7 +210,8 @@ namespace CodexBridgeConsole
             return -1;
         }
 
-        // モデル別 effort 表は任意の項目である。既存の choices.json をそのまま使えるようにする。
+        // モデル別 effort 表は任意の項目である。無い場合や項目が壊れている場合は、その項目だけを捨てて空の対応表にする。
+        // 既存の choices.json をそのまま使えるようにするためである。
         private static Dictionary<string, IReadOnlyList<string>> BuildModelEfforts(
             List<ModelEffortEntry> entries)
         {
