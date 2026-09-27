@@ -108,6 +108,8 @@ log= の行の後に codex-agent: warning=concurrent-writer の行を出す(起�
   codex-agent: vanished run=<実行 ID>       ラッパーが result= の行を書かずに消えた(1)
   codex-agent: orphaned run=<実行 ID> pids=<PID,...>
                                            ラッパーは消えたが Codex 側のプロセスが残っている(1)
+  codex-agent: unverified run=<実行 ID>     ラッパーは消えたが、Codex が残っているかを確かめられない(1)
+                                           (--output-last-message の無い版の Codex で起動した実行)
   codex-agent: not-found run=<実行 ID>      実行 ID のログが無い(2)
 USAGE
 }
@@ -207,6 +209,8 @@ to_windows_path() {
 }
 
 log_dir="$(to_slash "$home_dir")/.claude/codex-agent/logs"
+# --output-last-message の無い版の Codex で起動したことを、ログに残す目印の行。
+NO_LAST_MESSAGE_NOTE="codex-agent: note=no-output-last-message"
 
 # result= の行から、その実行のラッパーが返した終了コードを戻す。規則は下の finish の呼び出しと同じである。
 exit_code_of_result() {
@@ -326,6 +330,9 @@ wait_for_run() {
     if [ -n "$pids" ]; then
       printf 'codex-agent: ラッパーは result= の行を書かずに終わったが、コマンドラインに %s.last を含むプロセスが残っている。docs/gpt-agents.md「既知の制約」の止める手順 3 と 4 で止める\n' "$id"
       printf 'codex-agent: orphaned run=%s pids=%s\n' "$id" "$pids"
+    elif grep -qxF "$NO_LAST_MESSAGE_NOTE" <(tr -d '\r' <"$log_file"); then
+      printf 'codex-agent: この実行の Codex はコマンドラインに %s.last を持たないため、残っているかを確かめられない。docs/gpt-agents.md「既知の制約」の止める手順 3 で、作業ディレクトリから探す\n' "$id"
+      printf 'codex-agent: unverified run=%s\n' "$id"
     else
       printf 'codex-agent: vanished run=%s\n' "$id"
     fi
@@ -635,7 +642,7 @@ finish() {
 # 失敗時に標準出力へ出す末尾と、失敗の判定の対象には、これらの行を含めない。
 # 前者は標準出力に同じ行を 2 回出さないため、後者は実行 ID、PID、ログのパスの数字が判定の語(429 など)に一致しうるためである。
 log_body() {
-  awk 'NR > 1 && !/^codex-agent: warning=/' "$log_file"
+  awk 'NR > 1 && !/^codex-agent: warning=/ && !/^codex-agent: note=/' "$log_file"
 }
 
 # --output-last-message は Codex の版によって無い。無い版ではログの末尾を報告の代わりに出す。
@@ -647,6 +654,11 @@ codex_help="$(CODEX_HOME="$codex_home" codex exec --help 2>/dev/null)"
 case "$codex_help" in
   *--output-last-message*) output_last_message=1 ;;
 esac
+# 無い版では Codex のコマンドラインに <実行 ID>.last が載らず、--wait が残った Codex を探せない。
+# その実行で「Codex は残っていない」と断定させないため、ログに目印を残す。
+if [ "$output_last_message" -eq 0 ]; then
+  printf '%s\n' "$NO_LAST_MESSAGE_NOTE" >>"$log_file"
+fi
 
 codex_args=(
   --skip-git-repo-check

@@ -233,6 +233,7 @@ Codex を起動する前に止まる経路(終了コード 2、3、試験用フ�
 | `codex-agent: waiting run=<実行 ID>` | 上限までに完了しなかった。もう一度 `--wait` で待つ | 124 |
 | `codex-agent: vanished run=<実行 ID>` | ラッパーが `result=` の行を書かずに消え、Codex 側のプロセスも残っていない | 1 |
 | `codex-agent: orphaned run=<実行 ID> pids=<PID,...>` | ラッパーは消えたが、コマンドラインに `<実行 ID>.last` を含むプロセスが残っている | 1 |
+| `codex-agent: unverified run=<実行 ID>` | ラッパーは消えたが、`--output-last-message` の無い版の Codex で起動した実行なので、Codex 側が残っているかを確かめられない | 1 |
 | `codex-agent: not-found run=<実行 ID>` | 実行 ID のログが無い | 2 |
 
 完了したときの終了コードは `result=` の行から戻す。
@@ -243,15 +244,17 @@ Codex 自身が返した 75 を 75 のまま返すと、実装担当が GPT 側�
 1 回の待ちの上限は、`--wait` 自身の起動時刻から数えて 570 秒で、Bash ツールの上限(600 秒)の内側に収めている。
 上限で終えるときは、最後の行の前に `codex-agent: last-log-line: <ログの最後の行>` を進行の目印として 1 行出す。
 出力の無い待ちが何度も続くと、担当が止まったと判断して途中の報告でターンを終えやすいためである。
-`vanished` と `orphaned` の前にも同じ行を出す。
+`vanished`、`orphaned`、`unverified` の前にも同じ行を出す。
 `orphaned` のときは、Codex が作業ツリーに書き続けている可能性がある。「既知の制約」の止める手順 3 と 4 で止める。
+`unverified` のときも、Codex が残っている可能性がある。`vanished` と取り違えて委譲をやり直すと、同じ作業ツリーに 2 つの Codex が書き込むおそれがあるので、止める手順 3 で作業ディレクトリから探して確かめる。
+ラッパーは、`--output-last-message` の無い版の Codex で起動したときに、ログへ `codex-agent: note=no-output-last-message` の行を書く。`--wait` はこの行で `vanished` と `unverified` を分ける。
 
 ラッパーの生死は、待ちの初めに 1 回だけ PowerShell で照合する。
 PowerShell の起動に数秒かかるためである。
 照合の条件は「既知の制約」の止める手順 2 と同じで、`run=` の行の PID のプロセスがコマンドラインに `codex-agent.sh` を含み、作成時刻が `started=` の前後 60 秒以内にあるときだけ、ラッパーが生きているとみなす。
 PID の生死だけで判定しないのは、Windows で PID が再利用されるためである。
 Codex 側のプロセスの生死では判定しない。Codex が先に落ちても、ラッパーが生きていれば `result=failed` を書くためである。
-PowerShell が無い環境と、ログの 1 行目に `run=` の行が無い実行では照合できないため、`vanished` と `orphaned` を出さず、上限まで待って `waiting` を出す。
+PowerShell が無い環境と、ログの 1 行目に `run=` の行が無い実行では照合できないため、`vanished`、`orphaned`、`unverified` を出さず、上限まで待って `waiting` を出す。
 
 スクリプト自体が見つからない場合も、GPT 側が未導入とみなす。
 5 つのサブエージェントは `bash ~/.claude/tools/codex-agent.sh` を固定で呼び、カレントディレクトリのスクリプトを探さない。
@@ -429,6 +432,7 @@ Windows 10 と Git Bash 5.3 で確かめたところ、Bash ツールで止ま�
    実行 ID は時刻と番号を含み、別の実行と重ならないため、PID と違って作成時刻を確かめなくてよい。
    2 だけでは Codex まで止まらないため、この手順が要る。
    Git Bash が Git Bash 系のプログラム(npm のシムの `sh` など)を起動すると、中継のプロセスが先に終わり、Windows 上の親子関係がラッパーから途切れるためである。
+   `--output-last-message` の無い版の Codex で起動した実行では、`.last` がコマンドラインに載らない(ログに `codex-agent: note=no-output-last-message` の行がある)。その場合は、コマンドラインに `exec` と作業ディレクトリ(監査行の `workdir=` の値)を含むプロセスを候補として探し、別の実行でないことを人が確かめてから止める。
 4. 止めたあと、ログ置き場(`%USERPROFILE%\.claude\codex-agent\logs`)の `<実行 ID>.last`、`<実行 ID>.out`、`<実行 ID>.report.tmp` を消す。ログ本体の `<実行 ID>.log` は残す。
    強制終了ではラッパーの終了時の後始末が動かないため、これらが残る。
    消さなくても、次にラッパーを起動したときに 7 日より古いものは消える。
