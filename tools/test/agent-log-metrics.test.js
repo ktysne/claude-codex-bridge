@@ -11,6 +11,7 @@ const {
   stripHeredocs,
   splitCommands,
   isCodexInvocation,
+  codexWaitRunIds,
   parseDay,
   parseBoundary,
   dedupeSessionCopies,
@@ -986,7 +987,7 @@ test('CLI は数え方の版と追加指標を JSON に出す', () => {
 
     assert.equal(result.status, 0);
     const summary = JSON.parse(result.stdout);
-    assert.equal(summary['数え方の版'], 3);
+    assert.equal(summary['数え方の版'], 4);
     assert.equal(summary['メインセッションの待つためのBash'], 0);
     assert.equal(summary['並行書き込み警告を含む起動'], 0);
   });
@@ -1072,6 +1073,111 @@ test('collect はメインセッションの待ちを起動の手がかりで結
     assert.equal(metrics.mainWaitCalls, 1);
     assert.equal(metrics.waitCalls, 1);
     assert.equal(metrics.concurrentWriterRuns, 2);
+  });
+});
+
+const RUN_ID = 'impl-standard-20260910-100100-1234';
+const WAIT = (id) => `bash ~/.claude/tools/codex-agent.sh --wait ${id}`;
+const RUN_HEAD = `codex-agent: agent=impl-standard\ncodex-agent: run=${RUN_ID} pid=4321 started=2026-09-10T10:01:00Z\n`
+  + `codex-agent: log=C:/Users/someone/.claude/codex-agent/logs/${RUN_ID}.log\n`;
+
+test('codexWaitRunIds は --wait の実行 ID を返し、isCodexInvocation は --wait を起動と数えない', () => {
+  assert.equal(isCodexInvocation(WAIT(RUN_ID)), false);
+  assert.deepEqual(codexWaitRunIds(WAIT(RUN_ID)), [RUN_ID]);
+  assert.deepEqual(codexWaitRunIds(`bash "$HOME/.claude/tools/codex-agent.sh" --wait "${RUN_ID}"`), [RUN_ID]);
+  // 用法の表示と構文検査は待ちでもない。
+  assert.deepEqual(codexWaitRunIds(`${WAIT(RUN_ID)} -h`), []);
+  assert.equal(isCodexInvocation(`${WAIT(RUN_ID)} -h`), false);
+  assert.deepEqual(codexWaitRunIds(`bash -n ~/.claude/tools/codex-agent.sh --wait ${RUN_ID}`), []);
+  assert.deepEqual(codexWaitRunIds(INVOKE), []);
+  assert.equal(isCodexInvocation(INVOKE), true);
+});
+
+test('collect は --wait を起動に数えず待つための Bash に数え、背景へ移った起動を --wait の結果で確定する', () => {
+  // 背景へ移った起動の本文には run= の行が無い。出力ファイルの途中の読み取りで実行 ID が分かり、
+  // その実行 ID を渡した --wait の最後の result 行で結果が確定する。
+  // 番号の桁だけが違う実行 ID への --wait と、上限で終えた --wait では確定しない。
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['bg-wait', 'impl-standard']],
+      [['bg-wait', [
+        invokeEvent('2026-09-10T10:01:00.000Z', 'i1', BG_TEXT),
+        toolEvent('2026-09-10T10:02:00.000Z', 'r1', 'Read',
+          { file_path: 'E:/Temp/claude/proj/tasks/bgx123abc.output' }, `     1\t${RUN_HEAD.split('\n').join('\n     2\t')}`),
+        bashEvent({
+          timestamp: '2026-09-10T10:03:00.000Z',
+          id: 'w0',
+          command: WAIT(`${RUN_ID}0`),
+          result: 'codex-agent: result=failed exit=1',
+        }),
+        bashEvent({
+          timestamp: '2026-09-10T10:04:00.000Z',
+          id: 'w1',
+          command: WAIT(RUN_ID),
+          result: `codex-agent: last-log-line: 経過\ncodex-agent: waiting run=${RUN_ID}`,
+        }),
+        bashEvent({
+          timestamp: '2026-09-10T10:13:00.000Z',
+          id: 'w2',
+          command: WAIT(RUN_ID),
+          result: `${RUN_HEAD}最終報告\ncodex-agent: result=ok`,
+        }),
+      ]]],
+    );
+
+    const metrics = collect(files, ...RANGE_0910);
+
+    assert.deepEqual(metrics.byAgent['impl-standard'].outcomes, outcomesOf({ gptRan: 1 }));
+    assert.equal(metrics.runs, 0);
+    assert.equal(metrics.background, 1);
+    assert.deepEqual(metrics.results, {});
+    assert.equal(metrics.waitCalls, 3);
+  });
+});
+
+test('collect は背景へ移った本文に run= の行があれば、その実行 ID の --wait で確定する', () => {
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['bg-run-line', 'impl-standard']],
+      [['bg-run-line', [
+        invokeEvent('2026-09-10T10:01:00.000Z', 'i1', `${RUN_HEAD}${BG_TEXT}`),
+        bashEvent({
+          timestamp: '2026-09-10T10:12:00.000Z',
+          id: 'w1',
+          command: WAIT(RUN_ID),
+          result: `${RUN_HEAD}ERROR: failed\ncodex-agent: result=failed exit=75`,
+        }),
+      ]]],
+    );
+
+    const metrics = collect(files, ...RANGE_0910);
+
+    assert.deepEqual(metrics.byAgent['impl-standard'].outcomes, outcomesOf({ gptFailed: 1 }));
+    assert.equal(metrics.waitCalls, 1);
+  });
+});
+
+test('collect はメインセッションの --wait を、同じ記録の起動の実行 ID のときだけ待ちに数える', () => {
+  withTempDir((root) => {
+    const file = logPath(root, 'project', 'session.jsonl');
+    writeJsonl(file, [
+      bashEvent({
+        timestamp: '2026-09-10T10:01:00.000Z',
+        id: 'run',
+        command: 'bash ~/.claude/tools/codex-agent.sh impl-standard',
+        result: `${RUN_HEAD}報告\ncodex-agent: result=ok`,
+      }),
+      bashEvent({ timestamp: '2026-09-10T10:02:00.000Z', id: 'linked', command: WAIT(RUN_ID) }),
+      bashEvent({ timestamp: '2026-09-10T10:03:00.000Z', id: 'other', command: WAIT('impl-light-20260910-100000-1') }),
+    ]);
+
+    const metrics = collect([file], ...RANGE_0910);
+
+    assert.equal(metrics.runs, 1);
+    assert.equal(metrics.mainWaitCalls, 1);
+    assert.equal(metrics.waitCalls, 0);
   });
 });
 
@@ -1421,9 +1527,9 @@ test('--json とテキスト出力は数え方の版を出す', () => {
     const text = runMetrics(root, ['--since', '2026-09-10', '--until', '2026-09-10']);
 
     assert.equal(json.status, 0, json.stderr);
-    assert.equal(JSON.parse(json.stdout).数え方の版, 3);
+    assert.equal(JSON.parse(json.stdout).数え方の版, 4);
     assert.equal(text.status, 0, text.stderr);
-    assert.match(text.stdout, /^期間: .*\n数え方の版: 3\n/);
+    assert.match(text.stdout, /^期間: .*\n数え方の版: 4\n/);
   });
 });
 
