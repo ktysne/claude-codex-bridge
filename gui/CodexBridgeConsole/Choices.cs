@@ -210,8 +210,8 @@ namespace CodexBridgeConsole
             return -1;
         }
 
-        // モデル別 effort 表は任意の項目である。無い場合や項目が壊れている場合は、その項目だけを捨てて空の対応表にする。
-        // 既存の choices.json をそのまま使えるようにするためである。
+        // model が空、efforts が null または空、重複した model の項目は、その項目だけを読み飛ばす。
+        // 項目の型が合わず DataContractJsonSerializer が例外を投げると、Load は choices.json 全体を既定値に戻す。
         private static Dictionary<string, IReadOnlyList<string>> BuildModelEfforts(
             List<ModelEffortEntry> entries)
         {
