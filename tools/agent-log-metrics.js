@@ -84,6 +84,8 @@
 //   - 委譲を止める指定は、依頼文の最初の空でない行を前後の空白を除いて比較する。
 //     2 行目以降やコードブロック内の文字列は指定に数えない。定義や文書を引用した依頼を
 //     誤って指定として数えないためである。
+//     紐付いた子の最後の assistant テキストが「委譲の指定により Claude 側で実装した」で始まる場合も数える。
+//     報告は記録に残るため、測り直しても報告による判定は変わらない。
 //   - 分類には、子が codex-agent.sh を起動した Bash の呼び出しのうち、疑似でない最後のものの結果を使う。
 //     子は失敗や上限の後に起動し直すことがあり、委譲の行き先を決めたのは最後の起動だからである。
 //     子が複数ある委譲では、すべての子の起動を時刻で並べて最後のものを使う。記録順はファイルを読んだ順で
@@ -117,7 +119,7 @@ const path = require('path');
 const WRAPPER_AGENTS = ['impl-hard', 'impl-light', 'impl-standard', 'codex-review', 'codex-subagent'];
 
 // 数え方の約束を変えたら上げる。運用記録の値がどの規則で数えたものかを、値の脇に残すためである。
-const COUNTING_RULES_VERSION = 5;
+const COUNTING_RULES_VERSION = 6;
 
 const DAY = 24 * 3600 * 1000;
 
@@ -588,12 +590,17 @@ function classifyInvocation(c) {
 
 const OUTCOME_KEYS = ['gptRan', 'notConfigured', 'gptUnavailable', 'gptFailed', 'denied', 'unknown', 'notInvoked'];
 const DESIGNATION = '委譲: Claude 側で実装';
+const REPORT_DESIGNATION = '委譲の指定により Claude 側で実装した';
 
 // 依頼文の最初の空でない行だけを指定とみなす。後続行やコードブロックの引用を数えないためである。
 function isDesignatedPrompt(prompt) {
   if (typeof prompt !== 'string') return false;
   const firstNonEmptyLine = prompt.split(/\r\n|\n/).find((line) => line.trim() !== '');
   return firstNonEmptyLine !== undefined && firstNonEmptyLine.trim() === DESIGNATION;
+}
+
+function isDesignatedReport(report) {
+  return typeof report === 'string' && report.trim().startsWith(REPORT_DESIGNATION);
 }
 
 // 委譲に属するすべての子の起動から最後のものを選び、その分類を返す。
@@ -692,6 +699,7 @@ function collect(files, start, endExclusive, options = {}) {
     const linkedReads = new Map();
     // メインセッションの待ちは、同じ記録の起動の手がかりに結び付ける。
     const mainWaitTracking = [];
+    let lastAssistantText = '';
     let lineNo = 0;
 
     for (const line of lines) {
@@ -710,6 +718,9 @@ function collect(files, start, endExclusive, options = {}) {
       if (!msg || !Array.isArray(msg.content)) continue;
 
       for (const c of msg.content) {
+        if (isSub(file) && msg.role === 'assistant' && c.type === 'text' && typeof c.text === 'string') {
+          lastAssistantText = c.text;
+        }
         if (c.type === 'tool_use' && tracking.length > 0) {
           // 種類を問わず、入力が追跡中の起動の手がかりを含む tool_use をその起動に結び付ける。
           const input = normalizeClue(JSON.stringify(c.input === undefined ? null : c.input));
@@ -859,7 +870,7 @@ function collect(files, start, endExclusive, options = {}) {
       const link = readAgentMeta(file, m, copiesOf.get(file));
       if (link && link.toolUseId) {
         const list = m.subByToolUse.get(link.toolUseId) || [];
-        list.push({ calledCodex, committed, spawnedAgents, invocations: realInvocations });
+        list.push({ calledCodex, committed, spawnedAgents, invocations: realInvocations, lastAssistantText });
         m.subByToolUse.set(link.toolUseId, list);
       }
     }
@@ -881,19 +892,21 @@ function collect(files, start, endExclusive, options = {}) {
         outcomes: Object.fromEntries(OUTCOME_KEYS.map((k) => [k, 0])),
       });
     row.calls += 1;
-    if (call.designated) row.designated += 1;
     const subs = m.subByToolUse.get(call.toolUseId);
     if (!subs || subs.length === 0) {
+      if (call.designated) row.designated += 1;
       // 対応する実行を特定できない。別の実行の状態を流用せず、不明として数える。
       row.unlinked += 1;
       continue;
     }
+    const designated = call.designated || subs.some((sub) => isDesignatedReport(sub.lastAssistantText));
+    if (designated) row.designated += 1;
     // 未起動と Codex 未呼出は、どちらも疑似を除いた起動が子のどこにも無いことで決まり、件数が一致する。
     if (subs.every((s) => s.calledCodex === 0)) row.noCodex += 1;
     if (subs.some((s) => s.committed > 0)) row.committed += 1;
     if (subs.some((s) => s.spawnedAgents > 0)) row.spawnedAgents += 1;
     const outcome = lastInvocationOutcome(subs);
-    if (call.designated && outcome === 'notInvoked') row.designatedNotInvoked += 1;
+    if (designated && outcome === 'notInvoked') row.designatedNotInvoked += 1;
     row.outcomes[outcome] += 1;
   }
   delete m.subByToolUse;
