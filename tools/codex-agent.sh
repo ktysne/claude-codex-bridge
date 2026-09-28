@@ -241,6 +241,7 @@ exit_code_of_result() {
 # ラッパー本人と Codex 側のプロセスを 1 回の PowerShell で調べ、wrapper=alive|gone の行と codex=<PID> の行を出す。
 # 本人の照合は docs/gpt-agents.md「既知の制約」の止める手順 2 と同じ条件である。PID は再利用されるためである。
 # PowerShell が無いか失敗したときは何も出さない。実行 ID を環境変数で渡すのは、PowerShell 自身のコマンドラインを一致させないためである。
+# 結果は両方の問い合わせが済んでから出す。途中で失敗して wrapper=gone だけが出ると、残った Codex を見落とすためである。
 # probe_run_processes <ラッパーの PID> <started=> <実行 ID>
 probe_run_processes() {
   local ps
@@ -251,11 +252,13 @@ probe_run_processes() {
     $p = Get-CimInstance Win32_Process -Filter ("ProcessId=" + [int]$env:CXA_WRAPPER_PID)
     $started = ([datetimeoffset]$env:CXA_STARTED).UtcDateTime
     if ($p -and $p.CommandLine -like "*codex-agent.sh*" -and
-        [Math]::Abs(($p.CreationDate.ToUniversalTime() - $started).TotalSeconds) -le 60) { "wrapper=alive" } else { "wrapper=gone" }
+        [Math]::Abs(($p.CreationDate.ToUniversalTime() - $started).TotalSeconds) -le 60) { $wrapper = "wrapper=alive" } else { $wrapper = "wrapper=gone" }
     $last = $env:CXA_RUN_ID + ".last"
-    Get-CimInstance Win32_Process |
+    $codex = @(Get-CimInstance Win32_Process |
       Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine.Contains($last) } |
-      ForEach-Object { "codex=" + $_.ProcessId }
+      ForEach-Object { "codex=" + $_.ProcessId })
+    $wrapper
+    $codex
   ' 2>/dev/null | tr -d '\r'
   return 0
 }
