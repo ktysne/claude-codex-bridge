@@ -1696,7 +1696,6 @@ namespace CodexBridgeConsole
             AdjustWindowSize();
         }
 
-        // effort の選択肢は目録またはモデル別の既定表で制限する。
         private void ApplyGptEffortChoices(GptRow row)
         {
             IReadOnlyList<string> efforts = _choices.GptEffortsFor(row.Catalog, row.ModelComboBox.Text);
@@ -1783,35 +1782,16 @@ namespace CodexBridgeConsole
             }
 
             GptRow row = GptRowFor((ComboBox)sender);
-            CodexModelCatalog catalog = row.Catalog;
             // 利用者がモデルを変えたときは、そのモデルが受け付けない effort を残さない。
             // 残すと、選べるように見えて Codex 側で弾かれる組み合わせを保存できてしまう。
             // 読み込み直後は値を変えない。開いただけで定義が書き換わるのを避けるためである。
             // 未設定へ変えたときは effort を触らない。GPT 側を呼ばない行の値をここで書き換える理由が無い。
             if (IsGptModelSet(row))
             {
-                if (catalog != null)
-                {
-                    IReadOnlyList<string> catalogEfforts = catalog.EffortsFor(row.ModelComboBox.Text);
-                    string effort = row.EffortComboBox.Text;
-                    if (catalogEfforts.Count == 0)
-                    {
-                        IReadOnlyList<string> efforts = _choices.GptEffortsFor(row.ModelComboBox.Text);
-                        row.EffortComboBox.Text = Choices.NearestSupportedEffort(efforts, effort);
-                    }
-                    else if (!Contains(catalogEfforts, effort))
-                    {
-                        string defaultEffort = catalog.DefaultEffortFor(row.ModelComboBox.Text);
-                        row.EffortComboBox.Text = string.IsNullOrEmpty(defaultEffort) ? catalogEfforts[0] : defaultEffort;
-                    }
-                }
-                else
-                {
-                    IReadOnlyList<string> efforts = _choices.GptEffortsFor(row.ModelComboBox.Text);
-                    row.EffortComboBox.Text = Choices.NearestSupportedEffort(
-                        efforts,
-                        row.EffortComboBox.Text);
-                }
+                row.EffortComboBox.Text = _choices.GptEffortAfterModelChange(
+                    row.Catalog,
+                    row.ModelComboBox.Text,
+                    row.EffortComboBox.Text);
             }
 
             bool loading = _loadingControls;
@@ -1840,19 +1820,6 @@ namespace CodexBridgeConsole
             }
 
             throw new ArgumentException("GPT モデルの欄ではない", nameof(modelComboBox));
-        }
-
-        private static bool Contains(IReadOnlyList<string> values, string value)
-        {
-            for (int i = 0; i < values.Count; i++)
-            {
-                if (string.Equals(values[i], value, StringComparison.Ordinal))
-                {
-                    return true;
-                }
-            }
-
-            return false;
         }
 
         private void ResizeGptComboBoxes()
