@@ -179,6 +179,64 @@ namespace CodexBridgeConsole.Tests
             }
         }
 
+        [Fact]
+        public void GptEffortsFor_UsesCatalogEffortsWhenCatalogContainsModel()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                Choices choices = Choices.Load(directory.Path);
+                CodexModelCatalog catalog = CodexModelCatalog.Parse(
+                    "{\"models\":[{\"slug\":\"gpt-5.5\",\"visibility\":\"list\",\"supported_reasoning_levels\":[{\"effort\":\"low\"},{\"effort\":\"medium\"}]}]}");
+
+                Assert.Equal(
+                    new[] { "low", "medium" },
+                    choices.GptEffortsFor(catalog, "gpt-5.5"));
+            }
+        }
+
+        [Fact]
+        public void GptEffortsFor_UsesModelDefaultsWhenCatalogDoesNotContainModel()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                Choices choices = Choices.Load(directory.Path);
+                CodexModelCatalog catalog = CodexModelCatalog.Parse(
+                    "{\"models\":[{\"slug\":\"gpt-6-astra\",\"visibility\":\"list\",\"supported_reasoning_levels\":[{\"effort\":\"high\"}]}]}");
+
+                Assert.Equal(
+                    new[] { "low", "medium", "high", "xhigh" },
+                    choices.GptEffortsFor(catalog, "gpt-5.5"));
+            }
+        }
+
+        [Fact]
+        public void GptEffortsFor_UsesFlatDefaultsWhenCatalogAndModelTableDoNotContainModel()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                Choices choices = Choices.Load(directory.Path);
+                CodexModelCatalog catalog = CodexModelCatalog.Parse(
+                    "{\"models\":[{\"slug\":\"gpt-6-astra\",\"visibility\":\"list\",\"supported_reasoning_levels\":[{\"effort\":\"high\"}]}]}");
+
+                Assert.Equal(
+                    choices.GptEfforts,
+                    choices.GptEffortsFor(catalog, "custom-gpt"));
+            }
+        }
+
+        [Fact]
+        public void GptEffortsFor_UsesModelDefaultsWhenCatalogIsMissing()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                Choices choices = Choices.Load(directory.Path);
+
+                Assert.Equal(
+                    new[] { "low", "medium", "high", "xhigh" },
+                    choices.GptEffortsFor(null, "gpt-5.5"));
+            }
+        }
+
         [Theory]
         [InlineData("high", new[] { "low", "medium", "high", "max" }, "high")]
         [InlineData("xhigh", new[] { "low", "medium", "high", "max" }, "high")]
