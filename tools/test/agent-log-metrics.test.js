@@ -345,13 +345,21 @@ test('collect は指定の行そのものから書き出した報告も指定と
   withTempDir((root) => {
     const files = writeDelegations(
       root,
-      [['designation-line-report', 'impl-light']],
-      [['designation-line-report', [handbackEvent('2026-09-10T10:01:00.000Z', `${CLAUDE_DESIGNATION}\n理由: 利用できない`)]]],
+      [
+        ['designation-line-report', 'impl-light'],
+        ['bold-designation-line', 'impl-light'],
+        ['code-designation-line', 'impl-light'],
+      ],
+      [
+        ['designation-line-report', [handbackEvent('2026-09-10T10:01:00.000Z', `${CLAUDE_DESIGNATION}\n理由: 利用できない`)]],
+        ['bold-designation-line', [handbackEvent('2026-09-10T10:02:00.000Z', `**${CLAUDE_DESIGNATION}**\n理由: 利用できない`)]],
+        ['code-designation-line', [handbackEvent('2026-09-10T10:03:00.000Z', `\`${CLAUDE_DESIGNATION}\`\n理由: 利用できない`)]],
+      ],
     );
 
     const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
 
-    assert.equal(metrics.byAgent['impl-light'].designated, 1);
+    assert.equal(metrics.byAgent['impl-light'].designated, 3);
   });
 });
 
