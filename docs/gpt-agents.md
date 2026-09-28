@@ -558,7 +558,7 @@ worktree の中の CMake のビルド(`cmake --build build --config Debug`)を C
 
 - Codex がツールの完了を書く行が `exited <0 以外> in <時間>` である。
 - その後、空行と `MSBuild` で始まる行を除いた最初の行が、字下げした `Checking File Globs` である。
-- さらにその次の空でない行が無いか、字下げされていない。ビルドの出力が `Checking File Globs` で終わったことを示す。
+- さらにその次の空でない行が無いか、Codex の経過の区切りの行(`exec`、`codex`、`user`、`apply patch`、`tokens used`、`diff --git ` で始まる行)である。ビルドの出力が `Checking File Globs` で終わったことを示す。字下げの無いエラー文(`CMake Error at ...` など)が続いた失敗は数えない。
 
 根拠の行には、`exited` の直前にある、Codex がコマンドを起動した行を出す。
 GPT 側の `impl-hard`、`impl-light`、`impl-standard` の定義は、サンドボックスの制約による検証の失敗を実装の失敗や止まって報告する条件として扱わず、実装を最後まで進めて「検証を実行できなかった」と報告するよう指示している。

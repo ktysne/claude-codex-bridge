@@ -867,6 +867,7 @@ if [ -n "$child_spawn_failed" ]; then
 fi
 
 # エラー文を出さずに Checking File Globs の直後で終わった MSBuild の回を数え、根拠には起動したコマンドの行を出す。
+# 終わりの判定は、次の空でない行が Codex の経過の区切りの行であることで行う。字下げの無いエラー文が続いた失敗を数えないためである。
 # 判定の形は docs/gpt-agents.md「既知の制約」の「サンドボックスの中の MSBuild が…」にある。result= は変えない。
 sandbox_build_failed="$(printf '%s\n' "$stderr_body" | awk '
   { sub(/\r$/, ""); lines[NR] = $0 }
@@ -878,7 +879,7 @@ sandbox_build_failed="$(printf '%s\n' "$stderr_body" | awk '
       if (j > NR || lines[j] !~ /^[[:space:]]+Checking File Globs[[:space:]]*$/) continue
       k = j + 1
       while (k <= NR && lines[k] ~ /^[[:space:]]*$/) k++
-      if (k > NR || lines[k] !~ /^[[:space:]]/) print lines[i - 1]
+      if (k > NR || lines[k] ~ /^(exec|codex|user|apply patch|tokens used|diff --git )/) print lines[i - 1]
     }
   }
 ')"
