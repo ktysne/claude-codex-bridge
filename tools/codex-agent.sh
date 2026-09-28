@@ -5,14 +5,16 @@
 #
 # 用法:
 #   bash tools/codex-agent.sh <agent-name> [-C <workdir>] [--effort <level>] < prompt.txt
+#   bash tools/codex-agent.sh --new-prompt <agent-name> ["<parent-directory>"]
 #   bash tools/codex-agent.sh --wait <実行 ID>
 #   bash tools/codex-agent.sh --header-of <出力ファイル>
 #
 # 依頼文は標準入力から読む。引数に埋め込むと引用符の扱いで壊れやすいためである。
-# 呼び出し側はヒアドキュメントで渡す。
+# 呼び出し側は依頼文ファイルを標準入力へリダイレクトする。
 #
 # 標準出力(Codex を起動する場合):
 #   codex-agent: agent=... model=... effort=... sandbox=... codex_home=... workdir=...   監査行
+#   codex-agent: prompt-file=<パス> sha256=<64 桁の 16 進>                             通常ファイルから依頼文を読んだ場合
 #   codex-agent: run=<実行 ID> pid=<ラッパーの PID> started=<UTC の ISO 8601>            Codex の起動前に出す
 #   codex-agent: log=<ログのパス>                                                         Codex の起動前に出す
 #   codex-agent: warning=concurrent-writer run=<相手の実行 ID> log=<相手のログのパス>      該当する目印ごとに 1 行(無ければ出さない)
@@ -41,7 +43,7 @@
 #   その実行が標準出力へ出したものと同じ内容で、最後の行は result= の行である。result= の行を出した実行だけが残す。
 #   完了を待つ入口 --wait <実行 ID> は、これを読んで元の実行の出力と終了コードを返す。
 #   --wait の状態と終了コードは用法の表示(usage)にあり、契約は docs/gpt-agents.md の「完了を待つ」にある。
-#   --header-of <出力ファイル> は、背景へ移った起動の出力ファイルの先頭に続く codex-agent: の行(監査行、run=、log=、警告)だけを出す。
+#   --header-of <出力ファイル> は、背景へ移った起動の出力ファイルの先頭に続く codex-agent: の行(監査行、prompt-file=、run=、log=、警告)だけを出す。
 #   ラッパー役の定義はフックで出力ファイルを読めないため、この入口で実行 ID と「進行中」の報告に添える行を取る。
 #
 # 書き込み担当の目印(<worktree 固有の git ディレクトリ>/codex-agent/runs/<実行 ID>.run):
@@ -84,6 +86,7 @@ main() {
 usage() {
   cat <<'USAGE'
 用法: bash tools/codex-agent.sh <agent-name> [-C <workdir>] [--effort <level>] < prompt.txt
+      bash tools/codex-agent.sh --new-prompt <agent-name> ["<親ディレクトリ>"]
       bash tools/codex-agent.sh --wait <実行 ID>
       bash tools/codex-agent.sh --header-of <出力ファイル>
 
@@ -91,6 +94,9 @@ usage() {
   -C <workdir>      Codex の作業ディレクトリ(既定はカレントディレクトリ)
   --effort <level>  推論 effort を定義ファイルの値より優先して指定する
                     (low|medium|high|xhigh|max|ultra)
+  --new-prompt <agent-name> ["<親ディレクトリ>"]
+                    排他的に作成した依頼文ディレクトリ内の prompt.md のパスを出す
+                    親ディレクトリの既定は ~/.claude/codex-agent/prompts
   --wait <実行 ID>  run= の行の実行 ID の完了を最大 570 秒待ち、完了していれば
                     その実行が標準出力に出した内容をそのまま出す
   --header-of <出力ファイル>
@@ -98,9 +104,9 @@ usage() {
                     ファイルが無い、読めない、その中に run= の行が無いときは
                     codex-agent: not-found header-of=<出力ファイル> を出す(2)
 
-依頼文は標準入力から読む(--wait と --header-of では読まない)。
+依頼文は標準入力から読む(--new-prompt、--wait と --header-of では読まない)。
 
-標準出力は、監査行、run= の行、log= の行、最終報告、result= の行の順である。
+標準出力は、監査行、通常ファイルから依頼文を読んだ場合は prompt-file= の行、run= の行、log= の行、最終報告、result= の行の順である。
 run= の行と log= の行は Codex の起動前に出す。
 書き込み可能な定義では、同じ worktree に書き込み可能な別の実行が残っていると、
 log= の行の後に codex-agent: warning=concurrent-writer の行を出す(起動は止めない)。
@@ -149,6 +155,33 @@ validate_effort() {
   esac
 }
 
+# エージェント名はそのままパスに埋め込むため、定義ディレクトリの外へ出る形を拒む。
+validate_agent_name() {
+  case "$1" in
+    */*|*\\*|.*) die "エージェント名に / \\ と先頭の . は使えない: $1" ;;
+  esac
+}
+
+home_dir="${USERPROFILE:-$HOME}"
+
+# Windows のパスを Git Bash が扱える形(スラッシュ区切り)に揃える。
+to_slash() {
+  local p="$1"
+  printf '%s' "${p//\\//}"
+}
+
+# Codex と Write ツールへ渡すパスをドライブ文字付きの Windows 形式へ揃える。
+# Git Bash の /d/... 形式のままだと解決できないためである。cygpath が無い環境では区切り文字の変換だけを行う。
+to_windows_path() {
+  local p
+  p="$(to_slash "$1")"
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -m "$p" 2>/dev/null || printf '%s' "$p"
+  else
+    printf '%s' "$p"
+  fi
+}
+
 agent_name=""
 workdir=""
 effort_override=""
@@ -156,9 +189,29 @@ wait_mode=0
 wait_run_id=""
 header_of_mode=0
 header_of_file=""
+new_prompt_mode=0
+new_prompt_parent=""
+new_prompt_parent_set=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --new-prompt)
+      [ $# -ge 2 ] || die "--new-prompt にはエージェント名が必要である"
+      case "$2" in
+        -*) die "不明なオプションである: $2" ;;
+      esac
+      [ "$new_prompt_mode" -eq 0 ] && [ -z "$agent_name" ] \
+        || die "--new-prompt はほかの入口と併用できない"
+      new_prompt_mode=1
+      agent_name="$2"
+      shift 2
+      if [ $# -gt 0 ]; then
+        case "$1" in
+          --wait|--header-of|-C|--effort|--new-prompt|-h|--help) ;;
+          *) new_prompt_parent="$1"; new_prompt_parent_set=1; shift ;;
+        esac
+      fi
+      ;;
     --wait)
       [ $# -ge 2 ] || die "--wait には実行 ID が必要である"
       wait_mode=1
@@ -182,6 +235,7 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     -h|--help)
+      [ "$new_prompt_mode" -eq 0 ] || die "--new-prompt はほかの入口と併用できない"
       usage
       exit 0
       ;;
@@ -195,6 +249,25 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
+
+if [ "$new_prompt_mode" -eq 1 ]; then
+  [ "$wait_mode" -eq 0 ] && [ "$header_of_mode" -eq 0 ] \
+    && [ -z "$workdir" ] && [ -z "$effort_override" ] \
+    || die "--new-prompt は --wait、--header-of、-C、--effort、エージェント名の単独指定と併用できない"
+  validate_agent_name "$agent_name"
+  if [ "$new_prompt_parent_set" -eq 1 ]; then
+    prompt_parent="$(to_slash "$new_prompt_parent")"
+    [ -d "$prompt_parent" ] || die "依頼文の親ディレクトリが見つからない: $new_prompt_parent"
+  else
+    prompt_parent="$(to_slash "$home_dir")/.claude/codex-agent/prompts"
+    mkdir -p "$prompt_parent" 2>/dev/null || die "依頼文の置き場を作れない: $prompt_parent"
+    chmod 700 "$prompt_parent" 2>/dev/null || true
+  fi
+  prompt_dir="$(mktemp -d "$prompt_parent/codex-agent-$agent_name-$(date +%Y%m%d-%H%M%S)-XXXXXX" 2>/dev/null)" \
+    || die "依頼文のディレクトリを作れない: $prompt_parent"
+  printf 'codex-agent: prompt-file=%s\n' "$(to_windows_path "$prompt_dir/prompt.md")"
+  exit 0
+fi
 
 if [ "$header_of_mode" -eq 1 ]; then
   [ "$wait_mode" -eq 0 ] && [ -z "$agent_name" ] && [ -z "$workdir" ] && [ -z "$effort_override" ] \
@@ -224,33 +297,9 @@ print_header_of() {
 
 [ "$header_of_mode" -eq 0 ] || print_header_of "$header_of_file"
 
-# エージェント名はそのままパスに埋め込むため、定義ディレクトリの外へ出る形を拒む。
-case "$agent_name" in
-  */*|*\\*|.*) die "エージェント名に / \\ と先頭の . は使えない: $agent_name" ;;
-esac
+validate_agent_name "$agent_name"
 
 [ -z "$effort_override" ] || validate_effort "$effort_override"
-
-home_dir="${USERPROFILE:-$HOME}"
-
-# Windows のパスを Git Bash が扱える形(スラッシュ区切り)に揃える。
-to_slash() {
-  local p="$1"
-  printf '%s' "${p//\\//}"
-}
-
-# Codex へ渡す作業ディレクトリをドライブ文字付きの Windows 形式へ揃える。
-# Git Bash の /d/... 形式のままだと Codex 側が解決できないためである。
-# cygpath が無い環境では区切り文字の変換だけを行う。
-to_windows_path() {
-  local p
-  p="$(to_slash "$1")"
-  if command -v cygpath >/dev/null 2>&1; then
-    cygpath -m "$p" 2>/dev/null || printf '%s' "$p"
-  else
-    printf '%s' "$p"
-  fi
-}
 
 log_dir="$(to_slash "$home_dir")/.claude/codex-agent/logs"
 # --output-last-message の無い版の Codex で起動したことを、ログに残す目印の行。
@@ -489,6 +538,25 @@ role_body="$(sed 's/\r$//' "$def_file" | awk '
 # 依頼文は標準入力から読む。端末から起動されたときは待ち続けてしまうので先に止める。
 [ -t 0 ] && die "依頼文が標準入力から渡されていない"
 request="$(cat)"
+prompt_audit_line=""
+if [ -f /proc/self/fd/0 ]; then
+  prompt_input_file="$(readlink /proc/self/fd/0 2>/dev/null || true)"
+  case "$prompt_input_file" in
+    ''|*$'\n'*|*$'\r'*) prompt_input_file="" ;;
+  esac
+  if [ -n "$prompt_input_file" ] && [ -f "$prompt_input_file" ]; then
+    prompt_hash_output="$(sha256sum -- "$prompt_input_file" 2>/dev/null)" || prompt_hash_output=""
+    prompt_hash="${prompt_hash_output%% *}"
+    case "$prompt_hash" in
+      ''|*[!0-9a-fA-F]*) ;;
+      *)
+        if [ "${#prompt_hash}" -eq 64 ]; then
+          prompt_audit_line="codex-agent: prompt-file=$(to_windows_path "$prompt_input_file") sha256=$prompt_hash"
+        fi
+        ;;
+    esac
+  fi
+fi
 
 # 空白だけの依頼文は Codex を起動しても意味がないので、ここで止める。
 case "$request" in
@@ -511,6 +579,7 @@ fi
 audit_line="$(printf 'codex-agent: agent=%s model=%s effort=%s sandbox=%s codex_home=%s workdir=%s' \
   "$agent_name" "$codex_model" "$codex_effort" "$codex_sandbox" "$codex_home" "$workdir")"
 printf '%s\n' "$audit_line"
+[ -z "$prompt_audit_line" ] || printf '%s\n' "$prompt_audit_line"
 
 # 試験用フック。フォールバック経路(終了コード 75)の確認にだけ使う。
 # 通常の運用では設定しない。
@@ -538,12 +607,14 @@ chmod 700 "$log_dir" 2>/dev/null || true
 find "$log_dir" -maxdepth 1 -type f \( -name '*.log' -o -name '*.last' -o -name '*.out' -o -name '*.report' -o -name '*.report.tmp' \) \
   -mtime +7 -delete 2>/dev/null || true
 
-# 定義がスクラッチパッドを使えないときに依頼文を置く場所。ログと同じ期限で消す。
+# 定義がスクラッチパッドを使えないときに依頼文を置く場所。7 日を過ぎたファイルと codex-agent-* ディレクトリを消す。
 # 置き場が無くても実行自体は続けられるため、作成に失敗しても止めない。
 prompts_dir="$(to_slash "$home_dir")/.claude/codex-agent/prompts"
 mkdir -p "$prompts_dir" 2>/dev/null || true
 chmod 700 "$prompts_dir" 2>/dev/null || true
 find "$prompts_dir" -maxdepth 1 -type f -mtime +7 -delete 2>/dev/null || true
+find "$prompts_dir" -mindepth 1 -maxdepth 1 -type d -name 'codex-agent-*' -mtime +7 \
+  -exec rm -rf -- {} + 2>/dev/null || true
 
 # 実行 ID はログファイル名から拡張子を除いたものにする。run= の行と log= の行を突き合わせられるようにするためである。
 run_id="$agent_name-$(date +%Y%m%d-%H%M%S)-$$"
@@ -569,6 +640,9 @@ trap 'rm -f "$out_file" "$last_msg_file" "$report_tmp"; [ -z "$marker_file" ] ||
 : >"$out_file" || die "標準出力の受け皿を作れない: $out_file"
 # 報告の写しは補助なので、作れなくても起動は止めない。
 printf '%s\n' "$audit_line" 2>/dev/null >"$report_tmp" || true
+if [ -n "$prompt_audit_line" ]; then
+  printf '%s\n' "$prompt_audit_line" 2>/dev/null >>"$report_tmp" || true
+fi
 chmod 600 "$log_file" "$last_msg_file" "$out_file" "$report_tmp" 2>/dev/null || true
 
 # 標準出力へ出す内容を、報告の写しにも書く。Codex の起動を決めた後の標準出力はすべてこれを通す。
