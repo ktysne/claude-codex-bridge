@@ -978,6 +978,20 @@ function runMetrics(root, args) {
   });
 }
 
+test('CLI は数え方の版と追加指標を JSON に出す', () => {
+  withTempDir((root) => {
+    writeText(logPath(root, 'project', 'session.jsonl'), '');
+
+    const result = runMetrics(root, ['--since', '2026-09-10', '--until', '2026-09-10', '--json']);
+
+    assert.equal(result.status, 0);
+    const summary = JSON.parse(result.stdout);
+    assert.equal(summary['数え方の版'], 3);
+    assert.equal(summary['メインセッションの待つためのBash'], 0);
+    assert.equal(summary['並行書き込み警告を含む起動'], 0);
+  });
+});
+
 test('collect は待つための Bash をコマンドの位置で判定する', () => {
   // 語を含むだけのコマンドは待機ではない。出力ファイルの読み取りと、実行単位の先頭の sleep と until だけを数える。
   const cases = [
@@ -1001,6 +1015,64 @@ test('collect は待つための Bash をコマンドの位置で判定する', 
       assert.equal(metrics.waitCalls, expected, command);
     });
   }
+});
+
+test('collect はメインセッションの待ちを起動の手がかりで結び、警告を起動ごとに数える', () => {
+  withTempDir((root) => {
+    const mainFile = logPath(root, 'project', 'session.jsonl');
+    const subFile = logPath(root, 'project', 'session', 'subagents', 'agent-wait.jsonl');
+    const invoke = 'bash ~/.claude/tools/codex-agent.sh impl-standard';
+    writeJsonl(mainFile, [
+      bashEvent({
+        timestamp: '2026-09-10T10:01:00.000Z',
+        id: 'background-warning',
+        command: invoke,
+        result: `codex-agent: warning=concurrent-writer\n${BG_TEXT}`,
+      }),
+      toolEvent('2026-09-10T10:02:00.000Z', 'read-background', 'Read',
+        { file_path: 'E:/Temp/claude/proj/tasks/bgx123abc.output' },
+        '    38\tcodex-agent: warning=concurrent-writer another-run\n    39\tcodex-agent: result=ok'),
+      bashEvent({
+        timestamp: '2026-09-10T10:03:00.000Z',
+        id: 'linked-wait',
+        command: 'tail -n 5 "E:/Temp/claude/proj/tasks/bgx123abc.output"',
+      }),
+      bashEvent({
+        timestamp: '2026-09-10T10:04:00.000Z',
+        id: 'unrelated-wait',
+        command: 'tail -n 5 "E:/Temp/claude/proj/tasks/another.output"',
+      }),
+      bashEvent({ timestamp: '2026-09-10T10:05:00.000Z', id: 'unlinked-sleep', command: 'sleep 5' }),
+      bashEvent({
+        timestamp: '2026-09-10T10:06:00.000Z',
+        id: 'direct-warning',
+        command: invoke,
+        result: '32:codex-agent: warning=concurrent-writer\ncodex-agent: result=ok',
+      }),
+      bashEvent({
+        timestamp: '2026-09-10T10:07:00.000Z',
+        id: 'quoted-warning',
+        command: invoke,
+        result: '報告に codex-agent: warning=concurrent-writer と書いた\ncodex-agent: result=ok',
+      }),
+      bashEvent({
+        timestamp: '2026-09-10T10:08:00.000Z',
+        id: 'simulated-warning',
+        command: SIMULATE_INVOKE,
+        result: `codex-agent: warning=concurrent-writer\n${SIMULATED_TEXT}`,
+      }),
+    ]);
+    writeJsonl(subFile, [
+      invokeEvent('2026-09-10T10:01:00.000Z', 'sub-run', 'codex-agent: result=ok'),
+      bashEvent({ timestamp: '2026-09-10T10:02:00.000Z', id: 'sub-wait', command: 'sleep 5' }),
+    ]);
+
+    const metrics = collect([mainFile, subFile], ...RANGE_0910);
+
+    assert.equal(metrics.mainWaitCalls, 1);
+    assert.equal(metrics.waitCalls, 1);
+    assert.equal(metrics.concurrentWriterRuns, 2);
+  });
 });
 
 test('collect は実起動の内訳を最後の行頭の result 行で分け、行の途中の引用と退避された本文を結果行なしにする', () => {
@@ -1181,7 +1253,7 @@ test('collect は追跡した読み取りでも、疑似の result 行と行の�
       { command: 'tail -n 20 "$TMP/tasks/bgx123abc.output"' }, result);
     const files = writeDelegations(
       root,
-      [['bg-sim', 'impl-standard'], ['bg-quote', 'impl-light']],
+      [['bg-sim', 'impl-standard'], ['bg-quote', 'impl-light'], ['bg-read-numbered', 'impl-hard']],
       [
         ['bg-sim', [
           invokeEvent('2026-09-10T10:01:00.000Z', 'g1', BG_TEXT),
@@ -1191,6 +1263,12 @@ test('collect は追跡した読み取りでも、疑似の result 行と行の�
           invokeEvent('2026-09-10T10:01:00.000Z', 'g3', BG_TEXT),
           read('2026-09-10T10:02:00.000Z', 'g4', '報告に codex-agent: result=ok と書いた'),
         ]],
+        ['bg-read-numbered', [
+          invokeEvent('2026-09-10T10:01:00.000Z', 'g5', BG_TEXT),
+          toolEvent('2026-09-10T10:02:00.000Z', 'g6', 'Read',
+            { file_path: 'E:/Temp/claude/proj/tasks/bgx123abc.output' },
+            '    38\tcodex-agent: result=ok'),
+        ]],
       ],
     );
 
@@ -1198,6 +1276,7 @@ test('collect は追跡した読み取りでも、疑似の result 行と行の�
 
     assert.deepEqual(metrics.byAgent['impl-standard'].outcomes, outcomesOf({ unknown: 1 }));
     assert.deepEqual(metrics.byAgent['impl-light'].outcomes, outcomesOf({ unknown: 1 }));
+    assert.deepEqual(metrics.byAgent['impl-hard'].outcomes, outcomesOf({ gptRan: 1 }));
   });
 });
 
@@ -1342,9 +1421,9 @@ test('--json とテキスト出力は数え方の版を出す', () => {
     const text = runMetrics(root, ['--since', '2026-09-10', '--until', '2026-09-10']);
 
     assert.equal(json.status, 0, json.stderr);
-    assert.equal(JSON.parse(json.stdout).数え方の版, 2);
+    assert.equal(JSON.parse(json.stdout).数え方の版, 3);
     assert.equal(text.status, 0, text.stderr);
-    assert.match(text.stdout, /^期間: .*\n数え方の版: 2\n/);
+    assert.match(text.stdout, /^期間: .*\n数え方の版: 3\n/);
   });
 });
 
