@@ -30,6 +30,9 @@
 //   - スクリプトパスより後ろに `--wait` の語がある実行単位も、起動と数えない(`-h` か `--help` もあれば用法の表示)。
 //     完了を待つ入口で Codex を起動せず、起動に数えると 1 件の委譲が待ちの回数だけ起動に見えるためである。
 //     この実行は「待つためだけの Bash」に数える。
+//   - スクリプトパスより後ろに `--header-of` の語がある実行単位も、起動と数えない。
+//     出力ファイルの先頭の案内の行を出すだけで Codex を起動しないためである。
+//     コマンドが出力ファイルのパスを含むので、「待つためだけの Bash」と、起動に結び付いた読み取りに数える。
 //   - セッションが作業ディレクトリを移ると、同じセッションの記録が別のプロジェクト置き場にも書かれる。
 //     プロジェクト置き場より後ろの相対パスが同じ記録を複製の候補とし、最も大きい記録を残す
 //     (同じ大きさならパスの辞書順で先のもの)。ほかの記録は、残した記録の先頭と全バイトが一致する場合に限って除く。
@@ -114,7 +117,7 @@ const path = require('path');
 const WRAPPER_AGENTS = ['impl-hard', 'impl-light', 'impl-standard', 'codex-review', 'codex-subagent'];
 
 // 数え方の約束を変えたら上げる。運用記録の値がどの規則で数えたものかを、値の脇に残すためである。
-const COUNTING_RULES_VERSION = 4;
+const COUNTING_RULES_VERSION = 5;
 
 const DAY = 24 * 3600 * 1000;
 
@@ -418,9 +421,9 @@ function wrapperArgLists(cmd) {
 const isHelpArgs = (args) => args.some((value) => value === '-h' || value === '--help');
 
 // 起動の判定は 1 か所に置く。実起動、未呼出、待機の集計で同じ判定を使う。
-// 用法の表示と --wait(完了を待つ入口)は Codex を起動しないので数えない。
+// 用法の表示、--wait(完了を待つ入口)、--header-of(出力ファイルの案内の行を出す入口)は Codex を起動しないので数えない。
 function isCodexInvocation(cmd) {
-  return wrapperArgLists(cmd).some((args) => !isHelpArgs(args) && !args.includes('--wait'));
+  return wrapperArgLists(cmd).some((args) => !isHelpArgs(args) && !args.includes('--wait') && !args.includes('--header-of'));
 }
 
 // codex-agent.sh --wait <実行 ID> の実行単位から、待つ実行 ID を返す。
