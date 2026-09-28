@@ -709,16 +709,8 @@ t_codex_exit_75() {
   expect_eq "最後の行" "codex-agent: result=failed exit=75" "$(last_out_line)"
 }
 
-CHILD_SPAWN_STDERR='exec
-node tools/run-tests.js in /work
- exited 1 in 701ms:
-Error: spawn EPERM
-exec
-"pwsh.exe" -Command "rg -n foo" in /work
- exited -1073741502 in 0ms:
-codex
-検証は spawn EPERM で実行できなかった。
-'
+# 1 行の文字列で書くのは、Codex がこのファイルを読んだとき、照合する行の形がそのまま並ばないようにするためである。
+CHILD_SPAWN_STDERR=$'exec\nnode tools/run-tests.js in /work\n exited 1 in 701ms:\nError: spawn EPERM\n    at ChildProcess.spawn (node:internal/child_process:441:11)\nexec\n"pwsh.exe" -Command "rg -n foo" in /work\n exited -1073741502 in 0ms:\ncodex\n検証は spawn EPERM で実行できなかった。\n'
 
 t_child_spawn_warning() {
   fake_set stderr "$CHILD_SPAWN_STDERR"
@@ -726,7 +718,7 @@ t_child_spawn_warning() {
 '
   run_wrapper "$AGENT"
   expect_rc 0
-  expect_eq "4 行目(log= の行の後)" "codex-agent: warning=child-spawn-failed count=3" "$(sed -n 4p "$root/out")"
+  expect_eq "4 行目(log= の行の後)" "codex-agent: warning=child-spawn-failed count=2" "$(sed -n 4p "$root/out")"
   expect_eq "5 行目" "codex-agent: child-spawn-failed evidence: Error: spawn EPERM" "$(sed -n 5p "$root/out")"
   expect_eq "6 行目" "最終報告" "$(sed -n 6p "$root/out")"
   expect_eq "警告の行数" "1" "$(grep -c '^codex-agent: warning=child-spawn-failed' "$root/out")"
@@ -736,19 +728,38 @@ t_child_spawn_warning() {
   local id
   id="$(run_id_of "$root/out")"
   cmp -s "$root/out" "$(logs_dir)/$id.report" || fail "報告の写しが標準出力と違う"
-  grep -Fxq 'codex-agent: warning=child-spawn-failed count=3' "$(out_log_path "$root/out")" || fail "ログに警告の行が無い"
+  grep -Fxq 'codex-agent: warning=child-spawn-failed count=2' "$(out_log_path "$root/out")" || fail "ログに警告の行が無い"
+}
+
+t_child_spawn_quoted_or_unstacked() {
+  fake_set stderr '102:Codex のサンドボックスでは、検証が spawn EPERM などで失敗する
+Error: spawn EPERM
+説明に spawn EPERM が含まれている
+'
+  fake_set last_message '最終報告
+'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
+  expect_out_no_match "child-spawn-failed"
+}
+
+t_child_spawn_execution_failed() {
+  fake_set stderr $'Execution failed: Error: spawn EPERM\r\n    at ChildProcess.spawn (node:internal/child_process:441:11)\r\n'
+  fake_set last_message '最終報告
+'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_eq "4 行目(log= の行の後)" "codex-agent: warning=child-spawn-failed count=1" "$(sed -n 4p "$root/out")"
+  expect_eq "5 行目" "codex-agent: child-spawn-failed evidence: Execution failed: Error: spawn EPERM" "$(sed -n 5p "$root/out")"
 }
 
 # 最終報告と Codex の標準出力だけが失敗を引用した実行。経過には印が無い。
 t_child_spawn_report_only() {
   fake_set stderr '経過: 考えている
 '
-  fake_set last_message '検証は spawn EPERM で失敗した(exited -1073741502 in 0ms)。
- exited -1073741502 in 0ms:
-'
-  fake_set stdout 'spawn EPERM
- exited -1073741502 in 0ms:
-'
+  fake_set last_message $'検証は spawn EPERM で失敗した(exited -1073741502 in 0ms)。\n exited -1073741502 in 0ms:\n'
+  fake_set stdout $'spawn EPERM\n exited -1073741502 in 0ms:\n'
   run_wrapper "$AGENT"
   expect_rc 0
   expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
@@ -771,9 +782,7 @@ t_child_spawn_number_only() {
 
 # 利用上限で 75 に倒れる実行でも、result= の直前は利用上限の根拠の行のままである。
 t_child_spawn_with_rate_limit() {
-  fake_set stderr "Error: spawn EPERM
-ERROR: You've hit your usage limit.
-"
+  fake_set stderr $'Error: spawn EPERM\n    at ChildProcess.spawn (node:internal/child_process:441:11)\nERROR: You\'ve hit your usage limit.\n'
   fake_set exit_code 1
   run_wrapper "$AGENT"
   expect_fallback_tail rate-limit rate-limited
@@ -1946,6 +1955,8 @@ run_case "ツール接続の失敗後に復旧(終了コード 0、成功行あ�
 run_case "通常の失敗: 1、result=failed exit=1" t_plain_failure
 run_case "Codex 自身の 75: 1 に写像し result=failed exit=75" t_codex_exit_75
 run_case "子プロセスの起動失敗(経過): log= の後に警告と根拠の行を出し、result=ok と 0 は変わらず、報告の写しとログにも入る" t_child_spawn_warning
+run_case "子プロセスの起動失敗(引用とスタックなし): 警告を出さない" t_child_spawn_quoted_or_unstacked
+run_case "子プロセスの起動失敗(Execution failed): 次のスタック行を条件に根拠を出す" t_child_spawn_execution_failed
 run_case "子プロセスの起動失敗(最終報告だけ): 警告を出さない" t_child_spawn_report_only
 run_case "子プロセスの起動失敗(数値だけの行): exited -1073741502 in の形でなければ数えない" t_child_spawn_number_only
 run_case "子プロセスの起動失敗と利用上限: 警告は log= の後、result= の直前は利用上限の根拠の行" t_child_spawn_with_rate_limit

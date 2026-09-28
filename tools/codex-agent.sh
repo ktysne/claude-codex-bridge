@@ -698,9 +698,25 @@ codex_status="${PIPESTATUS[0]}"
 stderr_body="$(log_body)"
 
 # 子プロセスの起動失敗の印を経過(標準エラー)だけで数える。最終回答が失敗を引用しても二重に数えないためである。
-# 0xC0000142 は Codex がツールの完了を書く行の形に限る。数値だけで照合すると、読んだ文書の引用で一致するためである。
+# 両方の印は、Codex が起動したコマンドの失敗を示す出力の行の形に限って数える。
+# 語だけで照合すると、Codex が読んだ文書の引用にも一致するためである。
 # result= は変えない。ok を 75 に倒すと、GPT 側の実装を捨てて作り直すことになるためである。
-child_spawn_failed="$(printf '%s\n' "$stderr_body" | grep -E 'spawn EPERM|^[[:space:]]*exited -1073741502 in [0-9]')"
+child_spawn_failed="$(printf '%s\n' "$stderr_body" | awk '
+  { lines[NR] = $0 }
+  END {
+    for (i = 1; i <= NR; i++) {
+      line = lines[i]
+      sub(/\r$/, "", line)
+      if (line ~ /^[[:space:]]*(Execution failed: )?Error: spawn EPERM[[:space:]]*$/ &&
+          i < NR &&
+          lines[i + 1] ~ /^[[:space:]]*at ChildProcess[.]spawn [(]/) {
+        print lines[i]
+      } else if (lines[i] ~ /^[[:space:]]*exited -1073741502 in [0-9]/) {
+        print lines[i]
+      }
+    }
+  }
+')"
 if [ -n "$child_spawn_failed" ]; then
   child_spawn_warning="codex-agent: warning=child-spawn-failed count=$(printf '%s\n' "$child_spawn_failed" | wc -l | tr -d ' ')"
   printf '%s\n' "$child_spawn_warning" | out
