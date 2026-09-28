@@ -5,6 +5,7 @@
 #
 # 用法:
 #   bash tools/codex-agent.sh <agent-name> [-C <workdir>] [--effort <level>] < prompt.txt
+#   bash tools/codex-agent.sh --wait <実行 ID>
 #
 # 依頼文は標準入力から読む。引数に埋め込むと引用符の扱いで壊れやすいためである。
 # 呼び出し側はヒアドキュメントで渡す。
@@ -32,6 +33,11 @@
 #   Codex の標準エラーは実行中から行ごとに追記する。続けて、終了後に Codex の標準出力を追記する。
 #   最後の行は標準出力へ出すのと同じ result= の行である。ログだけで完了と結果を判定できるようにするためである。
 #   Codex の起動前に止まる経路(終了コード 2、3、試験用フック)ではログを作らない。
+#
+# 報告の写し(~/.claude/codex-agent/logs/<実行 ID>.report):
+#   その実行が標準出力へ出したものと同じ内容で、最後の行は result= の行である。result= の行を出した実行だけが残す。
+#   完了を待つ入口 --wait <実行 ID> は、これを読んで元の実行の出力と終了コードを返す。
+#   --wait の状態と終了コードは用法の表示(usage)にあり、契約は docs/gpt-agents.md の「完了を待つ」にある。
 #
 # 書き込み担当の目印(<worktree 固有の git ディレクトリ>/codex-agent/runs/<実行 ID>.run):
 #   1 つの worktree に同時に書き込む担当は 1 つとする。
@@ -70,13 +76,16 @@ main() {
 usage() {
   cat <<'USAGE'
 用法: bash tools/codex-agent.sh <agent-name> [-C <workdir>] [--effort <level>] < prompt.txt
+      bash tools/codex-agent.sh --wait <実行 ID>
 
   <agent-name>      .claude/gpt-agents/<agent-name>.md の名前
   -C <workdir>      Codex の作業ディレクトリ(既定はカレントディレクトリ)
   --effort <level>  推論 effort を定義ファイルの値より優先して指定する
                     (low|medium|high|xhigh|max|ultra)
+  --wait <実行 ID>  run= の行の実行 ID の完了を最大 570 秒待ち、完了していれば
+                    その実行が標準出力に出した内容をそのまま出す
 
-依頼文は標準入力から読む。
+依頼文は標準入力から読む(--wait では読まない)。
 
 標準出力は、監査行、run= の行、log= の行、最終報告、result= の行の順である。
 run= の行と log= の行は Codex の起動前に出す。
@@ -92,6 +101,16 @@ log= の行の後に codex-agent: warning=concurrent-writer の行を出す(起�
   75  呼び出し側では直せない GPT 側の事情で実行できなかった
       (利用上限なら result=rate-limited、モデルの混雑など他の事情なら result=unavailable)
   他  Codex の終了コードをそのまま返す(Codex 自身の 75 は 1 に写像する)
+
+--wait の状態は標準出力の最後の行で判定する(括弧内は終了コードで、判定の補助である):
+  codex-agent: result=...                  完了した。元の実行の出力をそのまま出す(元の実行と同じ)
+  codex-agent: waiting run=<実行 ID>        上限までに完了しなかった(124)。もう一度 --wait で待つ
+  codex-agent: vanished run=<実行 ID>       ラッパーが result= の行を書かずに消えた(1)
+  codex-agent: orphaned run=<実行 ID> pids=<PID,...>
+                                           ラッパーは消えたが Codex 側のプロセスが残っている(1)
+  codex-agent: unverified run=<実行 ID>     ラッパーは消えたが、Codex が残っているかを確かめられない(1)
+                                           (--output-last-message の無い版の Codex で起動した実行)
+  codex-agent: not-found run=<実行 ID>      実行 ID のログが無い(2)
 USAGE
 }
 
@@ -118,9 +137,17 @@ validate_effort() {
 agent_name=""
 workdir=""
 effort_override=""
+wait_mode=0
+wait_run_id=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --wait)
+      [ $# -ge 2 ] || die "--wait には実行 ID が必要である"
+      wait_mode=1
+      wait_run_id="$2"
+      shift 2
+      ;;
     -C)
       [ $# -ge 2 ] || die "-C には作業ディレクトリが必要である"
       workdir="$2"
@@ -146,7 +173,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ -n "$agent_name" ] || { usage >&2; die "エージェント名が指定されていない"; }
+if [ "$wait_mode" -eq 1 ]; then
+  [ -z "$agent_name" ] && [ -z "$workdir" ] && [ -z "$effort_override" ] \
+    || die "--wait はエージェント名、-C、--effort と併用できない"
+else
+  [ -n "$agent_name" ] || { usage >&2; die "エージェント名が指定されていない"; }
+fi
 
 # エージェント名はそのままパスに埋め込むため、定義ディレクトリの外へ出る形を拒む。
 case "$agent_name" in
@@ -175,6 +207,148 @@ to_windows_path() {
     printf '%s' "$p"
   fi
 }
+
+log_dir="$(to_slash "$home_dir")/.claude/codex-agent/logs"
+# --output-last-message の無い版の Codex で起動したことを、ログに残す目印の行。
+NO_LAST_MESSAGE_NOTE="codex-agent: note=no-output-last-message"
+
+# result= の行から、その実行のラッパーが返した終了コードを戻す。規則は下の finish の呼び出しと同じである。
+exit_code_of_result() {
+  local n
+  case "$1" in
+    "codex-agent: result=ok"|"codex-agent: result=ok "*) printf '0' ;;
+    "codex-agent: result=rate-limited"*|"codex-agent: result=unavailable"*) printf '75' ;;
+    "codex-agent: result=failed exit="*)
+      n="${1#codex-agent: result=failed exit=}"
+      n="${n%% *}"
+      case "$n" in
+        ''|*[!0-9]*) printf '1' ;;
+        75) printf '1' ;;
+        *) printf '%s' "$n" ;;
+      esac
+      ;;
+    *) printf '1' ;;
+  esac
+}
+
+# ラッパー本人と Codex 側のプロセスを 1 回の PowerShell で調べ、wrapper=alive|gone の行と codex=<PID> の行を出す。
+# 本人の照合は docs/gpt-agents.md「既知の制約」の止める手順 2 と同じ条件である。PID は再利用されるためである。
+# PowerShell が無いか失敗したときは何も出さない。実行 ID を環境変数で渡すのは、PowerShell 自身のコマンドラインを一致させないためである。
+# probe_run_processes <ラッパーの PID> <started=> <実行 ID>
+probe_run_processes() {
+  local ps
+  ps="$(command -v pwsh 2>/dev/null || command -v powershell 2>/dev/null)" || return 0
+  [ -n "$ps" ] || return 0
+  CXA_WRAPPER_PID="$1" CXA_STARTED="$2" CXA_RUN_ID="$3" "$ps" -NoProfile -NonInteractive -Command '
+    $ErrorActionPreference = "Stop"
+    $p = Get-CimInstance Win32_Process -Filter ("ProcessId=" + [int]$env:CXA_WRAPPER_PID)
+    $started = ([datetimeoffset]$env:CXA_STARTED).UtcDateTime
+    if ($p -and $p.CommandLine -like "*codex-agent.sh*" -and
+        [Math]::Abs(($p.CreationDate.ToUniversalTime() - $started).TotalSeconds) -le 60) { "wrapper=alive" } else { "wrapper=gone" }
+    $last = $env:CXA_RUN_ID + ".last"
+    Get-CimInstance Win32_Process |
+      Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine.Contains($last) } |
+      ForEach-Object { "codex=" + $_.ProcessId }
+  ' 2>/dev/null | tr -d '\r'
+  return 0
+}
+
+# --wait <実行 ID> の本体。契約は docs/gpt-agents.md の「完了を待つ」にある。
+# 呼び出し側は標準出力の最後の行で状態を判定する。終了コードは Codex の値と重なりうるので補助にとどめる。
+# wait_for_run <実行 ID>
+wait_for_run() {
+  local id="$1" report_file log_file limit run_fields wrapper_pid started line state="unknown" pids=""
+  case "$id" in
+    ''|*/*|*\\*|.*) die "実行 ID に空、/ \\ と先頭の . は使えない: $id" ;;
+  esac
+  # 上限は Bash ツールの 600 秒の内側に収める。環境変数はテストで短くするためのものである。
+  limit="${CODEX_AGENT_WAIT_LIMIT_SECONDS:-570}"
+  case "$limit" in
+    ''|*[!0-9]*) die "CODEX_AGENT_WAIT_LIMIT_SECONDS は 0 以上の整数で指定する: $limit" ;;
+  esac
+  report_file="$log_dir/$id.report"
+  log_file="$log_dir/$id.log"
+
+  # 完了していれば元の実行の出力を出して終える。
+  # ラッパーは報告を改名してからログへ result= の行を書くため、ログが完了を示すなら報告も既にある。
+  # 報告が無いのは、報告を書かない版のラッパーの実行か、改名に失敗した場合である。
+  finish_if_done() {
+    local last
+    if [ -f "$report_file" ]; then
+      cat "$report_file"
+      exit "$(exit_code_of_result "$(tail -n 1 "$report_file" | tr -d '\r')")"
+    fi
+    last="$(tail -n 1 "$log_file" 2>/dev/null | tr -d '\r')"
+    case "$last" in
+      "codex-agent: result="*)
+        if [ -f "$report_file" ]; then
+          cat "$report_file"
+          exit "$(exit_code_of_result "$(tail -n 1 "$report_file" | tr -d '\r')")"
+        fi
+        printf 'codex-agent: 報告ファイルが無いため、ログの result= の行だけを出す: %s\n' "$(to_windows_path "$log_file")"
+        printf '%s\n' "$last"
+        exit "$(exit_code_of_result "$last")"
+        ;;
+    esac
+  }
+
+  # 進行の目印としてログの最後の行を出す。出力の無い待ちが続くと、呼び出し側が止まったと判断しやすいためである。
+  # 行頭に接頭辞を付け、ログの result= や warning= の行と取り違えないようにする。
+  print_last_log_line() {
+    local last
+    last="$(tail -n 1 "$log_file" 2>/dev/null | tr -d '\r')"
+    printf 'codex-agent: last-log-line: %s\n' "${last:0:300}"
+  }
+
+  finish_if_done
+  if [ ! -f "$log_file" ]; then
+    printf 'codex-agent: not-found run=%s\n' "$id"
+    printf 'codex-agent: 実行 ID のログが見つからない: %s\n' "$(to_windows_path "$log_file")" >&2
+    exit 2
+  fi
+
+  # 生死の照合は PowerShell の起動に数秒かかるので、待ちの初めに 1 回だけ行う。
+  # 照合できないとき(PowerShell が無い、run= の行が無い)は unknown のまま上限まで待つ。
+  run_fields="$(sed -n '1s/^codex-agent: run=[^ ]* pid=\([0-9][0-9]*\) started=\([^ ]*\).*$/\1 \2/p' "$log_file" | tr -d '\r')"
+  wrapper_pid="${run_fields%% *}"
+  started="${run_fields#* }"
+  if [ -n "$run_fields" ]; then
+    while IFS= read -r line; do
+      case "$line" in
+        wrapper=alive) state="alive" ;;
+        wrapper=gone) state="gone" ;;
+        codex=*) pids="${pids:+$pids,}${line#codex=}" ;;
+      esac
+    done < <(probe_run_processes "$wrapper_pid" "$started" "$id")
+  fi
+
+  # Codex の生死では判定しない。Codex が先に落ちても、ラッパーが生きていれば result=failed を書くためである。
+  if [ "$state" = "gone" ]; then
+    # 照合の直前にラッパーが終わった場合は、完了として扱う。
+    finish_if_done
+    print_last_log_line
+    if [ -n "$pids" ]; then
+      printf 'codex-agent: ラッパーは result= の行を書かずに終わったが、コマンドラインに %s.last を含むプロセスが残っている。docs/gpt-agents.md「既知の制約」の止める手順 3 と 4 で止める\n' "$id"
+      printf 'codex-agent: orphaned run=%s pids=%s\n' "$id" "$pids"
+    elif grep -qxF "$NO_LAST_MESSAGE_NOTE" <(tr -d '\r' <"$log_file"); then
+      printf 'codex-agent: この実行の Codex はコマンドラインに %s.last を持たないため、残っているかを確かめられない。docs/gpt-agents.md「既知の制約」の止める手順 3 で、作業ディレクトリから探す\n' "$id"
+      printf 'codex-agent: unverified run=%s\n' "$id"
+    else
+      printf 'codex-agent: vanished run=%s\n' "$id"
+    fi
+    exit 1
+  fi
+
+  while [ "$SECONDS" -lt "$limit" ]; do
+    sleep 1
+    finish_if_done
+  done
+  print_last_log_line
+  printf 'codex-agent: waiting run=%s\n' "$id"
+  exit 124
+}
+
+[ "$wait_mode" -eq 0 ] || wait_for_run "$wait_run_id"
 
 # 定義ファイルを探す。プロジェクト定義がユーザ定義を上書きする。
 def_file=""
@@ -287,8 +461,9 @@ else
   prompt="$request"
 fi
 
-printf 'codex-agent: agent=%s model=%s effort=%s sandbox=%s codex_home=%s workdir=%s\n' \
-  "$agent_name" "$codex_model" "$codex_effort" "$codex_sandbox" "$codex_home" "$workdir"
+audit_line="$(printf 'codex-agent: agent=%s model=%s effort=%s sandbox=%s codex_home=%s workdir=%s' \
+  "$agent_name" "$codex_model" "$codex_effort" "$codex_sandbox" "$codex_home" "$workdir")"
+printf '%s\n' "$audit_line"
 
 # 試験用フック。フォールバック経路(終了コード 75)の確認にだけ使う。
 # 通常の運用では設定しない。
@@ -308,13 +483,13 @@ fi
 # 共有される一時ディレクトリ(`/tmp` など)に置くと、他の利用者から読まれる余地と、
 # 先回りして置かれたシンボリックリンク越しに別のファイルを切り詰める余地が残る。
 # ホーム配下は他の利用者が書き込めないため、置き場をここに取る。
-log_dir="$(to_slash "$home_dir")/.claude/codex-agent/logs"
 mkdir -p "$log_dir" || die "実行ログの置き場を作れない: $log_dir"
 # POSIX 権限が効く環境ではさらに本人だけが読める形に落とす。多重防御である。
 chmod 700 "$log_dir" 2>/dev/null || true
 # 残し続けると 1 回あたり数百 KB が溜まるため、古いものを落とす。
-# .last と .out は通常は終了時に消すが、taskkill /F などで強制終了されると EXIT の trap が動かずに残るため、同じ規則で落とす。
-find "$log_dir" -maxdepth 1 -type f \( -name '*.log' -o -name '*.last' -o -name '*.out' \) -mtime +7 -delete 2>/dev/null || true
+# .last、.out、.report.tmp は通常は終了時に消すが、taskkill /F などで強制終了されると EXIT の trap が動かずに残るため、同じ規則で落とす。
+find "$log_dir" -maxdepth 1 -type f \( -name '*.log' -o -name '*.last' -o -name '*.out' -o -name '*.report' -o -name '*.report.tmp' \) \
+  -mtime +7 -delete 2>/dev/null || true
 
 # 定義がスクラッチパッドを使えないときに依頼文を置く場所。ログと同じ期限で消す。
 # 置き場が無くても実行自体は続けられるため、作成に失敗しても止めない。
@@ -331,16 +506,28 @@ log_file="$log_base.log"
 # 強制終了で残っても、実行 ID から特定して消せるうえ、古いものは上の削除で落ちるためである。
 out_file="$log_base.out"
 last_msg_file="$log_base.last"
+# 標準出力へ出したものの写し。完了後に --wait が取り出す。
+# 一時ファイルに書き、result= の行まで書いてから改名する。--wait が書きかけを読むと、途切れた報告を返すためである。
+# Codex の起動前に止まる経路(終了コード 2、3、試験用フック)では作らない。ログも無く、--wait の対象にならないためである。
+report_file="$log_base.report"
+report_tmp="$log_base.report.tmp"
 # 書き込み担当の目印のパス。置けたときだけ入る。
 marker_file=""
-# ログ本体だけを残す。他は標準出力へ出すかログへ写した時点で役目を終える。
+# ログ本体と報告だけを残す。他は標準出力へ出すかログへ写した時点で役目を終える。
 # 目印も終了時に消す。強制終了で残った目印は、次の起動が古い目印の規則で扱う。
-trap 'rm -f "$out_file" "$last_msg_file"; [ -z "$marker_file" ] || rm -f "$marker_file" 2>/dev/null' EXIT
+trap 'rm -f "$out_file" "$last_msg_file" "$report_tmp"; [ -z "$marker_file" ] || rm -f "$marker_file" 2>/dev/null' EXIT
 # 先に作って権限を落とす。あとの書き込みは truncate か追記なので、この権限が残る。
 : >"$log_file" || die "実行ログを作れない: $log_file"
 : >"$last_msg_file" || die "最終報告の受け皿を作れない: $last_msg_file"
 : >"$out_file" || die "標準出力の受け皿を作れない: $out_file"
-chmod 600 "$log_file" "$last_msg_file" "$out_file" 2>/dev/null || true
+# 報告の写しは補助なので、作れなくても起動は止めない。
+printf '%s\n' "$audit_line" 2>/dev/null >"$report_tmp" || true
+chmod 600 "$log_file" "$last_msg_file" "$out_file" "$report_tmp" 2>/dev/null || true
+
+# 標準出力へ出す内容を、報告の写しにも書く。Codex の起動を決めた後の標準出力はすべてこれを通す。
+out() {
+  tee -a "$report_tmp" 2>/dev/null
+}
 
 # 止める対象を特定できるよう、Git Bash では Windows の PID を出す。
 # taskkill が受け付けるのは Windows の PID であり、$$ は Git Bash 内の番号で一致しないためである。
@@ -356,9 +543,9 @@ run_line="codex-agent: run=$run_id pid=$run_pid started=$(date -u +%Y-%m-%dT%H:%
 printf '%s\n' "$run_line" >>"$log_file"
 
 # Codex の起動前に出す。実行中に呼び出し側がログの場所と止める対象を知るための行である。
-printf '%s\n' "$run_line"
+printf '%s\n' "$run_line" | out
 log_line="codex-agent: log=$(to_windows_path "$log_file")"
-printf '%s\n' "$log_line"
+printf '%s\n' "$log_line" | out
 
 # 書き込み担当の目印の置き場を出す。git が無い、または作業ディレクトリが git の管理下に無いときは何も出さない。
 # worktree ごとに置き場を分けるため、共通の git ディレクトリではなく worktree 固有の git ディレクトリを使う。
@@ -393,7 +580,7 @@ check_run_markers() {
         ;;
     esac
     warning="codex-agent: warning=concurrent-writer run=$other_id log=$other_log"
-    printf '%s\n' "$warning"
+    printf '%s\n' "$warning" | out
     printf '%s\n' "$warning" >>"$log_file"
   done
   return 0
@@ -442,9 +629,11 @@ end_newline() {
 
 # result 行を標準出力とログの末尾の両方へ出して終わる。
 # ログの最後の行を標準出力の最後の行と同じにし、ログだけで完了と結果を判定できるようにする。
+# 報告の写しはログへ result= の行を書く前に改名する。ログが完了を示すときに報告が揃っているようにするためである。
 # finish <result の値> <終了コード>
 finish() {
-  printf 'codex-agent: result=%s\n' "$1"
+  printf 'codex-agent: result=%s\n' "$1" | out
+  mv -f "$report_tmp" "$report_file" 2>/dev/null || rm -f "$report_tmp" 2>/dev/null
   printf 'codex-agent: result=%s\n' "$1" >>"$log_file"
   exit "$2"
 }
@@ -453,7 +642,7 @@ finish() {
 # 失敗時に標準出力へ出す末尾と、失敗の判定の対象には、これらの行を含めない。
 # 前者は標準出力に同じ行を 2 回出さないため、後者は実行 ID、PID、ログのパスの数字が判定の語(429 など)に一致しうるためである。
 log_body() {
-  awk 'NR > 1 && !/^codex-agent: warning=/' "$log_file"
+  awk 'NR > 1 && !/^codex-agent: warning=/ && !/^codex-agent: note=/' "$log_file"
 }
 
 # --output-last-message は Codex の版によって無い。無い版ではログの末尾を報告の代わりに出す。
@@ -465,6 +654,11 @@ codex_help="$(CODEX_HOME="$codex_home" codex exec --help 2>/dev/null)"
 case "$codex_help" in
   *--output-last-message*) output_last_message=1 ;;
 esac
+# 無い版では Codex のコマンドラインに <実行 ID>.last が載らず、--wait が残った Codex を探せない。
+# その実行で「Codex は残っていない」と断定させないため、ログに目印を残す。
+if [ "$output_last_message" -eq 0 ]; then
+  printf '%s\n' "$NO_LAST_MESSAGE_NOTE" >>"$log_file"
+fi
 
 codex_args=(
   --skip-git-repo-check
@@ -521,20 +715,18 @@ emit_evidence() {
 if [ "$codex_status" -eq 0 ]; then
   matched="$(printf '%s\n' "$stderr_body" | grep -E 'ERROR' | grep -F 'code-mode host exited during handshake' | head -n 3)"
   if [ -n "$matched" ] && [[ "$stderr_body" != *' succeeded in '* ]]; then
-    log_body | tail -n "$tail_lines"
-    emit_evidence 'unavailable' "$matched"
+    log_body | tail -n "$tail_lines" | out
+    emit_evidence 'unavailable' "$matched" | out
     finish unavailable 75
   fi
 fi
 
 if [ "$codex_status" -eq 0 ]; then
   if [ -s "$last_msg_file" ]; then
-    cat "$last_msg_file"
-    end_newline "$last_msg_file"
+    { cat "$last_msg_file"; end_newline "$last_msg_file"; } | out
   else
     # --output-last-message が無い版では、最終回答が流れる標準出力を報告の代わりに出す。
-    tail -n "$tail_lines" "$out_file"
-    end_newline "$out_file"
+    { tail -n "$tail_lines" "$out_file"; end_newline "$out_file"; } | out
   fi
   finish ok 0
 fi
@@ -543,7 +735,7 @@ fi
 # 全文を出すと、肥大を避けるためにログへ移した意味がなくなる。
 # この時点のログにはまだ result= の行が無いため、標準出力の result= の行は最後の 1 回だけになる。
 # ログは直前に改行で終わる形に揃えてあるため、続く行が繋がらない。
-log_body | tail -n "$tail_lines"
+log_body | tail -n "$tail_lines" | out
 
 # 判定の対象は、失敗を告げる行と出力の末尾に絞る。
 # ログには Codex が読んだファイルの中身も流れるため、全文を対象にすると
@@ -564,7 +756,7 @@ evidence="$(
 # 一致した行を残し、フォールバックの根拠を報告から追えるようにする。
 matched="$(printf '%s\n' "$evidence" | grep -iE 'usage limit|rate limit|too many requests|\b429\b' | head -n 3)"
 if [ -n "$matched" ]; then
-  emit_evidence 'rate-limit' "$matched"
+  emit_evidence 'rate-limit' "$matched" | out
   finish rate-limited 75
 fi
 
@@ -574,7 +766,7 @@ fi
 # 並べる語は実際に観測したものだけにする。広く取ると、Codex の通常の失敗まで倒れてしまう。
 matched="$(printf '%s\n' "$evidence" | grep -iE 'at capacity' | head -n 3)"
 if [ -n "$matched" ]; then
-  emit_evidence 'unavailable' "$matched"
+  emit_evidence 'unavailable' "$matched" | out
   finish unavailable 75
 fi
 
