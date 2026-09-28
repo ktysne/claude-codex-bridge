@@ -24,9 +24,10 @@ function allowedFormsText(agent) {
   const name = agent || '<定義名>';
   return [
     `Bash の bash ~/.claude/tools/codex-agent.sh ${name} [-C <パス>] < "<依頼文のファイル>"`,
+    `Bash の bash ~/.claude/tools/codex-agent.sh --new-prompt ${name} ["<親ディレクトリ>"]`,
     'bash ~/.claude/tools/codex-agent.sh --wait <実行 ID>',
     'bash ~/.claude/tools/codex-agent.sh --header-of "<出力ファイル>"',
-    `Write の <スクラッチパッド>/codex-agent-${name}-<YYYYMMDD>-<HHMMSS>-<英数字 6 文字>.md`
+    `Write の <スクラッチパッド>/codex-agent-${name}-<YYYYMMDD>-<HHMMSS>-<英数字 6 文字>/prompt.md`
       + '(スクラッチパッドが無いときは %USERPROFILE%/.claude/codex-agent/prompts/ の下)',
   ].join('、');
 }
@@ -43,6 +44,7 @@ function bashPatterns(agent) {
   return {
     forward: new RegExp(`${start}${agent}(?:${SEP}-C${SEP}(?:${QUOTED_PATH}|${BARE_PATH}))?${SEP}<[ \\t]*"([^"]+)"$`, 'u'),
     others: [
+      new RegExp(`${start}--new-prompt${SEP}${agent}(?:${SEP}${QUOTED_PATH})?$`, 'u'),
       new RegExp(`${start}--wait${SEP}${RUN_ID}$`, 'u'),
       new RegExp(`${start}--header-of${SEP}${QUOTED_PATH}$`, 'u'),
     ],
@@ -67,11 +69,12 @@ function isPromptFilePath(agent, filePath) {
   if (typeof filePath !== 'string' || filePath.includes('\0')) return false;
   const segments = filePath.replace(/\\/g, '/').split('/');
   const fileName = segments[segments.length - 1];
-  const parentDir = segments.slice(0, -1).join('/');
   const parentName = segments.length >= 2 ? segments[segments.length - 2] : '';
-  const namePattern = new RegExp(`^codex-agent-${agent}-\\d{8}-\\d{6}-[A-Za-z0-9]{6}\\.md$`);
-  if (!namePattern.test(fileName)) return false;
-  return parentName === 'scratchpad' || parentDir.endsWith(PROMPTS_DIR_SUFFIX);
+  const grandparentPath = segments.slice(0, -2).join('/');
+  const grandparentName = segments.length >= 3 ? segments[segments.length - 3] : '';
+  const directoryPattern = new RegExp(`^codex-agent-${agent}-\\d{8}-\\d{6}-[A-Za-z0-9]{6}$`);
+  if (fileName !== 'prompt.md' || !directoryPattern.test(parentName)) return false;
+  return grandparentName === 'scratchpad' || grandparentPath.endsWith(PROMPTS_DIR_SUFFIX);
 }
 
 // 許すなら null、拒否するなら理由の文を返す。

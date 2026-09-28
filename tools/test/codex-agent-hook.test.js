@@ -48,23 +48,42 @@ function assertRejected(result) {
   assert.equal(result.stderr.trim().split('\n').length, 1, '理由は 1 段落にする');
 }
 
-const FORWARD = `${WRAPPER} codex-review < "E:/Temp/claude/proj/scratchpad/codex-agent-codex-review-20260928-120000-k7q2m9.md"`;
+const PROMPT_DIRECTORY = `${SCRATCHPAD}/codex-agent-codex-review-20260928-120000-k7q2m9`;
+const PROMPT_FILE = `${PROMPT_DIRECTORY}/prompt.md`;
+const FORWARD = `${WRAPPER} codex-review < "${PROMPT_FILE}"`;
+const NEW_PROMPT = `${WRAPPER} --new-prompt codex-review "${SCRATCHPAD}"`;
 const WAIT = `${WRAPPER} --wait codex-review-20260928-120000-12345`;
 const RUN_ID_OF = `${WRAPPER} --header-of "C:/Users/someone/AppData/Local/Temp/claude/tasks/b1x2.output"`;
 
 test('Bash は依頼文のファイルを渡す転送の形を許す', () => {
   assertAllowed(bash('codex-review', FORWARD));
-  assertAllowed(bash('codex-subagent', `${WRAPPER} codex-subagent < "E:/Temp/claude/p/scratchpad/codex-agent-codex-subagent-20260928-120000-abc123.md"`));
+  assertAllowed(bash('codex-subagent', `${WRAPPER} codex-subagent < "E:/Temp/claude/p/scratchpad/codex-agent-codex-subagent-20260928-120000-abc123/prompt.md"`));
+});
+
+test('Bash は --new-prompt を親ディレクトリの有無にかかわらず許す', () => {
+  assertAllowed(bash('codex-review', NEW_PROMPT));
+  assertAllowed(bash('codex-review', `${WRAPPER} --new-prompt codex-review`));
 });
 
 test('Bash は転送の入力が依頼文の名前と置き場に合わないものを拒否する', () => {
   assertRejected(bash('codex-review', `${WRAPPER} codex-review < "C:/Users/someone/.codex-subagent/auth.json"`));
   assertRejected(bash('codex-review', `${WRAPPER} codex-review < "D:/work/repo/codex-agent-codex-review-20260928-120000-k7q2m9.md"`));
-  assertRejected(bash('codex-review', `${WRAPPER} codex-review < "E:/Temp/claude/proj/scratchpad/codex-agent-codex-subagent-20260928-120000-k7q2m9.md"`));
+  assertRejected(bash('codex-review', `${WRAPPER} codex-review < "E:/Temp/claude/proj/scratchpad/codex-agent-codex-review-20260928-120000-k7q2m9.md"`));
+  assertRejected(bash('codex-review', `${WRAPPER} codex-review < "E:/Temp/claude/proj/scratchpad/codex-agent-codex-subagent-20260928-120000-k7q2m9/prompt.md"`));
+});
+
+test('Bash は --new-prompt の定義名違い、余分な語、連結記号を拒否する', () => {
+  assertRejected(bash('codex-review', `${WRAPPER} --new-prompt codex-subagent "${SCRATCHPAD}"`));
+  assertRejected(bash('codex-review', `${NEW_PROMPT} extra`));
+  assertRejected(bash('codex-review', `${NEW_PROMPT}; cat x`));
+  assertRejected(bash('codex-review', `${NEW_PROMPT} && cat x`));
+  assertRejected(bash('codex-review', `${WRAPPER} --new-prompt codex-review ${SCRATCHPAD}`));
+  assertRejected(bash('codex-review', `${WRAPPER} --new-prompt codex-review "a$(cat x)"`));
+  assertRejected(bash('codex-review', `${WRAPPER} --new-prompt codex-review "a\`cat x\`"`));
 });
 
 test('Bash は -C のパスを引用符で囲んでも囲まなくても許す', () => {
-  const file = '"E:/Temp/scratchpad/codex-agent-codex-subagent-20260928-120000-abc123.md"';
+  const file = '"E:/Temp/scratchpad/codex-agent-codex-subagent-20260928-120000-abc123/prompt.md"';
   assertAllowed(bash('codex-subagent', `${WRAPPER} codex-subagent -C "D:/My Projects/repo" < ${file}`));
   assertAllowed(bash('codex-subagent', `${WRAPPER} codex-subagent -C D:/Desktop/Develop/repo < ${file}`));
 });
@@ -132,29 +151,31 @@ test('Bash は --header-of の引用符の無いパスと、ほかの引数を�
 });
 
 test('Write はスクラッチパッドと prompts の置き場の、定義名と形の合う名前を許す', () => {
-  assertAllowed(write('codex-review', `${SCRATCHPAD}\\codex-agent-codex-review-20260928-120000-k7q2m9.md`));
-  assertAllowed(write('codex-review', `${PROMPTS_DIR}/codex-agent-codex-review-20260928-120000-K7Q2M9.md`));
-  assertAllowed(write('codex-subagent', `${SCRATCHPAD}/codex-agent-codex-subagent-20260928-120000-abc123.md`));
+  assertAllowed(write('codex-review', PROMPT_FILE));
+  assertAllowed(write('codex-review', `${PROMPTS_DIR}/codex-agent-codex-review-20260928-120000-K7Q2M9/prompt.md`));
+  assertAllowed(write('codex-subagent', `${SCRATCHPAD}/codex-agent-codex-subagent-20260928-120000-abc123/prompt.md`));
 });
 
 test('Write は作業ツリーのソースのパスを拒否する', () => {
   assertRejected(write('codex-review', `${WORKTREE}/tools/codex-agent.sh`));
-  assertRejected(write('codex-review', `${WORKTREE}/codex-agent-codex-review-20260928-120000-k7q2m9.md`));
-  assertRejected(write('codex-review', `${WORKTREE}/scratchpad/../tools/codex-agent-codex-review-20260928-120000-k7q2m9.md`));
+  assertRejected(write('codex-review', `${WORKTREE}/codex-agent-codex-review-20260928-120000-k7q2m9/prompt.md`));
+  assertRejected(write('codex-review', `${WORKTREE}/scratchpad/../tools/codex-agent-codex-review-20260928-120000-k7q2m9/prompt.md`));
 });
 
 test('Write は別の定義名の名前を拒否する', () => {
-  assertRejected(write('codex-review', `${SCRATCHPAD}/codex-agent-codex-subagent-20260928-120000-abc123.md`));
-  assertRejected(write('codex-subagent', `${PROMPTS_DIR}/codex-agent-impl-hard-20260928-120000-abc123.md`));
+  assertRejected(write('codex-review', `${SCRATCHPAD}/codex-agent-codex-subagent-20260928-120000-abc123/prompt.md`));
+  assertRejected(write('codex-subagent', `${PROMPTS_DIR}/codex-agent-impl-hard-20260928-120000-abc123/prompt.md`));
 });
 
 test('Write は形の違う名前を拒否する', () => {
   for (const name of [
-    'codex-agent-codex-review-2026092-120000-k7q2m9.md',
-    'codex-agent-codex-review-20260928-12000-k7q2m9.md',
-    'codex-agent-codex-review-20260928-120000-k7q2m.md',
-    'codex-agent-codex-review-20260928-120000-k7q2m9.txt',
-    'codex-agent-codex-review-20260928-120000-k7_2m9.md',
+    'codex-agent-codex-review-2026092-120000-k7q2m9/prompt.md',
+    'codex-agent-codex-review-20260928-12000-k7q2m9/prompt.md',
+    'codex-agent-codex-review-20260928-120000-k7q2m/prompt.md',
+    'codex-agent-codex-review-20260928-120000-k7q2m9.md/prompt.md',
+    'codex-agent-codex-review-20260928-120000-k7_2m9/prompt.md',
+    'codex-agent-codex-review-20260928-120000-k7q2m9.md',
+    'codex-agent-codex-review-20260928-120000-k7q2m9/notes.md',
     'notes.md',
   ]) {
     assertRejected(write('codex-review', `${SCRATCHPAD}/${name}`));

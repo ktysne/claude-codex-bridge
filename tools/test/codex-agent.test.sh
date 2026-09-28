@@ -292,6 +292,8 @@ new_case_root() {
   NO_FAKE_BIN=0
   EXTRA_PATH=""
   RUN_OUT=""
+  STDIN_FILE=""
+  STDIN_HERE_STRING=0
 }
 
 # fake_set <name> <内容>
@@ -313,7 +315,13 @@ run_wrapper() {
   (
     cd "$root/work" || exit 99
     export USERPROFILE="$root/home" HOME="$root/home" PATH="$path" TMPDIR="$root/tmp"
-    printf '%s' "$REQ" | env ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} "$BASH_BIN" "$WRAPPER" "$@" >"$out" 2>"$root/err"
+    if [ -n "$STDIN_FILE" ]; then
+      env ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} "$BASH_BIN" "$WRAPPER" "$@" <"$STDIN_FILE" >"$out" 2>"$root/err"
+    elif [ "$STDIN_HERE_STRING" -eq 1 ]; then
+      env ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} "$BASH_BIN" "$WRAPPER" "$@" <<<"$REQ" >"$out" 2>"$root/err"
+    else
+      printf '%s' "$REQ" | env ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} "$BASH_BIN" "$WRAPPER" "$@" >"$out" 2>"$root/err"
+    fi
   )
   RC=$?
   check_log_path "$out"
@@ -1246,20 +1254,131 @@ t_log_prune() {
 # 依頼文の置き場は、定義がスクラッチパッドを使えないときの退避先であり、ログと同じ期限で落とす。
 t_prompts_prune() {
   local dir="$root/home/.claude/codex-agent/prompts"
+  local old_prompt_dir="$root/home/.claude/codex-agent/prompts/codex-agent-test-20260901-120000-abc123"
+  local recent_prompt_dir="$root/home/.claude/codex-agent/prompts/codex-agent-test-20260901-120000-def456"
   mkdir -p "$dir"
+  mkdir -p "$old_prompt_dir" "$recent_prompt_dir" "$dir/unrelated-old-directory"
   : >"$dir/old-9days.md"
   : >"$dir/recent-6days.md"
+  : >"$old_prompt_dir/prompt.md"
+  : >"$recent_prompt_dir/prompt.md"
   touch -d '9 days ago' "$dir/old-9days.md"
   touch -d '6 days ago' "$dir/recent-6days.md"
+  touch -d '9 days ago' "$old_prompt_dir" "$dir/unrelated-old-directory"
+  touch -d '6 days ago' "$recent_prompt_dir"
   run_wrapper "$AGENT"
   expect_rc 0
   [ -d "$dir" ] || fail "依頼文の置き場が無い"
   [ ! -e "$dir/old-9days.md" ] || fail "9 日前の依頼文が消えていない"
   [ -e "$dir/recent-6days.md" ] || fail "6 日前の依頼文が消えている"
+  [ ! -e "$old_prompt_dir" ] || fail "9 日前の依頼文ディレクトリが消えていない"
+  [ -e "$recent_prompt_dir/prompt.md" ] || fail "6 日前の依頼文ディレクトリが消えている"
+  [ -d "$dir/unrelated-old-directory" ] || fail "名前が一致しない古いディレクトリが消えている"
   rm -rf "$dir"
   run_wrapper "$AGENT"
   expect_rc 0
   [ -d "$dir" ] || fail "依頼文の置き場が作られていない"
+}
+
+t_new_prompt() {
+  local parent="$root/scratchpad" parent_backslash first second first_dir second_dir
+  mkdir -p "$parent"
+  cat >"$root/bin/date" <<'DATE'
+#!/bin/sh
+printf '20260929-123456\n'
+DATE
+  chmod +x "$root/bin/date"
+  parent_backslash="${parent//\//\\}"
+  run_wrapper --new-prompt "$AGENT" "$parent_backslash"
+  expect_rc 0
+  expect_eq "標準出力の行数" "1" "$(wc -l <"$root/out" | tr -d ' ')"
+  first="$(sed -n 's/^codex-agent: prompt-file=//p' "$root/out")"
+  case "$first" in
+    "$(norm_path "$parent")/codex-agent-$AGENT-20260929-123456-"*/prompt.md) ;;
+    *) fail "払い出し先の形が違う: [$first]" ;;
+  esac
+  first_dir="$(basename "$(dirname "$first")")"
+  [[ "$first_dir" =~ ^codex-agent-${AGENT}-20260929-123456-[A-Za-z0-9]{6}$ ]] \
+    || fail "ディレクトリ名の末尾が英数字 6 文字ではない: [$first_dir]"
+  [ "$(find "$parent" -mindepth 1 -maxdepth 1 -type d -name 'codex-agent-*' | wc -l | tr -d ' ')" = 1 ] \
+    || fail "依頼文ディレクトリが 1 つ作られていない"
+  [ -z "$(find "$parent" -name prompt.md -print -quit)" ] || fail "prompt.md が先に作られている"
+  run_wrapper --new-prompt "$AGENT" "$parent"
+  expect_rc 0
+  second="$(sed -n 's/^codex-agent: prompt-file=//p' "$root/out")"
+  case "$second" in
+    "$(norm_path "$parent")/codex-agent-$AGENT-20260929-123456-"*/prompt.md) ;;
+    *) fail "2 回目の払い出し先の形が違う: [$second]" ;;
+  esac
+  [ "$first" != "$second" ] || fail "同じ秒の 2 回の払い出し先が重複した"
+  second_dir="$(basename "$(dirname "$second")")"
+  [ "$first_dir" != "$second_dir" ] || fail "同じ秒の呼び出しで同じ名前を返した"
+  [ "$(find "$parent" -mindepth 1 -maxdepth 1 -type d -name 'codex-agent-*' | wc -l | tr -d ' ')" = 2 ] \
+    || fail "同じ秒の呼び出しで別々の依頼文ディレクトリが作られていない"
+  expect_no_codex_call
+}
+
+t_new_prompt_default_parent() {
+  local parent="$root/home/.claude/codex-agent/prompts"
+  run_wrapper --new-prompt "$AGENT"
+  expect_rc 0
+  grep -Fq "$(norm_path "$parent")/codex-agent-$AGENT-" "$root/out" \
+    || fail "既定の依頼文置き場を使っていない"
+  [ -d "$parent" ] || fail "既定の依頼文置き場が作られていない"
+  : >"$root/probe"
+  chmod 600 "$root/probe" 2>/dev/null
+  if [ "$(stat -c '%a' "$root/probe" 2>/dev/null)" = 600 ]; then
+    [ "$(stat -c '%a' "$parent" 2>/dev/null)" = 700 ] || fail "既定の依頼文置き場の権限が 700 でない"
+  fi
+  expect_no_codex_call
+}
+
+t_new_prompt_missing_parent() {
+  local parent="$root/missing-parent"
+  run_wrapper --new-prompt "$AGENT" "$parent"
+  expect_rc 2
+  [ ! -e "$parent" ] || fail "指定した親ディレクトリを作ってしまった"
+  [ ! -s "$root/out" ] || fail "失敗時に標準出力が出た"
+  expect_err_reason
+  expect_no_codex_call
+}
+
+t_new_prompt_incompatible_args() {
+  local args
+  for args in \
+    "--new-prompt $AGENT -C $root/work" \
+    "--new-prompt $AGENT --effort low" \
+    "--new-prompt $AGENT --wait run-id" \
+    "--new-prompt $AGENT --header-of $root/output" \
+    "--new-prompt --wait" \
+    "$AGENT --new-prompt $AGENT"; do
+    # shellcheck disable=SC2086
+    run_wrapper $args
+    expect_rc 2
+    expect_err_reason
+  done
+  expect_no_codex_call
+}
+
+t_prompt_file_audit() {
+  local source="$root/prompt.md" hash report run_id
+  printf '%s' "$REQ" >"$source"
+  hash="$(sha256sum "$source" | awk '{print $1}')"
+  STDIN_FILE="$source"
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_out_line "codex-agent: prompt-file=$(norm_path "$source") sha256=$hash"
+  run_id="$(sed -n 's/^codex-agent: run=\([^ ]*\).*/\1/p' "$root/out")"
+  report="$(logs_dir)/$run_id.report"
+  grep -Fxq "codex-agent: prompt-file=$(norm_path "$source") sha256=$hash" "$report" \
+    || fail "--wait 用の報告の写しに prompt-file の行が無い"
+}
+
+t_prompt_here_string_no_audit() {
+  STDIN_HERE_STRING=1
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_out_no_match 'codex-agent: prompt-file='
 }
 
 t_no_leftover_temp() {
@@ -1326,6 +1445,7 @@ t_help() {
   run_wrapper -h
   expect_rc 0
   grep -q '^用法: ' "$root/out" || fail "標準出力に用法が無い"
+  grep -Fq -- '--new-prompt <agent-name>' "$root/out" || fail "用法に --new-prompt が無い"
   expect_no_codex_call
 }
 
@@ -2167,6 +2287,12 @@ run_case "完了後のログ(通常の失敗): 最後の行が標準出力の re
 run_case "停止: run= の pid と実行 ID を含む Codex 側を taskkill /T /F で止めると、偽 codex まで止まり result= が残らない" t_kill_by_run_pid
 run_case "ログ: 9 日前の .log、.last、.out を消し、6 日前のものを残す" t_log_prune
 run_case "依頼文の置き場: 作られ、9 日前のファイルを消し、6 日前のものを残す" t_prompts_prune
+run_case "--new-prompt: ディレクトリを払い出し、同じ秒でも重複しない" t_new_prompt
+run_case "--new-prompt: 親を省略すると prompts の下に作り、chmod が効く環境では権限を 700 にする" t_new_prompt_default_parent
+run_case "--new-prompt: 存在しない親では終了コード 2 で止まり、親を作らない" t_new_prompt_missing_parent
+run_case "--new-prompt: ほかの入口と引数を併用すると終了コード 2 になる" t_new_prompt_incompatible_args
+run_case "依頼文監査: 通常ファイルからの転送ではパスと SHA-256 を出力と報告の写しに含める" t_prompt_file_audit
+run_case "依頼文監査: ヒアストリングからの転送では prompt-file の行を出さない" t_prompt_here_string_no_audit
 run_case "一時ファイル: 成功と失敗のあとに *.last、*.out、TMPDIR の一時ファイルが残らず、ログは残る" t_no_leftover_temp
 run_case "ログの権限: ログファイル 600、ログ置き場 700" t_log_permissions
 run_case "試験用フック: CODEX_AGENT_SIMULATE_RATE_LIMIT" t_simulate_rate_limit
