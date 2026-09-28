@@ -40,20 +40,30 @@ function rejection(agent, reason) {
 
 function bashPatterns(agent) {
   const start = `^${WRAPPER_PREFIX}${SEP}`;
-  return [
-    new RegExp(`${start}${agent}(?:${SEP}-C${SEP}(?:${QUOTED_PATH}|${BARE_PATH}))?${SEP}<[ \\t]*${QUOTED_PATH}$`, 'u'),
-    new RegExp(`${start}--wait${SEP}${RUN_ID}$`, 'u'),
-    new RegExp(`${start}--header-of${SEP}${QUOTED_PATH}$`, 'u'),
-  ];
+  return {
+    forward: new RegExp(`${start}${agent}(?:${SEP}-C${SEP}(?:${QUOTED_PATH}|${BARE_PATH}))?${SEP}<[ \\t]*"([^"]+)"$`, 'u'),
+    others: [
+      new RegExp(`${start}--wait${SEP}${RUN_ID}$`, 'u'),
+      new RegExp(`${start}--header-of${SEP}${QUOTED_PATH}$`, 'u'),
+    ],
+  };
 }
 
+// 転送の入力も依頼文のファイルに限る。任意のファイル(認証情報など)を依頼文として Codex へ送らせないためである。
 function isAllowedBash(agent, command) {
   if (typeof command !== 'string') return false;
   const trimmed = command.replace(/^\s+|\s+$/g, '');
-  return bashPatterns(agent).some((re) => re.test(trimmed));
+  const patterns = bashPatterns(agent);
+  const forward = patterns.forward.exec(trimmed);
+  if (forward) return new RegExp(`^${QUOTED_PATH}$`, 'u').test(`"${forward[1]}"`) && isPromptFilePath(agent, forward[1]);
+  return patterns.others.some((re) => re.test(trimmed));
 }
 
 function isAllowedWrite(agent, filePath) {
+  return isPromptFilePath(agent, filePath);
+}
+
+function isPromptFilePath(agent, filePath) {
   if (typeof filePath !== 'string' || filePath.includes('\0')) return false;
   const segments = filePath.replace(/\\/g, '/').split('/');
   const fileName = segments[segments.length - 1];

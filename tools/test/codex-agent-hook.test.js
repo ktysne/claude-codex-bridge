@@ -57,6 +57,12 @@ test('Bash は依頼文のファイルを渡す転送の形を許す', () => {
   assertAllowed(bash('codex-subagent', `${WRAPPER} codex-subagent < "E:/Temp/claude/p/scratchpad/codex-agent-codex-subagent-20260928-120000-abc123.md"`));
 });
 
+test('Bash は転送の入力が依頼文の名前と置き場に合わないものを拒否する', () => {
+  assertRejected(bash('codex-review', `${WRAPPER} codex-review < "C:/Users/someone/.codex-subagent/auth.json"`));
+  assertRejected(bash('codex-review', `${WRAPPER} codex-review < "D:/work/repo/codex-agent-codex-review-20260928-120000-k7q2m9.md"`));
+  assertRejected(bash('codex-review', `${WRAPPER} codex-review < "E:/Temp/claude/proj/scratchpad/codex-agent-codex-subagent-20260928-120000-k7q2m9.md"`));
+});
+
 test('Bash は -C のパスを引用符で囲んでも囲まなくても許す', () => {
   const file = '"E:/Temp/scratchpad/codex-agent-codex-subagent-20260928-120000-abc123.md"';
   assertAllowed(bash('codex-subagent', `${WRAPPER} codex-subagent -C "D:/My Projects/repo" < ${file}`));
