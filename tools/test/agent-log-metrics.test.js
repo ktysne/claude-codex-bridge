@@ -282,6 +282,93 @@ test('collect は依頼文と最後の報告の両方に指定があっても 1 
   });
 });
 
+function handbackEvent(timestamp, message) {
+  return {
+    timestamp,
+    message: { role: 'assistant', content: [{ type: 'tool_use', name: 'SubagentHandback', id: `hb-${timestamp}`, input: { message } }] },
+  };
+}
+
+test('collect は SubagentHandback の報告が指定を示す委譲を、後に続くテキストがあっても数える', () => {
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['handback-designated', 'impl-standard']],
+      [['handback-designated', [
+        handbackEvent('2026-09-10T10:01:00.000Z', '委譲の指定により Claude 側で実装した\n委譲: Claude 側で実装'),
+        assistantTextEvent('2026-09-10T10:01:05.000Z', '報告を呼び出し元へ渡しました。'),
+      ]]],
+    );
+
+    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+
+    assert.equal(metrics.byAgent['impl-standard'].designated, 1);
+    assert.equal(metrics.byAgent['impl-standard'].designatedNotInvoked, 1);
+  });
+});
+
+test('collect は続きの依頼への報告が後にあっても、先の報告の指定を数える', () => {
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['handback-continued', 'impl-standard']],
+      [['handback-continued', [
+        handbackEvent('2026-09-10T10:01:00.000Z', '委譲の指定により Claude 側で実装した'),
+        handbackEvent('2026-09-10T10:05:00.000Z', '指摘の修正を終えた'),
+      ]]],
+    );
+
+    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+
+    assert.equal(metrics.byAgent['impl-standard'].designated, 1);
+  });
+});
+
+test('collect は SubagentHandback のある子では、途中のテキストの指定を数えない', () => {
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['handback-text-designation', 'impl-standard']],
+      [['handback-text-designation', [
+        assistantTextEvent('2026-09-10T10:01:00.000Z', '委譲の指定により Claude 側で実装した'),
+        handbackEvent('2026-09-10T10:02:00.000Z', '実装を完了しました。'),
+      ]]],
+    );
+
+    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+
+    assert.equal(metrics.byAgent['impl-standard'].designated, 0);
+  });
+});
+
+test('collect は指定の行そのものから書き出した報告も指定として数える', () => {
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['designation-line-report', 'impl-light']],
+      [['designation-line-report', [handbackEvent('2026-09-10T10:01:00.000Z', `${CLAUDE_DESIGNATION}\n理由: 利用できない`)]]],
+    );
+
+    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+
+    assert.equal(metrics.byAgent['impl-light'].designated, 1);
+  });
+});
+
+test('collect は報告の冒頭の Markdown の装飾を除いて指定を判定する', () => {
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['decorated-report', 'impl-standard']],
+      [['decorated-report', [handbackEvent('2026-09-10T10:01:00.000Z', '## **委譲の指定により Claude 側で実装した**')]]],
+    );
+
+    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+
+    assert.equal(metrics.byAgent['impl-standard'].designated, 1);
+  });
+});
+
 test('collect は起動し直した委譲を最後の起動の結果で数える', () => {
   // 上限の後に起動し直して成功した委譲は、GPT で実行したものである。
   // 子が複数ある委譲でも、すべての子の起動を並べて最後のものを使う。
