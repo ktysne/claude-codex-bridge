@@ -238,6 +238,49 @@ namespace CodexBridgeConsole.Tests
         }
 
         [Theory]
+        [InlineData("medium", "medium")]
+        [InlineData("max", "high")]
+        public void GptEffortAfterModelChange_KeepsSupportedValueOrUsesCatalogDefaultForModelInCatalog(
+            string current,
+            string expected)
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                Choices choices = Choices.Load(directory.Path);
+                CodexModelCatalog catalog = CodexModelCatalog.Parse(
+                    "{\"models\":[{\"slug\":\"gpt-5.5\",\"visibility\":\"list\",\"default_reasoning_level\":\"high\",\"supported_reasoning_levels\":[{\"effort\":\"medium\"},{\"effort\":\"high\"}]}]}");
+
+                Assert.Equal(expected, choices.GptEffortAfterModelChange(catalog, "gpt-5.5", current));
+            }
+        }
+
+        [Fact]
+        public void GptEffortAfterModelChange_UsesModelTableForModelMissingFromCatalog()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                Choices choices = Choices.Load(directory.Path);
+                CodexModelCatalog catalog = CodexModelCatalog.Parse(
+                    "{\"models\":[{\"slug\":\"gpt-6-astra\",\"visibility\":\"list\",\"supported_reasoning_levels\":[{\"effort\":\"ultra\"}]}]}");
+
+                Assert.Equal("xhigh", choices.GptEffortAfterModelChange(catalog, "gpt-5.5", "ultra"));
+            }
+        }
+
+        [Fact]
+        public void GptEffortAfterModelChange_KeepsValueForModelMissingFromCatalogAndModelTable()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                Choices choices = Choices.Load(directory.Path);
+                CodexModelCatalog catalog = CodexModelCatalog.Parse(
+                    "{\"models\":[{\"slug\":\"gpt-6-astra\",\"visibility\":\"list\",\"supported_reasoning_levels\":[{\"effort\":\"high\"}]}]}");
+
+                Assert.Equal("ultra", choices.GptEffortAfterModelChange(catalog, "custom-gpt", "ultra"));
+            }
+        }
+
+        [Theory]
         [InlineData("high", new[] { "low", "medium", "high", "max" }, "high")]
         [InlineData("xhigh", new[] { "low", "medium", "high", "max" }, "high")]
         [InlineData("medium", new[] { "low" }, "low")]
