@@ -536,7 +536,7 @@ Codex はこの失敗を最終報告の文面に書くだけで、終了コー�
 - `spawn EPERM`：行頭と行末に空白が付いてもよい `Error: spawn EPERM` または `Execution failed: Error: spawn EPERM` の行を、直後の `at ChildProcess.spawn (` で始まる行と組にして数える。
   語だけで照合すると、Codex が読んだ文書の引用にも一致するためである。
 - `exited -1073741502 in`：終了コード 0xC0000142。Codex がツールの完了を書く行(行頭の空白に続く `exited -1073741502 in <時間>`)に限って照合する。数値だけで照合すると、この値を書いた文書を Codex が読んだだけで一致するためである。
-- MSYS2 のランタイムの異常終了：`*** fatal error - CreateFileMapping` と `Win32 error 5` を同じ行に含む行を数える。テストの出力に埋め込まれて行頭が変わるため、行の形ではなく 2 つの語の組で照合する。
+- MSYS2 のランタイムの異常終了：`sh (<数字>) ... sh.exe: *** fatal error - CreateFileMapping ... Win32 error 5. ... Terminating.` の並びを含む行を数える。テストの出力に埋め込まれて行頭が変わるため、行頭は固定しない。PID を数字に限るのは、下の例示の行を Codex が表示しただけで一致しないようにするためである。
 
 3 つ目は、Git for Windows の `sh.exe`(`git push` などが内部で起動する)がサンドボックスの中で起動した直後に止まる形である。
 入れ子でなくても、Codex が `sh.exe` を直接起動するだけで次の行を出して終わる。
