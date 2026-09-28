@@ -64,7 +64,8 @@ namespace CodexBridgeConsole
             return GptEffortsFor(model);
         }
 
-        // 目録にあるモデルでは、目録がそのモデルの既定とする effort へ寄せる。
+        // 目録にあるモデルでは、受け付けない effort を目録の既定へ寄せる。
+        // 目録に無いモデルでは、対応表で指定値以下の対応済みの値へ寄せる。
         public string GptEffortAfterModelChange(CodexModelCatalog catalog, string model, string effort)
         {
             IReadOnlyList<string> catalogEfforts = catalog != null ? catalog.EffortsFor(model) : new string[0];

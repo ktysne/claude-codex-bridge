@@ -255,6 +255,19 @@ namespace CodexBridgeConsole.Tests
         }
 
         [Fact]
+        public void GptEffortAfterModelChange_UsesFirstCatalogEffortWhenCatalogHasNoDefault()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                Choices choices = Choices.Load(directory.Path);
+                CodexModelCatalog catalog = CodexModelCatalog.Parse(
+                    "{\"models\":[{\"slug\":\"gpt-5.5\",\"visibility\":\"list\",\"supported_reasoning_levels\":[{\"effort\":\"low\"},{\"effort\":\"medium\"}]}]}");
+
+                Assert.Equal("low", choices.GptEffortAfterModelChange(catalog, "gpt-5.5", "max"));
+            }
+        }
+
+        [Fact]
         public void GptEffortAfterModelChange_UsesModelTableForModelMissingFromCatalog()
         {
             using (var directory = new TemporaryDirectory())
