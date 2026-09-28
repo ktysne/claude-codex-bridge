@@ -58,7 +58,7 @@ GPT 側に委ねたい場合は `codex_model` と `codex_reasoning_effort` を�
 
 特定の利用先プロジェクトだけで使う場合は、Claude 側定義を `<利用先プロジェクト>/.claude/agents/` に、GPT 側定義を `<利用先プロジェクト>/.claude/gpt-agents/` に置いてもよい。
 この場合も、Claude 側定義が呼び出すスクリプトを `%USERPROFILE%\.claude\tools\codex-agent.sh` に置く。
-`codex-review` と `codex-subagent` のフックは、プロジェクト側に置いた定義では、そのフォルダのワークスペース信頼が無いと効かない。
+`codex-review` と `codex-subagent` のフックは、プロジェクト側に置いた定義では、そのフォルダのワークスペース信頼が無いと効かない。worktree では元のリポジトリのフォルダの信頼で判定される(詳細は [gpt-agents.md](gpt-agents.md) の「ラッパー役の定義の道具を絞る」)。
 プロジェクト側の GPT 側定義は、ユーザー定義側より優先して使われる。
 
 `tools/codex-agent.sh` は行末が LF のまま配置する。
