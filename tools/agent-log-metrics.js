@@ -605,7 +605,9 @@ function isDesignatedPrompt(prompt) {
 function isDesignatedReport(report) {
   if (typeof report !== 'string') return false;
   const head = report.trim().replace(/^[#>*\-\s]+/, '');
-  return head.startsWith(REPORT_DESIGNATION) || isDesignatedPrompt(head);
+  if (head.startsWith(REPORT_DESIGNATION)) return true;
+  const firstLine = head.split(/\r\n|\n/)[0].replace(/[#>*_`\-\s]+$/, '').replace(/^[_`]+/, '');
+  return firstLine === DESIGNATION;
 }
 
 // 子の報告のどれかが指定を示すかを返す。SubagentHandback が無い子だけ、最後のテキストを報告とみなす。
