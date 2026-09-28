@@ -45,6 +45,10 @@ codex login status
 このリポジトリの `.claude/agents/` にある必要な Claude 側定義を、`~/.claude/agents/` (`%USERPROFILE%\.claude\agents\`) にコピーする。
 必要な GPT 側定義を、`~/.claude/gpt-agents/` (`%USERPROFILE%\.claude\gpt-agents\`) にコピーする。
 `tools/codex-agent.sh` を `%USERPROFILE%\.claude\tools\` にコピーする。
+`codex-review` か `codex-subagent` を配置するパターンでは、`tools/codex-agent-hook.js` も同じ場所にコピーする。
+この 2 定義はフロントマターのフックで、このスクリプトを node で起動する。
+スクリプトか node が無いと、2 定義の Bash と Write はすべて拒否される。
+そのため、スクリプトは定義より先に置く。仕組みは [gpt-agents.md](gpt-agents.md) の「ラッパー役の定義の道具を絞る」にある。
 各パターンで配置する定義は、パターンごとの追加手順に示す。
 
 `.claude/agents/impl-hard.md` と `.claude/gpt-agents/impl-hard.md` は、どのパターンでも配置する。
@@ -54,6 +58,7 @@ GPT 側に委ねたい場合は `codex_model` と `codex_reasoning_effort` を�
 
 特定の利用先プロジェクトだけで使う場合は、Claude 側定義を `<利用先プロジェクト>/.claude/agents/` に、GPT 側定義を `<利用先プロジェクト>/.claude/gpt-agents/` に置いてもよい。
 この場合も、Claude 側定義が呼び出すスクリプトを `%USERPROFILE%\.claude\tools\codex-agent.sh` に置く。
+`codex-review` と `codex-subagent` のフックは、プロジェクト側に置いた定義では、そのフォルダのワークスペース信頼が無いと効かない。
 プロジェクト側の GPT 側定義は、ユーザー定義側より優先して使われる。
 
 `tools/codex-agent.sh` は行末が LF のまま配置する。
@@ -140,6 +145,7 @@ Claude 側定義(`.claude/agents/`)が反映される条件は、Claude Code の
 ここで再起動しないと、`Agent type 'codex-review' not found` のように定義が見つからない失敗になる。
 
 GPT 側定義(`.claude/gpt-agents/`)と `tools/codex-agent.sh` は、`codex-agent.sh` が呼び出しのたびに読む。
+`tools/codex-agent-hook.js` も、フックの起動のたびに読まれる。
 これらだけを直したときは、再起動せずに次の呼び出しから効く。
 
 ### 7. 設定コンソールを導入する(任意)
@@ -203,7 +209,7 @@ Claude Code の `Agent` ツールからも `subagent_type: impl-hard`、`subagen
 - `.claude/gpt-agents/codex-review.md`
 - `.claude/gpt-agents/codex-subagent.md`
 
-共通手順で `tools/codex-agent.sh` も配置する。
+共通手順で `tools/codex-agent.sh` と `tools/codex-agent-hook.js` も配置する。
 
 ### 動作確認
 
@@ -284,7 +290,7 @@ codex login status      # 既定ホーム側に戻っていることを確認す
 
 ### 使う定義
 
-5 つの Claude 側定義、5 つの GPT 側定義、`tools/codex-agent.sh` を配置する。
+5 つの Claude 側定義、5 つの GPT 側定義、`tools/codex-agent.sh`、`tools/codex-agent-hook.js` を配置する。
 
 - `.claude/agents/impl-hard.md`
 - `.claude/agents/impl-light.md`
