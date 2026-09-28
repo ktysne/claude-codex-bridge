@@ -20,6 +20,8 @@
 #   codex-agent: warning=concurrent-writer run=<相手の実行 ID> log=<相手のログのパス>      該当する目印ごとに 1 行(無ければ出さない)
 #   codex-agent: warning=child-spawn-failed count=<回数>                                  Codex の終了後、子プロセスの起動失敗の印があれば出す
 #   codex-agent: child-spawn-failed evidence: <最初に一致した行>                           上の行に続けて 1 行
+#   codex-agent: warning=sandbox-build-failed count=<回数>                                Codex の終了後、MSBuild がエラー文なしで止まった印があれば出す
+#   codex-agent: sandbox-build-failed evidence: <起動したコマンドの行>                     上の行に続けて 1 行
 #   <最終報告>(失敗時はログの末尾と根拠の行)
 #   codex-agent: result=...
 # run= と log= の行を起動前に出すのは、呼び出し側がバックグラウンドへ移ったあとも、
@@ -35,7 +37,7 @@
 #
 # 実行ログ(~/.claude/codex-agent/logs/<実行 ID>.log):
 #   1 行目は run= の行と同じ内容である。標準出力へ warning=concurrent-writer の行を出すときは、続けて同じ行を書く。残った目印を消したときは note=stale-run-marker-removed の行を書く。
-#   Codex の標準エラーは実行中から行ごとに追記する。続けて、終了後に warning=child-spawn-failed の行(出すときだけ)と Codex の標準出力を追記する。
+#   Codex の標準エラーは実行中から行ごとに追記する。続けて、終了後に warning=child-spawn-failed と warning=sandbox-build-failed の行(出すときだけ)と Codex の標準出力を追記する。
 #   最後の行は標準出力へ出すのと同じ result= の行である。ログだけで完了と結果を判定できるようにするためである。
 #   Codex の起動前に止まる経路(終了コード 2、3、試験用フック)ではログを作らない。
 #
@@ -112,6 +114,8 @@ run= の行と log= の行は Codex の起動前に出す。
 log= の行の後に codex-agent: warning=concurrent-writer の行を出す(起動は止めない)。
 Codex の経過に子プロセスの起動失敗の印があれば、最終報告の前に
 codex-agent: warning=child-spawn-failed の行と、最初の根拠の行を出す(result= の値は変えない)。
+MSBuild がエラー文を出さずに Checking File Globs の直後で止まった印があれば、続けて
+codex-agent: warning=sandbox-build-failed の行と、起動したコマンドの行を出す(同じく result= は変えない)。
 実行中の委譲を止める手順は docs/gpt-agents.md の「既知の制約」にある。
 
 終了コード:
@@ -860,6 +864,30 @@ if [ -n "$child_spawn_failed" ]; then
   printf '%s\n' "$child_spawn_warning" >>"$log_file"
   first_line="$(printf '%s\n' "$child_spawn_failed" | head -n 1 | tr -d '\r')"
   printf 'codex-agent: child-spawn-failed evidence: %s\n' "${first_line:0:300}" | out
+fi
+
+# エラー文を出さずに Checking File Globs の直後で終わった MSBuild の回を数え、根拠には起動したコマンドの行を出す。
+# 判定の形は docs/gpt-agents.md「既知の制約」の「サンドボックスの中の MSBuild が…」にある。result= は変えない。
+sandbox_build_failed="$(printf '%s\n' "$stderr_body" | awk '
+  { sub(/\r$/, ""); lines[NR] = $0 }
+  END {
+    for (i = 2; i <= NR; i++) {
+      if (lines[i] !~ /^[[:space:]]*exited [1-9][0-9]* in [0-9]/) continue
+      j = i + 1
+      while (j <= NR && (lines[j] ~ /^[[:space:]]*$/ || lines[j] ~ /^MSBuild/)) j++
+      if (j > NR || lines[j] !~ /^[[:space:]]+Checking File Globs[[:space:]]*$/) continue
+      k = j + 1
+      while (k <= NR && lines[k] ~ /^[[:space:]]*$/) k++
+      if (k > NR || lines[k] !~ /^[[:space:]]/) print lines[i - 1]
+    }
+  }
+')"
+if [ -n "$sandbox_build_failed" ]; then
+  sandbox_build_warning="codex-agent: warning=sandbox-build-failed count=$(printf '%s\n' "$sandbox_build_failed" | wc -l | tr -d ' ')"
+  printf '%s\n' "$sandbox_build_warning" | out
+  printf '%s\n' "$sandbox_build_warning" >>"$log_file"
+  first_line="$(printf '%s\n' "$sandbox_build_failed" | head -n 1)"
+  printf 'codex-agent: sandbox-build-failed evidence: %s\n' "${first_line:0:300}" | out
 fi
 
 # 経過(標準エラー)に続けて最終回答(標準出力)をログへ写す。

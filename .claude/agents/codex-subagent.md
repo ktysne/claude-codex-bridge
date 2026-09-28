@@ -93,4 +93,4 @@ Codex の実行は 10 分を超えることがある。Bash ツールがラッ�
 - `run=` の行と `log=` の行は Codex の起動前に出るため、実行中でも `--header-of` で出力ファイルから取り出せる。
 - ログの 1 行目は `run=` の行と同じで、Codex が終わるとログの最後の行に標準出力と同じ `result=` の行が書かれる。
 - 書き込み可能な定義では、`log=` の行の後に `codex-agent: warning=concurrent-writer run=<相手の実行 ID> log=<相手のログのパス>` の行が出ることがある。同じ worktree で書き込み可能な別の実行が残っている可能性を示す行であり、実行は止まらない。標準出力の全体をそのまま返すため、この行は報告にそのまま含まれる。「進行中」の報告を書くときも、`--header-of` の出力にこの行があれば、冒頭の「進行中」の後にそのまま添える。
-- Codex の経過に子プロセスの起動失敗の印があった場合は、最終報告の前に `codex-agent: warning=child-spawn-failed count=<回数>` の行と、最初の根拠を示す `codex-agent: child-spawn-failed evidence: <行>` の行が出る。`result=` の値は変わらない。標準出力の全体をそのまま返すため、これらの行は報告にそのまま含まれる。検証を自分で実行し直すことはしない。
+- Codex の経過に子プロセスの起動失敗の印があった場合は、最終報告の前に `codex-agent: warning=child-spawn-failed count=<回数>` の行と、最初の根拠を示す `codex-agent: child-spawn-failed evidence: <行>` の行が出る。MSBuild がエラー文を出さずに `Checking File Globs` の直後で止まった印があった場合は、`codex-agent: warning=sandbox-build-failed count=<回数>` の行と `codex-agent: sandbox-build-failed evidence: <行>` の行が出る。`result=` の値は変わらない。標準出力の全体をそのまま返すため、これらの行は報告にそのまま含まれる。検証を自分で実行し直すことはしない。
