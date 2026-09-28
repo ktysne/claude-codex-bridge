@@ -48,7 +48,7 @@ if command -v git >/dev/null 2>&1; then
   GIT_BIN_DIR="$(dirname "$(command -v git)")"
 fi
 
-# --wait のケースだけ、PowerShell のディレクトリを PATH に足す。ラッパーの生死の照合に PowerShell を使うためである。
+# --wait と、目印を照合するケースだけ、PowerShell のディレクトリを PATH に足す。ラッパーの生死の照合に PowerShell を使うためである。
 PS_BIN_DIR=""
 ps_path="$(command -v pwsh 2>/dev/null || command -v powershell 2>/dev/null)"
 [ -z "$ps_path" ] || PS_BIN_DIR="$(dirname "$ps_path")"
@@ -1648,11 +1648,11 @@ runs_dir_of() {
 }
 
 # 他の実行の目印を置く。中身はラッパーが置く目印と同じ 3 行の形にする。
-# plant_marker <置き場> <実行 ID> <ログのパス>
+# plant_marker <置き場> <実行 ID> <ログのパス> [ラッパーの PID] [started=]
 plant_marker() {
   mkdir -p "$1"
   {
-    printf 'codex-agent: run=%s pid=1 started=2026-01-01T00:00:00Z\n' "$2"
+    printf 'codex-agent: run=%s pid=%s started=%s\n' "$2" "${4:-1}" "${5:-2026-01-01T00:00:00Z}"
     printf 'codex-agent: log=%s\n' "$3"
     printf 'codex-agent: agent=cxa-other sandbox=workspace-write\n'
   } >"$1/$2.run"
@@ -1753,7 +1753,7 @@ t_marker_other_worktree_no_warn() {
   expect_no_warning "$root/out"
 }
 
-# ログの最後の行が result= でない目印(途中で止められた実行)が残っていると、警告を出し、その目印を消さない。
+# ログの最後の行が result= でない目印は、プロセスを照合できない環境(PATH に PowerShell が無い)では警告を出し、消さない。
 t_marker_interrupted_warns() {
   setup_git_work || return
   local runs stale_log="$root/stale.log"
@@ -1768,8 +1768,81 @@ t_marker_interrupted_warns() {
   expect_out_line "codex-agent: warning=concurrent-writer run=cxa-stale-1 log=$stale_log"
   grep -Fxq -- "codex-agent: warning=concurrent-writer run=cxa-stale-1 log=$stale_log" "$(out_log_path "$root/out")" \
     || fail "ログに警告の行が無い"
-  [ -f "$runs/cxa-stale-1.run" ] || fail "途中で止められた実行の目印が消された"
+  [ -f "$runs/cxa-stale-1.run" ] || fail "照合できない目印が消された"
   expect_eq "終了後の目印の数" "1" "$(count_markers "$runs")"
+}
+
+# 照合する目印のケースの準備。git と PowerShell を PATH に足し、相手のログを置いて、そのパスを STALE_LOG に入れる。
+# plant_probe_case <相手の実行 ID> <ラッパーの PID> <started=>
+plant_probe_case() {
+  EXTRA_PATH="$EXTRA_PATH:$PS_BIN_DIR"
+  plant_unfinished_log "$1" "$2" "$3"
+  STALE_LOG="$(logs_dir)/$1.log"
+  plant_marker "$(runs_dir_of "$root/work")" "$1" "$STALE_LOG" "$2" "$3"
+  fake_set last_message '報告
+'
+}
+
+expect_marker_warned() {
+  local runs warning="codex-agent: warning=concurrent-writer run=$1 log=$STALE_LOG"
+  runs="$(runs_dir_of "$root/work")"
+  expect_rc 0
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
+  expect_out_line "$warning"
+  [ -f "$runs/$1.run" ] || fail "実行中かもしれない目印が消された"
+  expect_eq "終了後の目印の数" "1" "$(count_markers "$runs")"
+}
+
+# ラッパーも Codex 側のプロセスも残っていない目印は、強制終了の残りとして消し、自分のログにだけ記録する。
+t_marker_stale_removed() {
+  setup_git_work || return
+  need_process_probe || return
+  local id="cxa-stale-$RANDOM" runs
+  runs="$(runs_dir_of "$root/work")"
+  plant_probe_case "$id" "$(dead_win_pid)" "$(now_utc)"
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
+  expect_no_warning "$root/out"
+  expect_out_no_match "stale-run-marker-removed"
+  [ ! -e "$runs/$id.run" ] || fail "強制終了で残った目印が消えていない"
+  grep -Fxq -- "codex-agent: note=stale-run-marker-removed run=$id log=$STALE_LOG" "$(out_log_path "$root/out")" \
+    || fail "ログに目印を消した記録の行が無い"
+}
+
+# ラッパーが生きている目印は、警告を出し、消さない。
+t_marker_wrapper_alive_warns() {
+  setup_git_work || return
+  need_process_probe || return
+  local id="cxa-alive-$RANDOM"
+  start_holder codex-agent.sh
+  plant_probe_case "$id" "$HOLDER_PID" "$(now_utc)"
+  run_wrapper "$AGENT"
+  stop_holder
+  expect_marker_warned "$id"
+}
+
+# ラッパーが消えても、コマンドラインに <実行 ID>.last を含むプロセスが残る目印は、警告を出し、消さない。
+t_marker_codex_left_warns() {
+  setup_git_work || return
+  need_process_probe || return
+  local id="cxa-orphan-$RANDOM"
+  start_holder cxa-holder "$(logs_dir)/$id.last"
+  plant_probe_case "$id" "$(dead_win_pid)" "$(now_utc)"
+  run_wrapper "$AGENT"
+  stop_holder
+  expect_marker_warned "$id"
+}
+
+# --output-last-message の無い版の実行の目印は、ラッパーが消えていても Codex の有無を確かめられないので、警告を出し、消さない。
+t_marker_unverified_warns() {
+  setup_git_work || return
+  need_process_probe || return
+  local id="cxa-unverified-$RANDOM"
+  plant_probe_case "$id" "$(dead_win_pid)" "$(now_utc)"
+  printf 'codex-agent: note=no-output-last-message\n経過: 目印の後の行\n' >>"$STALE_LOG"
+  run_wrapper "$AGENT"
+  expect_marker_warned "$id"
 }
 
 # ログの最後の行が result= の目印と、ログが存在しない目印は、起動時に消され、警告は出ない。
@@ -1838,7 +1911,8 @@ t_marker_not_git() {
   [ -z "$found" ] || fail "git の管理下に無いのに目印の置き場がある: $found"
 }
 
-# 警告の行に 429 を含む実行 ID とパスが出ても、利用上限と判定しない。警告の行は標準出力に 1 回だけ出る。
+# 照合できない環境(PATH に PowerShell が無い)で警告の行に 429 を含む実行 ID とパスが出ても、利用上限と判定しない。
+# 警告の行は標準出力に 1 回だけ出る。
 t_marker_warning_not_classified() {
   setup_git_work || return
   local runs stale_log="$root/stale-429.log" warning
@@ -2014,11 +2088,15 @@ run_case "--wait(不正な引数): エージェント名との併用、/ を含�
 run_case "目印: 書き込み可能な起動は実行中に <git ディレクトリ>/codex-agent/runs/<実行 ID>.run を置き、正常終了で消す" t_marker_lifecycle
 run_case "目印: 同じ worktree で重ねると、2 つ目の出力とログにだけ 1 つ目の実行 ID を含む警告が出て、どちらも result=ok" t_marker_same_worktree_warns
 run_case "目印: 同じリポジトリの別の worktree で重ねた起動には警告が出ない" t_marker_other_worktree_no_warn
-run_case "目印: ログの最後の行が result= でない目印は警告を出し、消さない" t_marker_interrupted_warns
+run_case "目印: ログの最後の行が result= でない目印は、プロセスを照合できない環境では警告を出し、消さない" t_marker_interrupted_warns
+run_case "目印: ラッパーも <実行 ID>.last を含むプロセスも残っていない目印は、警告を出さずに消し、自分のログにだけ note= の行を書く" t_marker_stale_removed
+run_case "目印: ラッパーが生きている目印は警告を出し、消さない" t_marker_wrapper_alive_warns
+run_case "目印: ラッパーが消えても <実行 ID>.last を含むプロセスが残る目印は警告を出し、消さない" t_marker_codex_left_warns
+run_case "目印: --output-last-message の無い版の実行の目印は、ラッパーが消えていても警告を出し、消さない" t_marker_unverified_warns
 run_case "目印: ログの最後の行が result= の目印とログが無い目印は消し、警告を出さない" t_marker_finished_removed
 run_case "目印: read-only の起動は目印を置かず、残った目印に警告を出さない" t_marker_read_only
 run_case "目印: git の管理下に無い作業ディレクトリでは目印も警告も無く成功する" t_marker_not_git
-run_case "目印: 警告の行の 429 で利用上限と判定せず、警告の行は標準出力に 1 回" t_marker_warning_not_classified
+run_case "目印: 照合できない環境で出た警告の行の 429 で利用上限と判定せず、警告の行は標準出力に 1 回" t_marker_warning_not_classified
 run_case "ai-cross-review との契約: scriptPinsApprovalNever が true を返す" t_cross_review_contract
 run_case "出荷既定の定義: 5 定義の codex_home と codex_sandbox が CLAUDE.md の対応に従う" t_shipped_definitions
 run_case "環境の分離: 実ホームのログ置き場にテスト用のログが無い" t_real_home_untouched
