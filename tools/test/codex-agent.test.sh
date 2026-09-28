@@ -48,6 +48,11 @@ if command -v git >/dev/null 2>&1; then
   GIT_BIN_DIR="$(dirname "$(command -v git)")"
 fi
 
+# --wait のケースだけ、PowerShell のディレクトリを PATH に足す。ラッパーの生死の照合に PowerShell を使うためである。
+PS_BIN_DIR=""
+ps_path="$(command -v pwsh 2>/dev/null || command -v powershell 2>/dev/null)"
+[ -z "$ps_path" ] || PS_BIN_DIR="$(dirname "$ps_path")"
+
 # ラッパーと同じ規則でパスを揃える。比較の前に両辺へ適用する。
 norm_path() {
   local p="${1//\\//}"
@@ -562,6 +567,11 @@ t_no_output_last_message() {
     fail "報告が標準出力の末尾 40 行になっていない: 実際の先頭=[$(head -n 2 "$root/actual_tail" | tr '\n' ' ')] 行数=$(wc -l <"$root/actual_tail" | tr -d ' ')"
   fi
   expect_out_no_match "使われないはずの報告"
+  # --wait が vanished と unverified を分けるための目印は、ログにだけ書き、標準出力には出さない。
+  if ! grep -Fxq 'codex-agent: note=no-output-last-message' <(tr -d '\r' <"$(only_log_file)"); then
+    fail "--output-last-message の無い版の目印がログに無い"
+  fi
+  expect_out_no_match "note=no-output-last-message"
 }
 
 # ヘルプの --output-last-message の行を読んだ時点で読み手が終わっても、有る版と判定する。
@@ -697,6 +707,79 @@ t_codex_exit_75() {
   run_wrapper "$AGENT"
   expect_rc 1
   expect_eq "最後の行" "codex-agent: result=failed exit=75" "$(last_out_line)"
+}
+
+CHILD_SPAWN_STDERR='exec
+node tools/run-tests.js in /work
+ exited 1 in 701ms:
+Error: spawn EPERM
+exec
+"pwsh.exe" -Command "rg -n foo" in /work
+ exited -1073741502 in 0ms:
+codex
+検証は spawn EPERM で実行できなかった。
+'
+
+t_child_spawn_warning() {
+  fake_set stderr "$CHILD_SPAWN_STDERR"
+  fake_set last_message '最終報告
+'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_eq "4 行目(log= の行の後)" "codex-agent: warning=child-spawn-failed count=3" "$(sed -n 4p "$root/out")"
+  expect_eq "5 行目" "codex-agent: child-spawn-failed evidence: Error: spawn EPERM" "$(sed -n 5p "$root/out")"
+  expect_eq "6 行目" "最終報告" "$(sed -n 6p "$root/out")"
+  expect_eq "警告の行数" "1" "$(grep -c '^codex-agent: warning=child-spawn-failed' "$root/out")"
+  expect_eq "根拠の行数" "1" "$(grep -c '^codex-agent: child-spawn-failed evidence: ' "$root/out")"
+  expect_log_ends_with_result
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
+  local id
+  id="$(run_id_of "$root/out")"
+  cmp -s "$root/out" "$(logs_dir)/$id.report" || fail "報告の写しが標準出力と違う"
+  grep -Fxq 'codex-agent: warning=child-spawn-failed count=3' "$(out_log_path "$root/out")" || fail "ログに警告の行が無い"
+}
+
+# 最終報告と Codex の標準出力だけが失敗を引用した実行。経過には印が無い。
+t_child_spawn_report_only() {
+  fake_set stderr '経過: 考えている
+'
+  fake_set last_message '検証は spawn EPERM で失敗した(exited -1073741502 in 0ms)。
+ exited -1073741502 in 0ms:
+'
+  fake_set stdout 'spawn EPERM
+ exited -1073741502 in 0ms:
+'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
+  expect_out_no_match "child-spawn-failed"
+}
+
+# 0xC0000142 の数値は、Codex がツールの完了を書く行の形でなければ数えない。
+t_child_spawn_number_only() {
+  fake_set stderr '終了コードが -1073741502 (0xC0000142) になった
+ exited -1073741502
+- 印の照合は `exited -1073741502 in` の形に限る。
+'
+  fake_set last_message '報告
+'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
+  expect_out_no_match "child-spawn-failed"
+}
+
+# 利用上限で 75 に倒れる実行でも、result= の直前は利用上限の根拠の行のままである。
+t_child_spawn_with_rate_limit() {
+  fake_set stderr "Error: spawn EPERM
+ERROR: You've hit your usage limit.
+"
+  fake_set exit_code 1
+  run_wrapper "$AGENT"
+  expect_fallback_tail rate-limit rate-limited
+  expect_eq "4 行目(log= の行の後)" "codex-agent: warning=child-spawn-failed count=1" "$(sed -n 4p "$root/out")"
+  expect_eq "5 行目" "codex-agent: child-spawn-failed evidence: Error: spawn EPERM" "$(sed -n 5p "$root/out")"
+  expect_eq "警告の行数" "1" "$(grep -c '^codex-agent: warning=child-spawn-failed' "$root/out")"
 }
 
 t_success_body_mentions_limit() {
@@ -1133,11 +1216,11 @@ t_kill_by_run_pid() {
   fi
 }
 
-# .last と .out は、強制終了で EXIT の trap が動かなかった実行の残りであり、.log と同じ規則で落とす。
+# .last、.out、.report.tmp は、強制終了で EXIT の trap が動かなかった実行の残りであり、.log と .report と同じ規則で落とす。
 t_log_prune() {
   mkdir -p "$(logs_dir)"
   local ext
-  for ext in log last out; do
+  for ext in log last out report report.tmp; do
     : >"$(logs_dir)/old-9days.$ext"
     : >"$(logs_dir)/recent-6days.$ext"
     touch -d '9 days ago' "$(logs_dir)/old-9days.$ext"
@@ -1145,7 +1228,7 @@ t_log_prune() {
   done
   run_wrapper "$AGENT"
   expect_rc 0
-  for ext in log last out; do
+  for ext in log last out report report.tmp; do
     [ ! -e "$(logs_dir)/old-9days.$ext" ] || fail "9 日前の .$ext が消えていない"
     [ -e "$(logs_dir)/recent-6days.$ext" ] || fail "6 日前の .$ext が消えている"
   done
@@ -1185,7 +1268,10 @@ t_no_leftover_temp() {
   [ -z "$left" ] || fail "*.last が残っている: $left"
   left="$(ls "$(logs_dir)"/*.out 2>/dev/null)"
   [ -z "$left" ] || fail "*.out が残っている: $left"
+  left="$(ls "$(logs_dir)"/*.report.tmp 2>/dev/null)"
+  [ -z "$left" ] || fail "*.report.tmp が残っている: $left"
   expect_eq "ログファイルの数" "2" "$(ls "$(logs_dir)"/*.log 2>/dev/null | wc -l | tr -d ' ')"
+  expect_eq "報告の写しの数" "2" "$(ls "$(logs_dir)"/*.report 2>/dev/null | wc -l | tr -d ' ')"
   left="$(ls -A "$root/tmp" 2>/dev/null)"
   [ -z "$left" ] || fail "TMPDIR に一時ファイルが残っている: $left"
 }
@@ -1213,6 +1299,10 @@ t_simulate_rate_limit() {
   expect_rc 75
   expect_eq "最後の行" "codex-agent: result=rate-limited (simulated)" "$(last_out_line)"
   expect_no_exec
+  # 起動前に止まる経路はログも報告の写しも残さない。--wait の対象にならないためである。
+  local left
+  left="$(ls "$(logs_dir)" 2>/dev/null)"
+  [ -z "$left" ] || fail "ログ置き場にファイルが残っている: $left"
 }
 
 t_simulate_unavailable() {
@@ -1243,6 +1333,277 @@ t_cross_review_contract() {
   ' "$(norm_path "$CROSS_REVIEW_JS")" "$(norm_path "$WRAPPER")" 2>"$root/err")"
   : >"$root/out"
   expect_eq "scriptPinsApprovalNever の戻り値" "true" "$result"
+}
+
+# ---------------------------------------------------------------------------
+# 完了を待つ入口(--wait)
+# ---------------------------------------------------------------------------
+
+# --wait を起動する。標準出力は $root/out、標準エラーは $root/err、終了コードは RC に入る。
+# 待つ対象の実行の出力は、先に keep_run_out で $root/run.out へ移しておく。
+# run_wait <実行 ID> [他の引数...]
+run_wait() {
+  local path="$root/bin:/usr/bin:/bin"
+  [ -z "$PS_BIN_DIR" ] || path="$path:$PS_BIN_DIR"
+  (
+    cd "$root/work" || exit 99
+    export USERPROFILE="$root/home" HOME="$root/home" PATH="$path" TMPDIR="$root/tmp"
+    env ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} "$BASH_BIN" "$WRAPPER" --wait "$@" </dev/null >"$root/out" 2>"$root/err"
+  )
+  RC=$?
+}
+
+keep_run_out() {
+  mv "$root/out" "$root/run.out"
+}
+
+run_id_of() {
+  sed -n 's/^codex-agent: run=\([^ ]*\) .*/\1/p' "$1" | head -n 1
+}
+
+# --wait の出力が、待つ対象の実行の標準出力と 1 バイトも違わない。
+expect_same_as_run_out() {
+  cmp -s "$root/run.out" "$root/out" || fail "--wait の出力が元の実行の出力と違う: [$(tr '\n' '|' <"$root/run.out")] と [$(tr '\n' '|' <"$root/out")]"
+}
+
+# 完了した実行を --wait で取り出すと、元の実行と同じ出力と終了コードを返す。
+# expect_wait_replays <元の終了コード> <元の最後の行>
+expect_wait_replays() {
+  run_wrapper "$AGENT"
+  expect_rc "$1"
+  expect_eq "元の最後の行" "$2" "$(last_out_line)"
+  keep_run_out
+  local id
+  id="$(run_id_of "$root/run.out")"
+  [ -f "$(logs_dir)/$id.report" ] || fail "報告の写しが無い: $(logs_dir)/$id.report"
+  run_wait "$id"
+  expect_rc "$1"
+  expect_same_as_run_out
+}
+
+t_wait_done_ok() {
+  fake_set last_message '報告の 1 行目
+報告の 2 行目
+'
+  expect_wait_replays 0 "codex-agent: result=ok"
+}
+
+t_wait_done_failed() {
+  fake_set stderr 'ERROR: something went wrong
+'
+  fake_set exit_code 1
+  expect_wait_replays 1 "codex-agent: result=failed exit=1"
+}
+
+t_wait_done_codex_75() {
+  fake_set stderr 'ERROR: something went wrong
+'
+  fake_set exit_code 75
+  expect_wait_replays 1 "codex-agent: result=failed exit=75"
+}
+
+t_wait_done_rate_limited() {
+  fake_set stderr 'ERROR: You have hit your usage limit.
+'
+  fake_set exit_code 1
+  expect_wait_replays 75 "codex-agent: result=rate-limited"
+  grep -q '^codex-agent: rate-limit evidence: ' "$root/out" || fail "--wait の出力に根拠の行が無い"
+}
+
+# --wait を上限の秒数を指定して起動し、標準出力を指定のファイルへ書く。終了コードは WAIT_RC に入る。
+# 待つ対象の実行が同じケースの中で動いているときに使う。$root/out はその実行が書いているためである。
+# wait_into <出力先> <上限の秒数> <実行 ID>
+wait_into() {
+  local path="$root/bin:/usr/bin:/bin"
+  [ -z "$PS_BIN_DIR" ] || path="$path:$PS_BIN_DIR"
+  (
+    cd "$root/work" || exit 99
+    export USERPROFILE="$root/home" HOME="$root/home" PATH="$path" TMPDIR="$root/tmp"
+    env CODEX_AGENT_WAIT_LIMIT_SECONDS="$2" "$BASH_BIN" "$WRAPPER" --wait "$3" </dev/null >"$1" 2>"$1.err"
+  )
+  WAIT_RC=$?
+}
+
+# 実行中の実行は上限まで待ち、ログの最後の行と waiting の行を出して 124 で終える。
+# 上限は 1 秒に縮める。実行中と判定するには、ラッパー本人の照合が通る必要がある。
+# 完了後にもう一度 --wait すると、元の実行と同じ出力を返す。
+t_wait_limit_then_done() {
+  set_running_fake 6
+  start_bg_wrapper "$AGENT"
+  if ! wait_until 10 running_log_has '経過: 実行中の印'; then
+    fail "実行中のログに印の行が現れない"
+    finish_bg_wrapper
+    return
+  fi
+  local id
+  id="$(run_id_of "$root/out")"
+  wait_into "$root/wait1.out" 1 "$id"
+  expect_eq "上限で終えた --wait の終了コード" "124" "$WAIT_RC"
+  expect_eq "上限で終えた --wait の最後の行" "codex-agent: waiting run=$id" "$(tail -n 1 "$root/wait1.out")"
+  expect_eq "上限で終えた --wait の最後から 2 行目" "codex-agent: last-log-line: 経過: 実行中の印" \
+    "$(tail -n 2 "$root/wait1.out" | head -n 1)"
+  expect_eq "上限で終えた --wait の行数" "2" "$(wc -l <"$root/wait1.out" | tr -d ' ')"
+  finish_bg_wrapper
+  expect_rc 0
+  keep_run_out
+  run_wait "$id"
+  expect_rc 0
+  expect_same_as_run_out
+}
+
+# 実行中の実行は、上限の内側で完了すればその出力を返す。
+t_wait_until_done() {
+  set_running_fake 3
+  start_bg_wrapper "$AGENT"
+  if ! wait_until 10 running_log_has '経過: 実行中の印'; then
+    fail "実行中のログに印の行が現れない"
+    finish_bg_wrapper
+    return
+  fi
+  wait_into "$root/wait.out" 30 "$(run_id_of "$root/out")"
+  finish_bg_wrapper
+  expect_rc 0
+  expect_eq "--wait の終了コード" "0" "$WAIT_RC"
+  cmp -s "$root/out" "$root/wait.out" || fail "--wait の出力が元の実行の出力と違う: [$(tr '\n' '|' <"$root/wait.out")]"
+}
+
+# 照合に要る道具(Windows の PID、PowerShell、taskkill)が無ければ SKIP にして 1 を返す。
+need_process_probe() {
+  if [ ! -r "/proc/$$/winpid" ] || [ -z "$PS_BIN_DIR" ] || ! command -v taskkill >/dev/null 2>&1; then
+    skip "/proc/<pid>/winpid、PowerShell、taskkill のいずれかが無い(Windows の Git Bash 以外)"
+    return 1
+  fi
+  return 0
+}
+
+# 結果の行が無いまま終わった実行のログを置く。
+# plant_unfinished_log <実行 ID> <ラッパーの PID> <started=>
+plant_unfinished_log() {
+  mkdir -p "$(logs_dir)"
+  printf 'codex-agent: run=%s pid=%s started=%s\n経過: 途中の行\n' "$1" "$2" "$3" >"$(logs_dir)/$1.log"
+}
+
+now_utc() {
+  date -u +%Y-%m-%dT%H:%M:%SZ
+}
+
+# 終わったプロセスの Windows の PID。
+dead_win_pid() {
+  "$BASH_BIN" -c 'cat /proc/$$/winpid'
+}
+
+# 20 秒待つ bash を起こし、その Windows の PID を HOLDER_PID に、Git Bash の PID を HOLDER_BG に入れる。
+# 引数はそのまま bash のコマンドラインに載る。PID は bash 自身に書かせる。
+# 起動直後の /proc/$!/winpid は exec の前のプロセスを指すことがあるためである。
+# 待ちの後ろに : を置くのは、bash が sleep を exec してコマンドラインが変わらないようにするためである。
+# start_holder <$0 に入る語> [コマンドラインに載せる語...]
+start_holder() {
+  rm -f "$root/holder.pid"
+  "$BASH_BIN" -c 'cat /proc/$$/winpid >"$1"; sleep 20; :' "$1" "$root/holder.pid" "${@:2}" &
+  HOLDER_BG=$!
+  wait_until 5 test -s "$root/holder.pid" || fail "待たせるプロセスの PID を読めない"
+  HOLDER_PID="$(tr -d '\r\n' <"$root/holder.pid" 2>/dev/null)"
+}
+
+stop_holder() {
+  [ -z "$HOLDER_PID" ] || taskkill //T //F //PID "$HOLDER_PID" >/dev/null 2>&1
+  wait "$HOLDER_BG" 2>/dev/null
+  HOLDER_PID=""
+}
+
+# ラッパーが result= の行を書かずに消え、Codex 側も残っていなければ vanished を出す。
+# PID が別のプロセスに再利用されている場合(コマンドラインか作成時刻が合わない)も、ラッパーは消えたと見なす。
+t_wait_vanished() {
+  need_process_probe || return
+  local id
+  id="cxa-vanished-$RANDOM"
+  # 照合が誤って実行中と判定したときに、570 秒の上限まで待たずに失敗させる。
+  EXTRA_ENV=(CODEX_AGENT_WAIT_LIMIT_SECONDS=3)
+  plant_unfinished_log "$id" "$(dead_win_pid)" "$(now_utc)"
+  run_wait "$id"
+  expect_rc 1
+  expect_eq "終わった PID の最後の行" "codex-agent: vanished run=$id" "$(last_out_line)"
+  expect_eq "終わった PID の最後から 2 行目" "codex-agent: last-log-line: 経過: 途中の行" "$(tail -n 2 "$root/out" | head -n 1)"
+
+  start_holder cxa-holder
+  plant_unfinished_log "$id" "$HOLDER_PID" "$(now_utc)"
+  run_wait "$id"
+  stop_holder
+  expect_rc 1
+  expect_eq "コマンドラインが合わない PID の最後の行" "codex-agent: vanished run=$id" "$(last_out_line)"
+
+  start_holder codex-agent.sh
+  plant_unfinished_log "$id" "$HOLDER_PID" "2026-01-01T00:00:00Z"
+  run_wait "$id"
+  stop_holder
+  expect_rc 1
+  expect_eq "作成時刻が合わない PID の最後の行" "codex-agent: vanished run=$id" "$(last_out_line)"
+}
+
+# --output-last-message の無い版の Codex で起動した実行では、残った Codex を探せないので vanished と断定しない。
+t_wait_unverified() {
+  need_process_probe || return
+  local id
+  id="cxa-unverified-$RANDOM"
+  EXTRA_ENV=(CODEX_AGENT_WAIT_LIMIT_SECONDS=3)
+  plant_unfinished_log "$id" "$(dead_win_pid)" "$(now_utc)"
+  printf 'codex-agent: note=no-output-last-message\n経過: 目印の後の行\n' >>"$(logs_dir)/$id.log"
+  run_wait "$id"
+  expect_rc 1
+  expect_eq "最後の行" "codex-agent: unverified run=$id" "$(last_out_line)"
+}
+
+# ラッパーが消えても、コマンドラインに <実行 ID>.last を含むプロセスが残っていれば orphaned を出す。
+t_wait_orphaned() {
+  need_process_probe || return
+  local id
+  id="cxa-orphaned-$RANDOM"
+  EXTRA_ENV=(CODEX_AGENT_WAIT_LIMIT_SECONDS=3)
+  plant_unfinished_log "$id" "$(dead_win_pid)" "$(now_utc)"
+  start_holder cxa-holder "$(logs_dir)/$id.last"
+  run_wait "$id"
+  local holder_pid="$HOLDER_PID"
+  stop_holder
+  expect_rc 1
+  expect_eq "最後の行" "codex-agent: orphaned run=$id pids=$holder_pid" "$(last_out_line)"
+  grep -q "^codex-agent: ラッパーは result= の行を書かずに終わったが、.*止める手順" "$root/out" \
+    || fail "止める手順を案内する行が無い"
+  expect_out_line "codex-agent: last-log-line: 経過: 途中の行"
+}
+
+t_wait_not_found() {
+  run_wait cxa-no-such-run-1
+  expect_rc 2
+  expect_eq "最後の行" "codex-agent: not-found run=cxa-no-such-run-1" "$(last_out_line)"
+  expect_err_reason
+  expect_no_codex_call
+}
+
+# 報告を書かない版のラッパーの実行でも、ログの最後の result= の行と、その終了コードを返す。
+t_wait_log_result_without_report() {
+  mkdir -p "$(logs_dir)"
+  printf 'codex-agent: run=cxa-old-1 pid=1 started=2026-01-01T00:00:00Z\n経過\ncodex-agent: result=failed exit=75\n' \
+    >"$(logs_dir)/cxa-old-1.log"
+  run_wait cxa-old-1
+  expect_rc 1
+  expect_eq "最後の行" "codex-agent: result=failed exit=75" "$(last_out_line)"
+}
+
+t_wait_bad_args() {
+  run_wait cxa-x-1 "$AGENT"
+  expect_rc 2
+  expect_err_reason
+  run_wait ../cxa-x-1
+  expect_rc 2
+  expect_err_reason
+  run_wrapper --wait
+  expect_rc 2
+  expect_err_reason
+  EXTRA_ENV=(CODEX_AGENT_WAIT_LIMIT_SECONDS=abc)
+  run_wait cxa-x-1
+  expect_rc 2
+  expect_err_reason
+  expect_no_codex_call
 }
 
 # ---------------------------------------------------------------------------
@@ -1584,6 +1945,10 @@ run_case "ツール接続の失敗(終了コード 0、成功行なし): 75、ev
 run_case "ツール接続の失敗後に復旧(終了コード 0、成功行あり): result=ok" t_tool_handshake_recovered_exit0
 run_case "通常の失敗: 1、result=failed exit=1" t_plain_failure
 run_case "Codex 自身の 75: 1 に写像し result=failed exit=75" t_codex_exit_75
+run_case "子プロセスの起動失敗(経過): log= の後に警告と根拠の行を出し、result=ok と 0 は変わらず、報告の写しとログにも入る" t_child_spawn_warning
+run_case "子プロセスの起動失敗(最終報告だけ): 警告を出さない" t_child_spawn_report_only
+run_case "子プロセスの起動失敗(数値だけの行): exited -1073741502 in の形でなければ数えない" t_child_spawn_number_only
+run_case "子プロセスの起動失敗と利用上限: 警告は log= の後、result= の直前は利用上限の根拠の行" t_child_spawn_with_rate_limit
 run_case "成功の本文に上限の語があっても result=ok" t_success_body_mentions_limit
 run_case "ログの中ほどだけにある上限の語では分類しない" t_limit_word_mid_log
 run_case "429 の単語境界: id=14290 は上限と見なさない" t_429_id_not_matched
@@ -1623,6 +1988,18 @@ run_case "ログの権限: ログファイル 600、ログ置き場 700" t_log_p
 run_case "試験用フック: CODEX_AGENT_SIMULATE_RATE_LIMIT" t_simulate_rate_limit
 run_case "試験用フック: CODEX_AGENT_SIMULATE_UNAVAILABLE" t_simulate_unavailable
 run_case "-h: 終了コード 0 で用法を出す" t_help
+run_case "--wait(完了済み、成功): 元の実行と同じ出力と終了コード 0 を返す" t_wait_done_ok
+run_case "--wait(完了済み、失敗): 元の実行と同じ出力と終了コード 1 を返す" t_wait_done_failed
+run_case "--wait(完了済み、Codex 自身の 75): result=failed exit=75 の出力と終了コード 1 を返す" t_wait_done_codex_75
+run_case "--wait(完了済み、利用上限): 根拠の行を含む元の出力と終了コード 75 を返す" t_wait_done_rate_limited
+run_case "--wait(実行中): 上限でログの最後の行と waiting の行を出して 124、完了後は元の出力を返す" t_wait_limit_then_done
+run_case "--wait(実行中): 上限の内側で完了すれば元の出力を返す" t_wait_until_done
+run_case "--wait(結果を書かずに消えた実行): PID が終わっているか別のプロセスなら vanished を出して 1" t_wait_vanished
+run_case "--wait(--output-last-message の無い版の実行): ラッパーが消えても vanished と断定せず unverified を出して 1" t_wait_unverified
+run_case "--wait(ラッパーだけが消えた実行): <実行 ID>.last を含むプロセスが残れば orphaned と止める案内を出して 1" t_wait_orphaned
+run_case "--wait(見つからない実行 ID): not-found を出して 2" t_wait_not_found
+run_case "--wait(報告の写しが無い完了済みの実行): ログの result= の行と、その終了コードを返す" t_wait_log_result_without_report
+run_case "--wait(不正な引数): エージェント名との併用、/ を含む ID、ID なし、不正な上限は 2" t_wait_bad_args
 run_case "目印: 書き込み可能な起動は実行中に <git ディレクトリ>/codex-agent/runs/<実行 ID>.run を置き、正常終了で消す" t_marker_lifecycle
 run_case "目印: 同じ worktree で重ねると、2 つ目の出力とログにだけ 1 つ目の実行 ID を含む警告が出て、どちらも result=ok" t_marker_same_worktree_warns
 run_case "目印: 同じリポジトリの別の worktree で重ねた起動には警告が出ない" t_marker_other_worktree_no_warn

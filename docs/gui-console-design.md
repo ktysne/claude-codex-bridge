@@ -175,11 +175,16 @@ exe と同じフォルダに `choices.json` があれば、それで既定値を
 | Claude モデル | `claude-fable-5-1`、`claude-fable-5`、`claude-opus-5-5`、`claude-opus-5`、`claude-sonnet-5`、`claude-opus-4-8`、`claude-opus-4-7`、`claude-opus-4-6`、`claude-sonnet-4-6`、`claude-haiku-4-5` |
 | Claude effort | 選ばれているモデルが受け付ける値。対応表に無いモデルでは `low`、`medium`、`high`、`xhigh`、`max` |
 | GPT モデル | `codex debug models` から取得。取れなければ `gpt-6-astra`、`gpt-6-sol`、`gpt-6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5` |
-| GPT effort | 選ばれているモデルが受け付ける値。取れなければ `low`、`medium`、`high`、`xhigh`、`max`、`ultra` |
+| GPT effort | 選ばれているモデルが受け付ける値。目録が取れないか、目録にそのモデルが無ければ `gptModelEfforts` の対応値、対応表に無ければ `low`、`medium`、`high`、`xhigh`、`max`、`ultra` |
 
 GPT 側の 2 つは、起動時に `codex debug models` から取得できればそちらを使う。既定値はその控えである。
 取得できる値のうち、`tools/codex-agent.sh` が受け付けない effort があってはならない。スクリプト側の許容値は目録に合わせて広げる。
-GPT effort の許容値は 3 箇所にある。`tools/codex-agent.sh` の `validate_effort`、`ConsoleSettings` の `ValidGptEfforts`、`choices.default.json` の `gptEfforts` である。値を足すときは 3 箇所を同時に変える。
+GPT effort の許容値は 3 箇所にある。`tools/codex-agent.sh` の `validate_effort`、`ConsoleSettings` の `ValidGptEfforts`、`choices.default.json` の `gptEfforts` である。値を足すときは 3 箇所と `choices.default.json` の `gptModelEfforts` の対応値を同時に変える。
+GPT 側は `codex debug models` で目録を取れない場合に備え、モデルと effort の対応を `gptModelEfforts` として設定に持つ。
+この項目は任意であり、無い場合や対応表に無いモデルでは `gptEfforts` の一覧を使う。
+目録が無い状態か、目録に無いモデルへ変えたとき、現在の effort が対応していなければ指定値以下で最も高い対応済みの値に変える。段階の並び(`low`〜`ultra`)に無い手入力の値は変えない。
+指定値以下に対応済みの値が無い場合は、その一覧の先頭の値にする。
+
 Claude 側のモデルには相当する取得手段が無い。Claude Code には非対話でモデル一覧を返すコマンドが無いためである。
 そのため Claude 側は、モデルと effort の対応を `claudeModelEfforts` として設定に持つ。この項目は任意であり、無い場合は `claudeEfforts` の一覧をモデルによらず使う。
 モデルを変えたとき、そのモデルが現在の effort を受け付けなければ、指定値以下で最も高い対応済みの値に変える。Claude Code 自身が同じ規則で落として実行するためである。
@@ -194,7 +199,11 @@ Claude 側のモデルには相当する取得手段が無い。Claude Code に�
     { "model": "claude-opus-5-5", "efforts": ["low", "medium", "high", "xhigh", "max"] }
   ],
   "gptModels": ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"],
-  "gptEfforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
+  "gptEfforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
+  "gptModelEfforts": [
+    { "model": "gpt-6-astra", "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"] },
+    { "model": "gpt-5.5", "efforts": ["low", "medium", "high", "xhigh"] }
+  ]
 }
 ```
 

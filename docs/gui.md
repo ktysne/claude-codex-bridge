@@ -219,7 +219,7 @@ Claude 側定義は、そのディレクトリがセッション開始時から�
 保存前に、3 つの Claude 側定義の `model` と `effort` が空でないことを検証する。
 レビューと実装補助タブの `codex-review` と `codex-subagent` は、`codex_model` が空だと検証エラーになる。
 サブエージェントタブの GPT 側の `codex_model` は、空でもエラーにしない。空はその区分で GPT 側を使わない設定として扱われるため、GPT 経路が有効かどうかにかかわらず検証しない。
-GPT 側の `codex_reasoning_effort` は、GPT 経路の有効状態にかかわらず `low`、`medium`、`high`、`xhigh`、`max`、`ultra` のいずれかであることを検証する。この一覧は `tools/codex-agent.sh` が受け付ける値である。
+GPT 側の `codex_reasoning_effort` は、GPT 経路の有効状態にかかわらず `low`、`medium`、`high`、`xhigh`、`max`、`ultra` のいずれかであることを検証する。この一覧は `tools/codex-agent.sh` が受け付ける値である。値を追加するときは、`tools/codex-agent.sh` の `validate_effort`、`ConsoleSettings` の `ValidGptEfforts`、`choices.default.json` の `gptEfforts` に加え、`gptModelEfforts` の対応値も更新する。
 定義に `codex_reasoning_effort` が無い場合は `medium` として表示する。`tools/codex-agent.sh` が省略時に `medium` を使うためである。値を変えずに保存したときは、キーを足さない。
 モデル名と effort に使えるのは、英数字と `.`、`_`、`-`、`/` だけである。
 値は二重引用符で囲んでフロントマターへ書き戻すため、`true` や `123` のような YAML の予約語と数値も文字列として保存できる。
@@ -255,13 +255,19 @@ JSON は次の形で、4 つの配列をすべて指定する。
     { "model": "claude-opus-4-6", "efforts": ["low", "medium", "high", "max"] }
   ],
   "gptModels": ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"],
-  "gptEfforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
+  "gptEfforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
+  "gptModelEfforts": [
+    { "model": "gpt-6-astra", "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"] },
+    { "model": "gpt-5.5", "efforts": ["low", "medium", "high", "xhigh"] }
+  ]
 }
 ```
 
 `claudeModelEfforts` は任意である。書かない場合、Claude 側の effort はモデルによらず `claudeEfforts` の一覧になる。
+`gptModelEfforts` も任意である。書かない場合や対応表に無いモデルでは、GPT 側の effort に `gptEfforts` の一覧を使う。
+GPT モデルを追加するときは、`choices.json` の `gptModels` と `gptModelEfforts` を合わせて更新する。
 
-GPT 側の 2 つは、`codex debug models` から目録を取れた場合はそちらが優先される(次の節を参照)。
+GPT 側のモデルと effort は、`codex debug models` から目録を取れた場合はそちらが優先される(次の節を参照)。
 `choices.json` の GPT 側は、目録を取れなかったときの控えである。
 
 各配列は空にできず、空白だけの選択肢も指定できない。
@@ -278,10 +284,11 @@ GPT 側の 2 つは、`codex debug models` から目録を取れた場合はそ�
 サブエージェントタブで認証ホームを切り替えると、そのホームの目録を取得する。
 取得できた場合、GPT モデルの選択肢は目録のモデル名になり、effort の選択肢はその行で選ばれているモデルが受け付ける値になる。
 
-モデルによって使える effort が違う。
-そのため、GPT モデルを変えると、その行の effort の選択肢が切り替わる。
-変更後のモデルが現在の effort を受け付けない場合は、そのモデルの既定の effort に切り替える。
-選べるように見えて Codex 側で弾かれる組み合わせを保存できないようにするためである。
+目録を取れた場合、GPT モデルを変えると、その行の effort の選択肢が切り替わる。
+変更後のモデルが目録にあり、現在の effort を受け付けない場合は、そのモデルの既定の effort に切り替える。
+目録が無い場合と、変更後のモデルが目録に無い場合は `gptModelEfforts` の対応表を使い、モデルを変えたときに現在の effort が対応していなければ、指定値以下で最も高い対応済みの値に変える。段階の並び(`low`〜`ultra`)に無い手入力の値は変えない。
+指定値以下に対応済みの値が無い場合は、その一覧の先頭の値にする。
+これは、選べるように見えて Codex 側で弾かれる組み合わせを保存できないようにするためである。
 
 読み込んだ直後は、定義ファイルに書かれている値をそのまま表示する。
 受け付けない値であっても勝手に変えない。開いただけで定義が書き換わるのを避けるためである。
