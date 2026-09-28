@@ -1616,6 +1616,77 @@ t_wait_bad_args() {
 }
 
 # ---------------------------------------------------------------------------
+# 実行 ID を取る入口(--header-of)
+# ---------------------------------------------------------------------------
+
+# --header-of を起動する。標準出力は $root/out、標準エラーは $root/err、終了コードは RC に入る。
+# run_header_of [引数...]
+run_header_of() {
+  (
+    cd "$root/work" || exit 99
+    export USERPROFILE="$root/home" HOME="$root/home" PATH="$root/bin:/usr/bin:/bin" TMPDIR="$root/tmp"
+    "$BASH_BIN" "$WRAPPER" --header-of "$@" </dev/null >"$root/out" 2>"$root/err"
+  )
+  RC=$?
+}
+
+# 背景へ移った起動の出力ファイルと同じ形にする。行末の CR は Windows の出力ファイルを模す。
+# 報告の後の codex-agent: の行は、最初の別の行で止めて出さないことを確かめるためのものである。
+t_header_of_found() {
+  printf '%s\r\n' \
+    'codex-agent: agent=codex-review model=m effort=medium sandbox=read-only codex_home=h workdir=w' \
+    'codex-agent: run=cxa-run-1 pid=123 started=2026-01-01T00:00:00Z' \
+    'codex-agent: log=C:/x/cxa-run-1.log' \
+    'codex-agent: warning=concurrent-writer run=cxa-other log=C:/x/cxa-other.log' \
+    '報告の行' \
+    'codex-agent: run=cxa-run-2 pid=456 started=2026-01-01T00:00:01Z' >"$root/bg.output"
+  run_header_of "$root/bg.output"
+  expect_rc 0
+  expect_eq "1 行目" "codex-agent: agent=codex-review model=m effort=medium sandbox=read-only codex_home=h workdir=w" "$(sed -n 1p "$root/out")"
+  expect_eq "2 行目" "codex-agent: run=cxa-run-1 pid=123 started=2026-01-01T00:00:00Z" "$(sed -n 2p "$root/out")"
+  expect_eq "3 行目" "codex-agent: log=C:/x/cxa-run-1.log" "$(sed -n 3p "$root/out")"
+  expect_eq "4 行目" "codex-agent: warning=concurrent-writer run=cxa-other log=C:/x/cxa-other.log" "$(sed -n 4p "$root/out")"
+  expect_eq "標準出力の行数" "4" "$(wc -l <"$root/out" | tr -d ' ')"
+  expect_out_no_match "報告の行"
+  expect_out_no_match "cxa-run-2"
+  if grep -q $'\r' "$root/out"; then fail "CR が残っている"; fi
+  expect_no_codex_call
+}
+
+t_header_of_no_run_line() {
+  printf '%s\n' 'codex-agent: agent=codex-review' '経過の行' 'codex-agent: result=ok' >"$root/bg.output"
+  run_header_of "$root/bg.output"
+  expect_rc 2
+  expect_eq "標準出力" "codex-agent: not-found header-of=$root/bg.output" "$(cat "$root/out")"
+  expect_no_codex_call
+}
+
+t_header_of_missing_file() {
+  run_header_of "$root/no-such.output"
+  expect_rc 2
+  expect_eq "標準出力" "codex-agent: not-found header-of=$root/no-such.output" "$(cat "$root/out")"
+  expect_no_codex_call
+}
+
+t_header_of_bad_args() {
+  printf 'codex-agent: run=cxa-run-1 pid=1 started=2026-01-01T00:00:00Z\n' >"$root/bg.output"
+  run_header_of
+  expect_rc 2
+  expect_err_reason
+  run_header_of "$root/bg.output" "$AGENT"
+  expect_rc 2
+  expect_err_reason
+  run_header_of "$root/bg.output" -C "$root/work"
+  expect_rc 2
+  expect_err_reason
+  run_header_of "$root/bg.output" --wait cxa-run-1
+  expect_rc 2
+  expect_err_reason
+  expect_out_no_match "codex-agent: run="
+  expect_no_codex_call
+}
+
+# ---------------------------------------------------------------------------
 # 書き込み担当の目印
 # ---------------------------------------------------------------------------
 
@@ -1962,6 +2033,34 @@ impl-standard ~/.codex-subagent workspace-write
 TABLE
 }
 
+# ラッパー役の 2 定義(.claude/agents)のフロントマターに、Bash と Write を転送の形だけに絞るフックがある。
+# フックの仕様は docs/gpt-agents.md の「ラッパー役の定義の道具を絞る」にある。
+shipped_hooks_block() {
+  sed 's/\r$//' "$1" \
+    | awk 'NR == 1 { if ($0 != "---") exit; next } $0 == "---" { exit } { print }' \
+    | awk '/^hooks:/ { on = 1; print; next } on && /^[^ ]/ { exit } on { print }'
+}
+
+t_shipped_wrapper_hooks() {
+  local name def expected
+  for name in codex-review codex-subagent; do
+    def="$repo_root/.claude/agents/$name.md"
+    if [ ! -f "$def" ]; then
+      fail "定義が無い: $def"
+      continue
+    fi
+    expected="$(printf '%s\n' \
+      'hooks:' \
+      '  PreToolUse:' \
+      '    - matcher: "Bash|Write"' \
+      '      hooks:' \
+      '        - type: command' \
+      "          command: \"node \\\"\$HOME/.claude/tools/codex-agent-hook.js\\\" $name || exit 2\"")"
+    expect_eq "$name の hooks" "$expected" "$(shipped_hooks_block "$def")"
+    expect_eq "$name の tools" "Bash, Write" "$(shipped_fm_get "$def" tools)"
+  done
+}
+
 t_real_home_untouched() {
   local dir="$REAL_HOME/.claude/codex-agent/logs" found
   found="$(ls -A "$dir" 2>/dev/null | grep -F -- "$AGENT")"
@@ -2085,6 +2184,10 @@ run_case "--wait(ラッパーだけが消えた実行): <実行 ID>.last を含�
 run_case "--wait(見つからない実行 ID): not-found を出して 2" t_wait_not_found
 run_case "--wait(報告の写しが無い完了済みの実行): ログの result= の行と、その終了コードを返す" t_wait_log_result_without_report
 run_case "--wait(不正な引数): エージェント名との併用、/ を含む ID、ID なし、不正な上限は 2" t_wait_bad_args
+run_case "--header-of: 出力ファイルの先頭に続く codex-agent: の行だけを CR を除いて出し、最初の別の行から後は出さない" t_header_of_found
+run_case "--header-of(先頭の codex-agent: の行に run= が無いファイル): not-found を出して 2" t_header_of_no_run_line
+run_case "--header-of(ファイルが無い): not-found を出して 2" t_header_of_missing_file
+run_case "--header-of(不正な引数): ファイルなし、エージェント名、-C、--wait との併用は 2" t_header_of_bad_args
 run_case "目印: 書き込み可能な起動は実行中に <git ディレクトリ>/codex-agent/runs/<実行 ID>.run を置き、正常終了で消す" t_marker_lifecycle
 run_case "目印: 同じ worktree で重ねると、2 つ目の出力とログにだけ 1 つ目の実行 ID を含む警告が出て、どちらも result=ok" t_marker_same_worktree_warns
 run_case "目印: 同じリポジトリの別の worktree で重ねた起動には警告が出ない" t_marker_other_worktree_no_warn
@@ -2099,6 +2202,7 @@ run_case "目印: git の管理下に無い作業ディレクトリでは目印�
 run_case "目印: 照合できない環境で出た警告の行の 429 で利用上限と判定せず、警告の行は標準出力に 1 回" t_marker_warning_not_classified
 run_case "ai-cross-review との契約: scriptPinsApprovalNever が true を返す" t_cross_review_contract
 run_case "出荷既定の定義: 5 定義の codex_home と codex_sandbox が CLAUDE.md の対応に従う" t_shipped_definitions
+run_case "出荷既定の定義: ラッパー役の 2 定義に Bash と Write を絞るフックがある" t_shipped_wrapper_hooks
 run_case "環境の分離: 実ホームのログ置き場にテスト用のログが無い" t_real_home_untouched
 
 printf '# 合計 %d 件: 成功 %d、失敗 %d、SKIP %d\n' "$N" "$PASSED" "$FAILED" "$SKIPPED"
