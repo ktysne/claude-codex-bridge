@@ -84,7 +84,9 @@
 //   - 委譲を止める指定は、依頼文の最初の空でない行を前後の空白を除いて比較する。
 //     2 行目以降やコードブロック内の文字列は指定に数えない。定義や文書を引用した依頼を
 //     誤って指定として数えないためである。
-//     紐付いた子の最後の assistant テキストが「委譲の指定により Claude 側で実装した」で始まる場合も数える。
+//     紐付いた子の報告が「委譲の指定により Claude 側で実装した」か、指定の行そのもので始まる場合も数える(先頭の Markdown の装飾は除く)。
+//     報告は SubagentHandback の入力のどれかとし、それが無い子では最後の assistant テキストとする。
+//     SubagentHandback の後にも短いテキストが続くことがあり、最後のテキストだけでは報告を拾えないためである。
 //     報告は記録に残るため、測り直しても報告による判定は変わらない。
 //   - 分類には、子が codex-agent.sh を起動した Bash の呼び出しのうち、疑似でない最後のものの結果を使う。
 //     子は失敗や上限の後に起動し直すことがあり、委譲の行き先を決めたのは最後の起動だからである。
@@ -599,8 +601,17 @@ function isDesignatedPrompt(prompt) {
   return firstNonEmptyLine !== undefined && firstNonEmptyLine.trim() === DESIGNATION;
 }
 
+// 定義が求める書き出しの文のほか、指定の行そのものから書き出した報告も数える。
 function isDesignatedReport(report) {
-  return typeof report === 'string' && report.trim().startsWith(REPORT_DESIGNATION);
+  if (typeof report !== 'string') return false;
+  const head = report.trim().replace(/^[#>*\-\s]+/, '');
+  return head.startsWith(REPORT_DESIGNATION) || isDesignatedPrompt(head);
+}
+
+// 子の報告のどれかが指定を示すかを返す。SubagentHandback が無い子だけ、最後のテキストを報告とみなす。
+function isDesignatedSub(sub) {
+  const reports = sub.handbacks.length > 0 ? sub.handbacks : [sub.lastAssistantText];
+  return reports.some(isDesignatedReport);
 }
 
 // 委譲に属するすべての子の起動から最後のものを選び、その分類を返す。
@@ -700,6 +711,7 @@ function collect(files, start, endExclusive, options = {}) {
     // メインセッションの待ちは、同じ記録の起動の手がかりに結び付ける。
     const mainWaitTracking = [];
     let lastAssistantText = '';
+    const handbacks = [];
     let lineNo = 0;
 
     for (const line of lines) {
@@ -720,6 +732,10 @@ function collect(files, start, endExclusive, options = {}) {
       for (const c of msg.content) {
         if (isSub(file) && msg.role === 'assistant' && c.type === 'text' && typeof c.text === 'string') {
           lastAssistantText = c.text;
+        }
+        if (isSub(file) && c.type === 'tool_use' && c.name === 'SubagentHandback'
+            && c.input && typeof c.input.message === 'string') {
+          handbacks.push(c.input.message);
         }
         if (c.type === 'tool_use' && tracking.length > 0) {
           // 種類を問わず、入力が追跡中の起動の手がかりを含む tool_use をその起動に結び付ける。
@@ -870,7 +886,7 @@ function collect(files, start, endExclusive, options = {}) {
       const link = readAgentMeta(file, m, copiesOf.get(file));
       if (link && link.toolUseId) {
         const list = m.subByToolUse.get(link.toolUseId) || [];
-        list.push({ calledCodex, committed, spawnedAgents, invocations: realInvocations, lastAssistantText });
+        list.push({ calledCodex, committed, spawnedAgents, invocations: realInvocations, lastAssistantText, handbacks });
         m.subByToolUse.set(link.toolUseId, list);
       }
     }
@@ -899,7 +915,7 @@ function collect(files, start, endExclusive, options = {}) {
       row.unlinked += 1;
       continue;
     }
-    const designated = call.designated || subs.some((sub) => isDesignatedReport(sub.lastAssistantText));
+    const designated = call.designated || subs.some(isDesignatedSub);
     if (designated) row.designated += 1;
     // 未起動と Codex 未呼出は、どちらも疑似を除いた起動が子のどこにも無いことで決まり、件数が一致する。
     if (subs.every((s) => s.calledCodex === 0)) row.noCodex += 1;
