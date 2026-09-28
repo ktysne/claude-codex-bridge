@@ -839,7 +839,7 @@ codex_status="${PIPESTATUS[0]}"
 stderr_body="$(log_body)"
 
 # 子プロセスの起動失敗の印を経過(標準エラー)だけで数える。最終回答が失敗を引用しても二重に数えないためである。
-# 両方の印は、Codex が起動したコマンドの失敗を示す出力の行の形に限って数える。
+# 印は、Codex が起動したコマンドの失敗を示す出力の行の形か、2 つの語が同じ行に揃う形に限って数える。
 # 語だけで照合すると、Codex が読んだ文書の引用にも一致するためである。
 # result= は変えない。ok を 75 に倒すと、GPT 側の実装を捨てて作り直すことになるためである。
 child_spawn_failed="$(printf '%s\n' "$stderr_body" | awk '
@@ -854,6 +854,8 @@ child_spawn_failed="$(printf '%s\n' "$stderr_body" | awk '
         print lines[i]
       } else if (lines[i] ~ /^[[:space:]]*exited -1073741502 in [0-9]/) {
         print lines[i]
+      } else if (index(line, "*** fatal error - CreateFileMapping") > 0 && index(line, "Win32 error 5") > 0) {
+        print line
       }
     }
   }
@@ -862,7 +864,8 @@ if [ -n "$child_spawn_failed" ]; then
   child_spawn_warning="codex-agent: warning=child-spawn-failed count=$(printf '%s\n' "$child_spawn_failed" | wc -l | tr -d ' ')"
   printf '%s\n' "$child_spawn_warning" | out
   printf '%s\n' "$child_spawn_warning" >>"$log_file"
-  first_line="$(printf '%s\n' "$child_spawn_failed" | head -n 1 | tr -d '\r')"
+  # MSYS2 の異常終了の行は Windows アカウントの SID を含む。報告から PR などへ写されうるため伏せる。
+  first_line="$(printf '%s\n' "$child_spawn_failed" | head -n 1 | tr -d '\r' | sed -E 's/S-1-5-21-[0-9-]+/S-1-5-21-<SID>/g')"
   printf 'codex-agent: child-spawn-failed evidence: %s\n' "${first_line:0:300}" | out
 fi
 

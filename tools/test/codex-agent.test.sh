@@ -799,6 +799,30 @@ t_child_spawn_with_rate_limit() {
   expect_eq "警告の行数" "1" "$(grep -c '^codex-agent: warning=child-spawn-failed' "$root/out")"
 }
 
+# テストの出力に埋め込まれた行。SID は実在しない値にしてある。
+MSYS_FATAL_LINE='   System.InvalidOperationException : git push に失敗しました (exit=128):       0 [main] sh (80256) D:\Program Files\Git\usr\bin\sh.exe: *** fatal error - CreateFileMapping S-1-5-21-111-222-333-1000.1, Win32 error 5.  Terminating.'
+
+t_child_spawn_msys_fatal() {
+  fake_set stderr "$MSYS_FATAL_LINE"$'\r\n'"$MSYS_FATAL_LINE"$'\n'
+  fake_set last_message '最終報告
+'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_eq "4 行目(log= の行の後)" "codex-agent: warning=child-spawn-failed count=2" "$(sed -n 4p "$root/out")"
+  expect_eq "5 行目" "codex-agent: child-spawn-failed evidence: ${MSYS_FATAL_LINE/S-1-5-21-111-222-333-1000/S-1-5-21-<SID>}" "$(sed -n 5p "$root/out")"
+  expect_out_no_match "S-1-5-21-111"
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
+}
+
+# 2 つの語が同じ行に揃わない引用や説明は数えない。
+t_child_spawn_msys_partial() {
+  fake_set stderr $'統合テストの一部が Git for Windows の `CreateFileMapping` 権限エラーで失敗しています\n*** fatal error - CreateFileMapping の説明\nWin32 error 5 はアクセス拒否である\n'
+  fake_set last_message $'sh.exe: *** fatal error - CreateFileMapping S-1-5-21-1.1, Win32 error 5.\n'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_out_no_match "child-spawn-failed"
+}
+
 # 実際の経過の形。ビルドの出力は Checking File Globs で終わり、次の行から字下げの無い別の出力になる。
 SANDBOX_BUILD_STDERR=$'exec\n"pwsh.exe" -Command \'cmake --build build --config Debug\' in D:\\work\n exited 1 in 4924ms:\nMSBuild のバージョン 17.14.51 (.NET Framework)\n\n  Checking File Globs\n\ndiff --git a/x b/x\n'
 
@@ -2289,6 +2313,8 @@ run_case "子プロセスの起動失敗(Execution failed): 次のスタック�
 run_case "子プロセスの起動失敗(最終報告だけ): 警告を出さない" t_child_spawn_report_only
 run_case "子プロセスの起動失敗(数値だけの行): exited -1073741502 in の形でなければ数えない" t_child_spawn_number_only
 run_case "子プロセスの起動失敗と利用上限: 警告は log= の後、result= の直前は利用上限の根拠の行" t_child_spawn_with_rate_limit
+run_case "子プロセスの起動失敗(MSYS2 の異常終了): 2 つの語が揃う行を数え、根拠の行の SID を伏せる" t_child_spawn_msys_fatal
+run_case "子プロセスの起動失敗(MSYS2 の語が揃わない行と最終報告): 警告を出さない" t_child_spawn_msys_partial
 run_case "サンドボックスのビルド停止: Checking File Globs で終わった失敗に警告と起動したコマンドの行を出し、result=ok は変わらない" t_sandbox_build_warning
 run_case "サンドボックスのビルド停止: 子プロセスの起動失敗の警告の後に並ぶ" t_sandbox_build_after_child_spawn
 run_case "サンドボックスのビルド停止: ビルドやエラー文が続いた回、成功した回、最終報告だけの引用は数えない" t_sandbox_build_not_matched

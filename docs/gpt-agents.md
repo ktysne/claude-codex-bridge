@@ -531,11 +531,28 @@ Codex の文書によると、`[windows] sandbox` の選択肢は `elevated` と
 
 Codex はこの失敗を最終報告の文面に書くだけで、終了コード 0 で返す。
 そこでラッパーは、Codex の経過(標準エラー)に子プロセスの起動失敗の印が出た行を数え、1 行以上あれば警告の行と最初の根拠の行を出す(「フォールバックの条件と終了コード」の標準出力の形)。
-印は次の 2 つである。
+印は次の 3 つである。
 
 - `spawn EPERM`：行頭と行末に空白が付いてもよい `Error: spawn EPERM` または `Execution failed: Error: spawn EPERM` の行を、直後の `at ChildProcess.spawn (` で始まる行と組にして数える。
   語だけで照合すると、Codex が読んだ文書の引用にも一致するためである。
 - `exited -1073741502 in`：終了コード 0xC0000142。Codex がツールの完了を書く行(行頭の空白に続く `exited -1073741502 in <時間>`)に限って照合する。数値だけで照合すると、この値を書いた文書を Codex が読んだだけで一致するためである。
+- MSYS2 のランタイムの異常終了：`*** fatal error - CreateFileMapping` と `Win32 error 5` を同じ行に含む行を数える。テストの出力に埋め込まれて行頭が変わるため、行の形ではなく 2 つの語の組で照合する。
+
+3 つ目は、Git for Windows の `sh.exe`(`git push` などが内部で起動する)がサンドボックスの中で起動した直後に止まる形である。
+入れ子でなくても、Codex が `sh.exe` を直接起動するだけで次の行を出して終わる。
+
+```text
+      0 [main] sh (<PID>) D:\Program Files\Git\usr\bin\sh.exe: *** fatal error - CreateFileMapping S-1-5-21-<SID>.1, Win32 error 5.  Terminating.
+```
+
+次のコマンドで、モデルを呼ばずに再現できる(`sh.exe` のパスは Git for Windows の導入先に合わせる)。
+
+```bash
+CODEX_HOME="$USERPROFILE/.codex-subagent" codex sandbox -P :workspace -C <作業ディレクトリ> -- "<Git の導入先>/usr/bin/sh.exe" -c "echo ok"
+```
+
+この行は Windows アカウントの SID を含むので、ラッパーは根拠の行に出すとき SID を `S-1-5-21-<SID>` に置き換える。
+報告の行は PR や Issue へ写されうるためである。
 
 最終報告(標準出力)の本文は数えない。
 最終報告が検証の失敗を文章で引用しても、二重に数えないためである。
