@@ -987,7 +987,7 @@ test('CLI は数え方の版と追加指標を JSON に出す', () => {
 
     assert.equal(result.status, 0);
     const summary = JSON.parse(result.stdout);
-    assert.equal(summary['数え方の版'], 4);
+    assert.equal(summary['数え方の版'], 5);
     assert.equal(summary['メインセッションの待つためのBash'], 0);
     assert.equal(summary['並行書き込み警告を含む起動'], 0);
   });
@@ -1156,6 +1156,40 @@ test('collect は背景へ移った本文に run= の行があれば、その実
 
     assert.deepEqual(metrics.byAgent['impl-standard'].outcomes, outcomesOf({ gptFailed: 1 }));
     assert.equal(metrics.waitCalls, 1);
+  });
+});
+
+test('isCodexInvocation は --header-of を起動と数えない', () => {
+  assert.equal(isCodexInvocation('bash ~/.claude/tools/codex-agent.sh --header-of "E:/Temp/claude/proj/tasks/bgx123abc.output"'), false);
+});
+
+test('collect は --header-of を待つための Bash に数え、その出力の実行 ID の --wait で確定する', () => {
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['bg-header', 'codex-review']],
+      [['bg-header', [
+        invokeEvent('2026-09-10T10:01:00.000Z', 'i1', BG_TEXT),
+        bashEvent({
+          timestamp: '2026-09-10T10:11:00.000Z',
+          id: 'h1',
+          command: 'bash ~/.claude/tools/codex-agent.sh --header-of "E:/Temp/claude/proj/tasks/bgx123abc.output"',
+          result: RUN_HEAD,
+        }),
+        bashEvent({
+          timestamp: '2026-09-10T10:12:00.000Z',
+          id: 'w1',
+          command: WAIT(RUN_ID),
+          result: `${RUN_HEAD}最終報告\ncodex-agent: result=ok`,
+        }),
+      ]]],
+    );
+
+    const metrics = collect(files, ...RANGE_0910);
+
+    assert.deepEqual(metrics.byAgent['codex-review'].outcomes, outcomesOf({ gptRan: 1 }));
+    assert.equal(metrics.background, 1);
+    assert.equal(metrics.waitCalls, 2);
   });
 });
 
@@ -1527,9 +1561,9 @@ test('--json とテキスト出力は数え方の版を出す', () => {
     const text = runMetrics(root, ['--since', '2026-09-10', '--until', '2026-09-10']);
 
     assert.equal(json.status, 0, json.stderr);
-    assert.equal(JSON.parse(json.stdout).数え方の版, 4);
+    assert.equal(JSON.parse(json.stdout).数え方の版, 5);
     assert.equal(text.status, 0, text.stderr);
-    assert.match(text.stdout, /^期間: .*\n数え方の版: 4\n/);
+    assert.match(text.stdout, /^期間: .*\n数え方の版: 5\n/);
   });
 });
 

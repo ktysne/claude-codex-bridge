@@ -6,6 +6,7 @@
 # 用法:
 #   bash tools/codex-agent.sh <agent-name> [-C <workdir>] [--effort <level>] < prompt.txt
 #   bash tools/codex-agent.sh --wait <実行 ID>
+#   bash tools/codex-agent.sh --header-of <出力ファイル>
 #
 # 依頼文は標準入力から読む。引数に埋め込むと引用符の扱いで壊れやすいためである。
 # 呼び出し側はヒアドキュメントで渡す。
@@ -40,6 +41,8 @@
 #   その実行が標準出力へ出したものと同じ内容で、最後の行は result= の行である。result= の行を出した実行だけが残す。
 #   完了を待つ入口 --wait <実行 ID> は、これを読んで元の実行の出力と終了コードを返す。
 #   --wait の状態と終了コードは用法の表示(usage)にあり、契約は docs/gpt-agents.md の「完了を待つ」にある。
+#   --header-of <出力ファイル> は、背景へ移った起動の出力ファイルの先頭に続く codex-agent: の行(監査行、run=、log=、警告)だけを出す。
+#   ラッパー役の定義はフックで出力ファイルを読めないため、この入口で実行 ID と「進行中」の報告に添える行を取る。
 #
 # 書き込み担当の目印(<worktree 固有の git ディレクトリ>/codex-agent/runs/<実行 ID>.run):
 #   1 つの worktree に同時に書き込む担当は 1 つとする。
@@ -82,6 +85,7 @@ usage() {
   cat <<'USAGE'
 用法: bash tools/codex-agent.sh <agent-name> [-C <workdir>] [--effort <level>] < prompt.txt
       bash tools/codex-agent.sh --wait <実行 ID>
+      bash tools/codex-agent.sh --header-of <出力ファイル>
 
   <agent-name>      .claude/gpt-agents/<agent-name>.md の名前
   -C <workdir>      Codex の作業ディレクトリ(既定はカレントディレクトリ)
@@ -89,8 +93,12 @@ usage() {
                     (low|medium|high|xhigh|max|ultra)
   --wait <実行 ID>  run= の行の実行 ID の完了を最大 570 秒待ち、完了していれば
                     その実行が標準出力に出した内容をそのまま出す
+  --header-of <出力ファイル>
+                    背景へ移った起動の出力ファイルの先頭に続く codex-agent: の行だけを出す(0)。
+                    ファイルが無い、読めない、その中に run= の行が無いときは
+                    codex-agent: not-found header-of=<出力ファイル> を出す(2)
 
-依頼文は標準入力から読む(--wait では読まない)。
+依頼文は標準入力から読む(--wait と --header-of では読まない)。
 
 標準出力は、監査行、run= の行、log= の行、最終報告、result= の行の順である。
 run= の行と log= の行は Codex の起動前に出す。
@@ -146,6 +154,8 @@ workdir=""
 effort_override=""
 wait_mode=0
 wait_run_id=""
+header_of_mode=0
+header_of_file=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -153,6 +163,12 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || die "--wait には実行 ID が必要である"
       wait_mode=1
       wait_run_id="$2"
+      shift 2
+      ;;
+    --header-of)
+      [ $# -ge 2 ] || die "--header-of には出力ファイルが必要である"
+      header_of_mode=1
+      header_of_file="$2"
       shift 2
       ;;
     -C)
@@ -180,12 +196,33 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-if [ "$wait_mode" -eq 1 ]; then
+if [ "$header_of_mode" -eq 1 ]; then
+  [ "$wait_mode" -eq 0 ] && [ -z "$agent_name" ] && [ -z "$workdir" ] && [ -z "$effort_override" ] \
+    || die "--header-of は --wait、エージェント名、-C、--effort と併用できない"
+elif [ "$wait_mode" -eq 1 ]; then
   [ -z "$agent_name" ] && [ -z "$workdir" ] && [ -z "$effort_override" ] \
     || die "--wait はエージェント名、-C、--effort と併用できない"
 else
   [ -n "$agent_name" ] || { usage >&2; die "エージェント名が指定されていない"; }
 fi
+
+# --header-of <出力ファイル> の本体。契約は docs/gpt-agents.md の「完了を待つ」にある。
+# 先頭から codex-agent: で始まる行が続く間だけを出し、最初の別の行で止める。
+# ラッパー役の定義が、この入口で Codex の報告や任意のファイルの中身を読めないようにするためである。
+print_header_of() {
+  local file="$1" path="${1//\\//}" header=""
+  if [ -f "$path" ] && [ -r "$path" ]; then
+    header="$(tr -d '\r' <"$path" 2>/dev/null | awk '!/^codex-agent: / || NR > 50 { exit } { print }')"
+  fi
+  if ! printf '%s\n' "$header" | grep -q '^codex-agent: run='; then
+    printf 'codex-agent: not-found header-of=%s\n' "$file"
+    exit 2
+  fi
+  printf '%s\n' "$header"
+  exit 0
+}
+
+[ "$header_of_mode" -eq 0 ] || print_header_of "$header_of_file"
 
 # エージェント名はそのままパスに埋め込むため、定義ディレクトリの外へ出る形を拒む。
 case "$agent_name" in

@@ -11,7 +11,8 @@
     "sync:cross-review:dry": "node tools/cross-review.sync.js --dry-run",
     "sync:cross-review:check": "node tools/cross-review.sync.js --check",
     "test:codex-agent": "bash tools/test/codex-agent.test.sh",
+    "test:codex-agent-hook": "node --test tools/test/codex-agent-hook.test.js",
     "test:metrics": "node --test tools/test/agent-log-metrics.test.js",
-    "test": "npm run test:codex-agent && npm run test:metrics"
+    "test": "npm run test:codex-agent && npm run test:codex-agent-hook && npm run test:metrics"
   }
 }
