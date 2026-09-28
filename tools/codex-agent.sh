@@ -31,7 +31,7 @@
 # ラッパーの pid への taskkill /T だけでは Codex まで届かないためである。手順は docs/gpt-agents.md の「既知の制約」にある。
 #
 # 実行ログ(~/.claude/codex-agent/logs/<実行 ID>.log):
-#   1 行目は run= の行と同じ内容である。標準出力へ warning=concurrent-writer の行を出すときは、続けて同じ行を書く。
+#   1 行目は run= の行と同じ内容である。標準出力へ warning=concurrent-writer の行を出すときは、続けて同じ行を書く。残った目印を消したときは note=stale-run-marker-removed の行を書く。
 #   Codex の標準エラーは実行中から行ごとに追記する。続けて、終了後に warning=child-spawn-failed の行(出すときだけ)と Codex の標準出力を追記する。
 #   最後の行は標準出力へ出すのと同じ result= の行である。ログだけで完了と結果を判定できるようにするためである。
 #   Codex の起動前に止まる経路(終了コード 2、3、試験用フック)ではログを作らない。
@@ -48,9 +48,12 @@
 #   中身は run= の行、log= の行、agent= と sandbox= の行の 3 行である。
 #   目印を置く前に同じ置き場の他の目印を調べる。
 #   相手のログが無いか、ログの最後の行が result= の行なら、終わった実行の目印として消す。
-#   それ以外は実行中か、強制終了で残った実行の目印なので、消さずに warning=concurrent-writer の行を出す。
+#   それ以外は --wait と同じ照合で、相手のラッパーと Codex 側のプロセスが残っているかを調べる。
+#   どちらも残っていなければ、強制終了で残った目印として消し、自分のログにだけ note=stale-run-marker-removed の行を書く。
+#   どちらかが残っているか、照合できない場合は、消さずに warning=concurrent-writer の行を出す。
+#   照合できないのは、PowerShell が無い場合、run= の行が読めない場合、相手のログに note=no-output-last-message の行がある場合である。
 #   警告は観測の補助であり、起動は止めない。
-#   強制終了で残った目印を実行中と区別できないため、止める形にすると、その worktree の委譲が誤って止まりうるためである。
+#   照合できない環境では強制終了で残った目印を実行中と区別できないため、止める形にすると、その worktree の委譲が誤って止まりうるためである。
 #   作業ディレクトリが git の管理下に無い場合と、目印の読み書きに失敗した場合は、目印を扱わずに起動する。
 #   同じ worktree を編集するメインセッションは、このラッパーを通らないため目印に現れない。
 #
@@ -562,11 +565,11 @@ run_marker_dir() {
 }
 
 # 置き場にある他の目印を調べ、終わった実行の目印を消し、残っている実行ごとに警告の行を出す。
-# 終わったかどうかは相手のログで見分ける。ログの最後の行は、終了した実行に限って result= の行になるためである。
+# 相手のログの最後の行が result= でなければ、--wait と同じプロセスの照合で強制終了の残りかを見分ける(判定は冒頭の説明にある)。
 # ログが無い目印(7 日を過ぎたログの削除で消えた場合を含む)は、見分ける手がかりが無いので終わった実行として消す。
 # check_run_markers <置き場>
 check_run_markers() {
-  local m other_id other_log last warning
+  local m other_id other_log last warning run_fields line state pids
   for m in "$1"/*.run; do
     [ -f "$m" ] || continue
     other_id="$(basename "$m" .run)"
@@ -583,6 +586,26 @@ check_run_markers() {
         continue
         ;;
     esac
+    run_fields="$(sed -n '1s/^codex-agent: run=[^ ]* pid=\([0-9][0-9]*\) started=\([^ ]*\).*$/\1 \2/p' "$m" 2>/dev/null | tr -d '\r')"
+    [ -n "$run_fields" ] \
+      || run_fields="$(sed -n '1s/^codex-agent: run=[^ ]* pid=\([0-9][0-9]*\) started=\([^ ]*\).*$/\1 \2/p' "$other_log" 2>/dev/null | tr -d '\r')"
+    state="unknown"
+    pids=""
+    # --output-last-message の無い版の実行は、残った Codex を探せないので照合しない。
+    if [ -n "$run_fields" ] && ! grep -qxF "$NO_LAST_MESSAGE_NOTE" <(tr -d '\r' <"$other_log" 2>/dev/null); then
+      while IFS= read -r line; do
+        case "$line" in
+          wrapper=alive) state="alive" ;;
+          wrapper=gone) state="gone" ;;
+          codex=*) pids="${pids:+$pids,}${line#codex=}" ;;
+        esac
+      done < <(probe_run_processes "${run_fields%% *}" "${run_fields#* }" "$other_id")
+    fi
+    if [ "$state" = "gone" ] && [ -z "$pids" ]; then
+      rm -f "$m" 2>/dev/null
+      printf 'codex-agent: note=stale-run-marker-removed run=%s log=%s\n' "$other_id" "$other_log" >>"$log_file"
+      continue
+    fi
     warning="codex-agent: warning=concurrent-writer run=$other_id log=$other_log"
     printf '%s\n' "$warning" | out
     printf '%s\n' "$warning" >>"$log_file"
@@ -642,7 +665,7 @@ finish() {
   exit "$2"
 }
 
-# ログから先頭の run= の行と warning= の行を除いた本文を出す。
+# ログから先頭の run= の行と warning= と note= の行を除いた本文を出す。
 # 失敗時に標準出力へ出す末尾と、失敗の判定の対象には、これらの行を含めない。
 # 前者は標準出力に同じ行を 2 回出さないため、後者は実行 ID、PID、ログのパスの数字が判定の語(429 など)に一致しうるためである。
 log_body() {
