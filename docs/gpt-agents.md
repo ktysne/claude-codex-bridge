@@ -132,7 +132,7 @@ Claude 側の定義(`.claude/agents/<name>.md`)のフロントマターは、Cla
 
 `impl-hard`、`impl-light`、`impl-standard` はスクリプトの終了コードでフォールバックの要否を決める。
 
-- **0**：Codex が完了した。出力にある Codex の最終報告をそのまま返し、Claude 側では実装しない。
+- **0**：Codex が完了した。出力にある Codex の最終報告をそのまま返し、Claude 側では実装しない。ただし、Codex が依頼文の検証を実行できなかった場合は、検証だけを Claude 側で実行する(「既知の制約」の「子プロセスを起こす検証は `spawn EPERM` で失敗する」)。
 - **2**：引数、定義ファイルの内容、環境の不備でスクリプトが起動しなかった。フロントマターのキー不足、effort やサンドボックスの不正値、`codex_home` の不在、作業ディレクトリの不在、端末からの起動、空の依頼文がこれにあたる。実装せず、終了コードと出力の末尾を報告して終わる。
 - **3**：GPT 側が未導入、無効化、または未設定である。`codex` コマンドが PATH に無い、`.claude/gpt-agents/<name>.md` が見つからない、`codex_enabled: false` が書かれている、`codex_model` が無いか空である、のいずれかに当たる場合である。サブエージェント自身が Claude として実装し、その旨を報告の冒頭に書く。キー名の誤記も `codex_model` の未設定と同じ経路で Claude 側へ倒れるため、報告の冒頭には `codex-agent:` の理由行をそのまま添える。
 - **75**：呼び出し側では直せない GPT 側の事情で実行できなかった。利用上限の場合は `codex-agent: result=rate-limited`、それ以外の場合は `codex-agent: result=unavailable` として理由を区別する。`unavailable` は、いまのところモデルの混雑を示す `Selected model is at capacity` と、終了コード 0 でもツール接続が一度も成立しなかった実行(`code-mode host exited during handshake`)を対象にする。利用上限なら `codex-agent: rate-limit evidence: ...`、それ以外なら `codex-agent: unavailable evidence: ...` の行に判定の根拠を残す。サブエージェント自身が Claude として実装し、フォールバックした旨を報告の冒頭に書く。
@@ -173,6 +173,19 @@ Codex が終わると標準出力をログへ追記し、最後の行に標準�
 ログの最後の行が `result=` の行でなければ、その実行は完了していないか、途中で止められている。
 書き込み可能な定義では、同じ worktree に書き込み可能な別の実行が残っていると、`log=` の行の後に `codex-agent: warning=concurrent-writer run=<相手の実行 ID> log=<相手のログのパス>` の行が出うる。
 意味と仕組みは「既知の制約」の「書き込み担当の目印と警告の行」にある。
+
+Codex の経過に子プロセスの起動失敗の印があった実行では、最終報告の前(`log=` の行と `warning=concurrent-writer` の行の後)に次の 2 行が出る。
+`result=` の値は変わらない。
+
+```text
+codex-agent: warning=child-spawn-failed count=<一致した行の数>
+codex-agent: child-spawn-failed evidence: <最初に一致した行>
+```
+
+`ok` を 75 に倒さないのは、倒すと実装担当が GPT 側の実装を捨てて Claude 側で作り直すためである。
+`result=` の行の直前に置かないのは、そこには終了コード 75 の根拠の行が来ると 5 定義が決めているためである。
+ログにも警告の行を書き、報告の写し(`<実行 ID>.report`)にも標準出力と同じく入る。
+印と照合の範囲は「既知の制約」の「子プロセスを起こす検証は `spawn EPERM` で失敗する」にある。
 
 最終報告は `codex exec` の `--output-last-message` から取る。
 この選択肢がない版では標準出力の末尾で代用する。
@@ -375,6 +388,36 @@ Issue が閉じたら、その記述を更新するか消す。
 **Codex が書き込めるのは `-C` で指定した作業ディレクトリの配下だけである。**
 `workspace-write` の書き込み範囲は作業ディレクトリに限られる。
 複数のプロジェクトにまたがる変更を委譲するときは、依頼文の作業ディレクトリに共通の親ディレクトリを指定する。
+
+**子プロセスを起こす検証は `spawn EPERM` で失敗する。**
+Windows の `unelevated` サンドボックスでは、Codex が起動したコマンド自体は動くが、そのコマンドがさらに子プロセスを起こすと `EPERM` になる。
+`npm test` や `npx vitest` のように、テストランナーやビルドが子プロセスを起こす検証はこの形で失敗する。
+次のコマンドで、モデルを呼ばずに再現できる(`nested.js` は `child_process.spawnSync` で `node -e 0` と `cmd /c exit 0` を起動するスクリプト)。
+
+```bash
+CODEX_HOME="$USERPROFILE/.codex-subagent" codex sandbox -P :workspace -C <作業ディレクトリ> -- node nested.js
+```
+
+Codex の文書によると、`[windows] sandbox` の選択肢は `elevated` と `unelevated` だけで、子プロセスの起動だけを許す設定は無い。
+両方の認証ホームの `config.toml` は `unelevated` である。
+`elevated` で `EPERM` が消えるかは確かめていない。確かめるには管理者の承認を伴う導入が要る。
+調べた内容の詳細は Issue #53 のコメントにある。
+
+Codex はこの失敗を最終報告の文面に書くだけで、終了コード 0 で返す。
+そこでラッパーは、Codex の経過(標準エラー)に子プロセスの起動失敗の印が出た行を数え、1 行以上あれば警告の行と最初の根拠の行を出す(「フォールバックの条件と終了コード」の標準出力の形)。
+印は次の 2 つである。
+
+- `spawn EPERM`：語のまま照合する。Codex の経過には読んだファイルの中身や Codex 自身の説明も流れるため、実行していない失敗にも一致しうる。誤って一致しても、実装担当が検証を Claude 側で実行し直すだけで済むので、これを許容する。
+- `exited -1073741502 in`：終了コード 0xC0000142。Codex がツールの完了を書く行(行頭の空白に続く `exited -1073741502 in <時間>`)に限って照合する。数値だけで照合すると、この値を書いた文書を Codex が読んだだけで一致するためである。
+
+最終報告(標準出力)の本文は数えない。
+最終報告が検証の失敗を文章で引用しても、二重に数えないためである。
+
+`impl-hard`、`impl-light`、`impl-standard` は、終了コード 0 で警告の行があるか、最終報告が依頼文の検証を実行できなかったと述べている場合に、依頼文の検証コマンドだけを Claude 側で実行し、結果を報告に添える。
+コードは変えず、検証が失敗しても直さない。
+GPT 側の変更に Claude 側の修正が混ざると、メインセッションがどちらの変更かを見分けられなくなるためである。
+報告の冒頭には、検証を Claude 側で実行したことを書く。
+`codex-review` と `codex-subagent` は標準出力の全体をそのまま返すので、警告の行がそのまま報告に含まれる。検証は実行し直さない。
 
 **Claude Code 2.1.281 では、呼び出し側が担当を前面で起動すると、担当がターンを終えた時点で背景の Bash と Monitor の追跡が切れる。**
 出力ファイルの末尾には `[killed]` が付くが、Codex とラッパーは動き続け、Codex の完了後にラッパーは `result=` の行を出力ファイルへ書く。

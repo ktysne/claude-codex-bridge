@@ -15,6 +15,8 @@
 #   codex-agent: run=<実行 ID> pid=<ラッパーの PID> started=<UTC の ISO 8601>            Codex の起動前に出す
 #   codex-agent: log=<ログのパス>                                                         Codex の起動前に出す
 #   codex-agent: warning=concurrent-writer run=<相手の実行 ID> log=<相手のログのパス>      該当する目印ごとに 1 行(無ければ出さない)
+#   codex-agent: warning=child-spawn-failed count=<回数>                                  Codex の終了後、子プロセスの起動失敗の印があれば出す
+#   codex-agent: child-spawn-failed evidence: <最初に一致した行>                           上の行に続けて 1 行
 #   <最終報告>(失敗時はログの末尾と根拠の行)
 #   codex-agent: result=...
 # run= と log= の行を起動前に出すのは、呼び出し側がバックグラウンドへ移ったあとも、
@@ -29,8 +31,8 @@
 # ラッパーの pid への taskkill /T だけでは Codex まで届かないためである。手順は docs/gpt-agents.md の「既知の制約」にある。
 #
 # 実行ログ(~/.claude/codex-agent/logs/<実行 ID>.log):
-#   1 行目は run= の行と同じ内容である。標準出力へ warning= の行を出すときは、続けて同じ行を書く。
-#   Codex の標準エラーは実行中から行ごとに追記する。続けて、終了後に Codex の標準出力を追記する。
+#   1 行目は run= の行と同じ内容である。標準出力へ warning=concurrent-writer の行を出すときは、続けて同じ行を書く。
+#   Codex の標準エラーは実行中から行ごとに追記する。続けて、終了後に warning=child-spawn-failed の行(出すときだけ)と Codex の標準出力を追記する。
 #   最後の行は標準出力へ出すのと同じ result= の行である。ログだけで完了と結果を判定できるようにするためである。
 #   Codex の起動前に止まる経路(終了コード 2、3、試験用フック)ではログを作らない。
 #
@@ -91,6 +93,8 @@ usage() {
 run= の行と log= の行は Codex の起動前に出す。
 書き込み可能な定義では、同じ worktree に書き込み可能な別の実行が残っていると、
 log= の行の後に codex-agent: warning=concurrent-writer の行を出す(起動は止めない)。
+Codex の経過に子プロセスの起動失敗の印があれば、最終報告の前に
+codex-agent: warning=child-spawn-failed の行と、最初の根拠の行を出す(result= の値は変えない)。
 実行中の委譲を止める手順は docs/gpt-agents.md の「既知の制約」にある。
 
 終了コード:
@@ -692,6 +696,18 @@ codex_status="${PIPESTATUS[0]}"
 # ツール接続の判定に使う経過(標準エラー)は、最終回答を写す前に取り出す。
 # 最終回答も含めて判定すると、回答の本文に書かれた語で判定が反転する。
 stderr_body="$(log_body)"
+
+# 子プロセスの起動失敗の印を経過(標準エラー)だけで数える。最終回答が失敗を引用しても二重に数えないためである。
+# 0xC0000142 は Codex がツールの完了を書く行の形に限る。数値だけで照合すると、読んだ文書の引用で一致するためである。
+# result= は変えない。ok を 75 に倒すと、GPT 側の実装を捨てて作り直すことになるためである。
+child_spawn_failed="$(printf '%s\n' "$stderr_body" | grep -E 'spawn EPERM|^[[:space:]]*exited -1073741502 in [0-9]')"
+if [ -n "$child_spawn_failed" ]; then
+  child_spawn_warning="codex-agent: warning=child-spawn-failed count=$(printf '%s\n' "$child_spawn_failed" | wc -l | tr -d ' ')"
+  printf '%s\n' "$child_spawn_warning" | out
+  printf '%s\n' "$child_spawn_warning" >>"$log_file"
+  first_line="$(printf '%s\n' "$child_spawn_failed" | head -n 1 | tr -d '\r')"
+  printf 'codex-agent: child-spawn-failed evidence: %s\n' "${first_line:0:300}" | out
+fi
 
 # 経過(標準エラー)に続けて最終回答(標準出力)をログへ写す。
 cat "$out_file" >>"$log_file"
