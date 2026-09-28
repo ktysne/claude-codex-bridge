@@ -709,17 +709,8 @@ t_codex_exit_75() {
   expect_eq "最後の行" "codex-agent: result=failed exit=75" "$(last_out_line)"
 }
 
-CHILD_SPAWN_STDERR='exec
-node tools/run-tests.js in /work
- exited 1 in 701ms:
-Error: spawn EPERM
-    at ChildProcess.spawn (node:internal/child_process:441:11)
-exec
-"pwsh.exe" -Command "rg -n foo" in /work
- exited -1073741502 in 0ms:
-codex
-検証は spawn EPERM で実行できなかった。
-'
+# 1 行の文字列で書くのは、Codex がこのファイルを読んだとき、照合する行の形がそのまま並ばないようにするためである。
+CHILD_SPAWN_STDERR=$'exec\nnode tools/run-tests.js in /work\n exited 1 in 701ms:\nError: spawn EPERM\n    at ChildProcess.spawn (node:internal/child_process:441:11)\nexec\n"pwsh.exe" -Command "rg -n foo" in /work\n exited -1073741502 in 0ms:\ncodex\n検証は spawn EPERM で実行できなかった。\n'
 
 t_child_spawn_warning() {
   fake_set stderr "$CHILD_SPAWN_STDERR"
@@ -767,12 +758,8 @@ t_child_spawn_execution_failed() {
 t_child_spawn_report_only() {
   fake_set stderr '経過: 考えている
 '
-  fake_set last_message '検証は spawn EPERM で失敗した(exited -1073741502 in 0ms)。
- exited -1073741502 in 0ms:
-'
-  fake_set stdout 'spawn EPERM
- exited -1073741502 in 0ms:
-'
+  fake_set last_message $'検証は spawn EPERM で失敗した(exited -1073741502 in 0ms)。\n exited -1073741502 in 0ms:\n'
+  fake_set stdout $'spawn EPERM\n exited -1073741502 in 0ms:\n'
   run_wrapper "$AGENT"
   expect_rc 0
   expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
@@ -795,10 +782,7 @@ t_child_spawn_number_only() {
 
 # 利用上限で 75 に倒れる実行でも、result= の直前は利用上限の根拠の行のままである。
 t_child_spawn_with_rate_limit() {
-  fake_set stderr "Error: spawn EPERM
-    at ChildProcess.spawn (node:internal/child_process:441:11)
-ERROR: You've hit your usage limit.
-"
+  fake_set stderr $'Error: spawn EPERM\n    at ChildProcess.spawn (node:internal/child_process:441:11)\nERROR: You\'ve hit your usage limit.\n'
   fake_set exit_code 1
   run_wrapper "$AGENT"
   expect_fallback_tail rate-limit rate-limited
