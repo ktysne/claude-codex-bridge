@@ -1696,17 +1696,10 @@ namespace CodexBridgeConsole
             AdjustWindowSize();
         }
 
-        // effort の選べる値はモデルごとに違う。目録が知らないモデルには既定の一覧を残す。
+        // effort の選択肢は目録またはモデル別の既定表で制限する。
         private void ApplyGptEffortChoices(GptRow row)
         {
-            IReadOnlyList<string> efforts = row.Catalog != null
-                ? row.Catalog.EffortsFor(row.ModelComboBox.Text)
-                : _choices.GptEffortsFor(row.ModelComboBox.Text);
-            if (efforts.Count == 0)
-            {
-                efforts = _choices.GptEfforts;
-            }
-
+            IReadOnlyList<string> efforts = _choices.GptEffortsFor(row.Catalog, row.ModelComboBox.Text);
             SetComboItems(row.EffortComboBox, efforts, row.EffortComboBox.Text);
         }
 
@@ -1799,12 +1792,17 @@ namespace CodexBridgeConsole
             {
                 if (catalog != null)
                 {
-                    IReadOnlyList<string> efforts = catalog.EffortsFor(row.ModelComboBox.Text);
+                    IReadOnlyList<string> catalogEfforts = catalog.EffortsFor(row.ModelComboBox.Text);
                     string effort = row.EffortComboBox.Text;
-                    if (efforts.Count > 0 && !Contains(efforts, effort))
+                    if (catalogEfforts.Count == 0)
+                    {
+                        IReadOnlyList<string> efforts = _choices.GptEffortsFor(row.ModelComboBox.Text);
+                        row.EffortComboBox.Text = Choices.NearestSupportedEffort(efforts, effort);
+                    }
+                    else if (!Contains(catalogEfforts, effort))
                     {
                         string defaultEffort = catalog.DefaultEffortFor(row.ModelComboBox.Text);
-                        row.EffortComboBox.Text = string.IsNullOrEmpty(defaultEffort) ? efforts[0] : defaultEffort;
+                        row.EffortComboBox.Text = string.IsNullOrEmpty(defaultEffort) ? catalogEfforts[0] : defaultEffort;
                     }
                 }
                 else
