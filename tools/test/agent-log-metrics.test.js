@@ -50,6 +50,10 @@ function event(timestamp, ...content) {
   return { timestamp, message: { content } };
 }
 
+function assistantTextEvent(timestamp, text) {
+  return { timestamp, message: { role: 'assistant', content: [{ type: 'text', text }] } };
+}
+
 function bashUse(id, command) {
   return { type: 'tool_use', name: 'Bash', id, input: { command } };
 }
@@ -221,6 +225,60 @@ test('collect は委譲を止める指定を最初の空でない行だけで判
       designatedNotInvoked: 2,
       outcomes: outcomesOf({ gptRan: 1, notInvoked: 4 }),
     });
+  });
+});
+
+test('collect は最後の報告が委譲を止める指定を示す委譲を数える', () => {
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['report-designated', 'impl-standard']],
+      [['report-designated', [assistantTextEvent(
+        '2026-09-10T10:01:00.000Z',
+        '  委譲の指定により Claude 側で実装した\n指定の行と理由を記載した',
+      )]]],
+    );
+
+    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+
+    assert.equal(metrics.byAgent['impl-standard'].designated, 1);
+    assert.equal(metrics.byAgent['impl-standard'].designatedNotInvoked, 1);
+  });
+});
+
+test('collect は途中の発言に指定があっても最後の報告で判定する', () => {
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['intermediate-designation', 'impl-standard']],
+      [['intermediate-designation', [
+        assistantTextEvent('2026-09-10T10:01:00.000Z', '委譲の指定により Claude 側で実装した'),
+        assistantTextEvent('2026-09-10T10:02:00.000Z', '実装を完了しました。'),
+      ]]],
+    );
+
+    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+
+    assert.equal(metrics.byAgent['impl-standard'].designated, 0);
+    assert.equal(metrics.byAgent['impl-standard'].designatedNotInvoked, 0);
+  });
+});
+
+test('collect は依頼文と最後の報告の両方に指定があっても 1 件と数える', () => {
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['prompt-and-report-designated', 'impl-standard', `${CLAUDE_DESIGNATION}\n理由: 実装するため`]],
+      [['prompt-and-report-designated', [assistantTextEvent(
+        '2026-09-10T10:01:00.000Z',
+        '委譲の指定により Claude 側で実装した',
+      )]]],
+    );
+
+    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+
+    assert.equal(metrics.byAgent['impl-standard'].designated, 1);
+    assert.equal(metrics.byAgent['impl-standard'].designatedNotInvoked, 1);
   });
 });
 
@@ -987,7 +1045,7 @@ test('CLI は数え方の版と追加指標を JSON に出す', () => {
 
     assert.equal(result.status, 0);
     const summary = JSON.parse(result.stdout);
-    assert.equal(summary['数え方の版'], 5);
+    assert.equal(summary['数え方の版'], 6);
     assert.equal(summary['メインセッションの待つためのBash'], 0);
     assert.equal(summary['並行書き込み警告を含む起動'], 0);
   });
@@ -1561,9 +1619,9 @@ test('--json とテキスト出力は数え方の版を出す', () => {
     const text = runMetrics(root, ['--since', '2026-09-10', '--until', '2026-09-10']);
 
     assert.equal(json.status, 0, json.stderr);
-    assert.equal(JSON.parse(json.stdout).数え方の版, 5);
+    assert.equal(JSON.parse(json.stdout).数え方の版, 6);
     assert.equal(text.status, 0, text.stderr);
-    assert.match(text.stdout, /^期間: .*\n数え方の版: 5\n/);
+    assert.match(text.stdout, /^期間: .*\n数え方の版: 6\n/);
   });
 });
 
