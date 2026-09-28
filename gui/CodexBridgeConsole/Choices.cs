@@ -49,6 +49,40 @@ namespace CodexBridgeConsole
             return GptEfforts;
         }
 
+        // 目録に対象モデルの effort が無い場合も、モデル別の制約を保つため既定表を使う。
+        public IReadOnlyList<string> GptEffortsFor(CodexModelCatalog catalog, string model)
+        {
+            if (catalog != null)
+            {
+                IReadOnlyList<string> efforts = catalog.EffortsFor(model);
+                if (efforts.Count > 0)
+                {
+                    return efforts;
+                }
+            }
+
+            return GptEffortsFor(model);
+        }
+
+        // 目録にあるモデルでは、受け付けない effort を目録の既定へ寄せる。
+        // 目録に無いモデルでは、対応表で指定値以下の対応済みの値へ寄せる。
+        public string GptEffortAfterModelChange(CodexModelCatalog catalog, string model, string effort)
+        {
+            IReadOnlyList<string> catalogEfforts = catalog != null ? catalog.EffortsFor(model) : new string[0];
+            if (catalogEfforts.Count == 0)
+            {
+                return NearestSupportedEffort(GptEffortsFor(model), effort);
+            }
+
+            if (Contains(catalogEfforts, effort))
+            {
+                return effort;
+            }
+
+            string defaultEffort = catalog.DefaultEffortFor(model);
+            return string.IsNullOrEmpty(defaultEffort) ? catalogEfforts[0] : defaultEffort;
+        }
+
         // Claude Code には非対話でモデル一覧を返すコマンドが無いため、モデルごとの effort は設定として持つ。
         // 対応表に無いモデルには平坦な一覧を返す。選択肢を消さずに済ませるためである。
         public IReadOnlyList<string> ClaudeEffortsFor(string model)
