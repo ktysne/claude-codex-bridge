@@ -799,6 +799,42 @@ t_child_spawn_with_rate_limit() {
   expect_eq "警告の行数" "1" "$(grep -c '^codex-agent: warning=child-spawn-failed' "$root/out")"
 }
 
+# 実際の経過の形。ビルドの出力は Checking File Globs で終わり、次の行から字下げの無い別の出力になる。
+SANDBOX_BUILD_STDERR=$'exec\n"pwsh.exe" -Command \'cmake --build build --config Debug\' in D:\\work\n exited 1 in 4924ms:\nMSBuild のバージョン 17.14.51 (.NET Framework)\n\n  Checking File Globs\n\ndiff --git a/x b/x\n'
+
+t_sandbox_build_warning() {
+  fake_set stderr "$SANDBOX_BUILD_STDERR"
+  fake_set last_message '最終報告
+'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_eq "4 行目(log= の行の後)" "codex-agent: warning=sandbox-build-failed count=1" "$(sed -n 4p "$root/out")"
+  expect_eq "5 行目" "codex-agent: sandbox-build-failed evidence: \"pwsh.exe\" -Command 'cmake --build build --config Debug' in D:\\work" "$(sed -n 5p "$root/out")"
+  expect_eq "6 行目" "最終報告" "$(sed -n 6p "$root/out")"
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
+  grep -Fxq 'codex-agent: warning=sandbox-build-failed count=1' "$(out_log_path "$root/out")" || fail "ログに警告の行が無い"
+}
+
+# 子プロセスの起動失敗の警告の後に並ぶ。
+t_sandbox_build_after_child_spawn() {
+  fake_set stderr "$CHILD_SPAWN_STDERR$SANDBOX_BUILD_STDERR"
+  fake_set last_message '最終報告
+'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_eq "4 行目" "codex-agent: warning=child-spawn-failed count=2" "$(sed -n 4p "$root/out")"
+  expect_eq "6 行目" "codex-agent: warning=sandbox-build-failed count=1" "$(sed -n 6p "$root/out")"
+}
+
+# Checking File Globs の後にビルドやエラー文が続いた回、成功した回、最終報告だけの引用は数えない。
+t_sandbox_build_not_matched() {
+  fake_set stderr $'exec\ncmake --build build in D:\\work\n exited 1 in 90000ms:\nMSBuild version 17.14\n  Checking File Globs\n  rec.vcxproj -> D:\\work\\rec.lib\nerror C2065: x\nexec\ncmake --build build in D:\\work\n exited 1 in 3000ms:\n  Checking File Globs\nCMake Error at CMakeLists.txt:10 (message):\nexec\ncmake --build build in D:\\work\n succeeded in 900ms:\n  Checking File Globs\n\ncodex\n'
+  fake_set last_message $' exited 1 in 4924ms:\n  Checking File Globs\n'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_out_no_match "sandbox-build-failed"
+}
+
 t_success_body_mentions_limit() {
   fake_set last_message 'rate limit の扱いを調べた結果を報告する。
 '
@@ -2253,6 +2289,9 @@ run_case "子プロセスの起動失敗(Execution failed): 次のスタック�
 run_case "子プロセスの起動失敗(最終報告だけ): 警告を出さない" t_child_spawn_report_only
 run_case "子プロセスの起動失敗(数値だけの行): exited -1073741502 in の形でなければ数えない" t_child_spawn_number_only
 run_case "子プロセスの起動失敗と利用上限: 警告は log= の後、result= の直前は利用上限の根拠の行" t_child_spawn_with_rate_limit
+run_case "サンドボックスのビルド停止: Checking File Globs で終わった失敗に警告と起動したコマンドの行を出し、result=ok は変わらない" t_sandbox_build_warning
+run_case "サンドボックスのビルド停止: 子プロセスの起動失敗の警告の後に並ぶ" t_sandbox_build_after_child_spawn
+run_case "サンドボックスのビルド停止: ビルドやエラー文が続いた回、成功した回、最終報告だけの引用は数えない" t_sandbox_build_not_matched
 run_case "成功の本文に上限の語があっても result=ok" t_success_body_mentions_limit
 run_case "ログの中ほどだけにある上限の語では分類しない" t_limit_word_mid_log
 run_case "429 の単語境界: id=14290 は上限と見なさない" t_429_id_not_matched
