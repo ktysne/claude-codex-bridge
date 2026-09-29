@@ -58,7 +58,7 @@ Windows 10 1903 以降と Windows 11 には 4.8 が同梱されているため�
 `codex-review` と `codex-subagent` では、GPT 側の `codex_model` と `codex_reasoning_effort` だけを書き換える。
 他の項目を対象から外す理由は次のとおりである。
 
-- **Claude 側の `model`**：この 2 定義の Claude 側は、依頼文を `tools/codex-agent.sh` へ転送するだけの薄い包みである。値は Claude Code のモデル別名(`haiku`)であり、`effort` キーも持たない。転送だけの定義でモデルを選ばせても結果は変わらないため、読み込みも表示もしない。
+- **Claude 側の `model` と `effort`**：この 2 定義の Claude 側は、依頼文を `tools/codex-agent.sh` へ転送するだけの薄い包みである。転送だけの定義でモデルや effort を選ばせても結果は変わらないため、`model` と `effort` は読み込みも表示もしない。
 - **`codex_home`**：[CLAUDE.md](../CLAUDE.md) の「認証ホームの配置」が、`codex-review` は `~/.codex`、`codex-subagent` は `~/.codex-subagent` と定めている。画面から変えられると「用途固定の原則」に反するため、`codex_sandbox` と同じく表示だけにする。サブエージェントタブの `codex_home` の選択は、この 2 定義には及ばない。
 - **`codex_enabled`**：この 2 定義は明示的に Codex へ依頼する定義であり、Claude 側が代行すると依頼の意味が変わる。サブエージェントタブのトグルはこの 2 定義に書かず、`tools/codex-agent.sh` がこの 2 定義で `codex_enabled` を読む挙動も変えない。
 - **「(未設定)」**：`codex_model` が空だとスクリプトは終了コード 3 で止まり、この 2 定義はフォールバックしないので依頼がそのまま失敗する。GPT モデルの選択肢に「(未設定)」を置かず、保存前の検証で空を拒む。
@@ -172,7 +172,7 @@ exe と同じフォルダに `choices.json` があれば、それで既定値を
 
 | 項目 | 選択肢 |
 |---|---|
-| Claude モデル | `claude-fable-5-1`、`claude-fable-5`、`claude-opus-5-5`、`claude-opus-5`、`claude-sonnet-5`、`claude-opus-4-8`、`claude-opus-4-7`、`claude-opus-4-6`、`claude-sonnet-4-6`、`claude-haiku-4-5` |
+| Claude モデル | `claude-fable-5-1`、`claude-fable-5`、`claude-opus-5-5`、`claude-opus-5`、`claude-sonnet-5-5`、`claude-sonnet-5`、`claude-opus-4-8`、`claude-opus-4-7`、`claude-opus-4-6`、`claude-sonnet-4-6`、`claude-haiku-4-5` |
 | Claude effort | 選ばれているモデルが受け付ける値。対応表に無いモデルでは `low`、`medium`、`high`、`xhigh`、`max` |
 | GPT モデル | `codex debug models` から取得。取れなければ `gpt-6-astra`、`gpt-6-sol`、`gpt-6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5` |
 | GPT effort | 選ばれているモデルが受け付ける値。目録が取れないか、目録にそのモデルが無ければ `gptModelEfforts` の対応値、対応表に無ければ `low`、`medium`、`high`、`xhigh`、`max`、`ultra` |
