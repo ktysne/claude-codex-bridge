@@ -254,7 +254,7 @@ JSON は次の形で、4 つの配列をすべて指定する。
     { "model": "claude-opus-5-5", "efforts": ["low", "medium", "high", "xhigh", "max"] },
     { "model": "claude-opus-4-6", "efforts": ["low", "medium", "high", "max"] }
   ],
-  "gptModels": ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"],
+  "gptModels": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"],
   "gptEfforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
   "gptModelEfforts": [
     { "model": "gpt-6-astra", "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"] },
