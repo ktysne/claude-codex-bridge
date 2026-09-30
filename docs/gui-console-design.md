@@ -143,8 +143,8 @@ GPT 側定義を別名に退避すれば疑似的に無効化できるが、設�
 │ ┌ サブエージェント ┐┌ レビューと実装補助 ┐                                 │
 │ │                                                                        │ │
 │ │ 定義            GPT モデル        effort     codex_home         codex_sandbox │
-│ │ codex-review    [gpt-6-sol     v] [medium v] ~/.codex           read-only     │
-│ │ codex-subagent  [gpt-6-sol     v] [medium v] ~/.codex-subagent  workspace-write │
+│ │ codex-review    [gpt-6.1-sol   v] [medium v] ~/.codex           read-only     │
+│ │ codex-subagent  [gpt-6.1-sol   v] [medium v] ~/.codex-subagent  workspace-write │
 │ │                                                                        │ │
 │ │ codex --version: ~/.codex 0.xx.x / ~/.codex-subagent 0.xx.x            │ │
 │ │ GPT モデル一覧: ~/.codex は codex debug models から取得 / ~/.codex-subagent は既定値 │
@@ -174,7 +174,7 @@ exe と同じフォルダに `choices.json` があれば、それで既定値を
 |---|---|
 | Claude モデル | `claude-fable-5-1`、`claude-fable-5`、`claude-opus-5-5`、`claude-opus-5`、`claude-sonnet-5-5`、`claude-sonnet-5`、`claude-opus-4-8`、`claude-opus-4-7`、`claude-opus-4-6`、`claude-sonnet-4-6`、`claude-haiku-4-5` |
 | Claude effort | 選ばれているモデルが受け付ける値。対応表に無いモデルでは `low`、`medium`、`high`、`xhigh`、`max` |
-| GPT モデル | `codex debug models` から取得。取れなければ `gpt-6-astra`、`gpt-6-sol`、`gpt-6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5` |
+| GPT モデル | `codex debug models` から取得。取れなければ `gpt-6.1-sol`、`gpt-6-astra`、`gpt-6-sol`、`gpt-6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5` |
 | GPT effort | 選ばれているモデルが受け付ける値。目録が取れないか、目録にそのモデルが無ければ `gptModelEfforts` の対応値、対応表に無ければ `low`、`medium`、`high`、`xhigh`、`max`、`ultra` |
 
 GPT 側の 2 つは、起動時に `codex debug models` から取得できればそちらを使う。既定値はその控えである。
@@ -198,7 +198,7 @@ Claude 側のモデルには相当する取得手段が無い。Claude Code に�
   "claudeModelEfforts": [
     { "model": "claude-opus-5-5", "efforts": ["low", "medium", "high", "xhigh", "max"] }
   ],
-  "gptModels": ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"],
+  "gptModels": ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"],
   "gptEfforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
   "gptModelEfforts": [
     { "model": "gpt-6-astra", "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"] },
