@@ -32,6 +32,7 @@
     { "model": "claude-sonnet-4-6", "efforts": ["low", "medium", "high", "max"] }
   ],
   "gptModels": [
+    "gpt-6.1-sol",
     "gpt-6-astra",
     "gpt-6-sol",
     "gpt-6-luna",
@@ -49,6 +50,7 @@
     "ultra"
   ],
   "gptModelEfforts": [
+    { "model": "gpt-6.1-sol", "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"] },
     { "model": "gpt-6-astra", "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"] },
     { "model": "gpt-6-sol", "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"] },
     { "model": "gpt-6-luna", "efforts": ["low", "medium", "high", "xhigh", "max"] },

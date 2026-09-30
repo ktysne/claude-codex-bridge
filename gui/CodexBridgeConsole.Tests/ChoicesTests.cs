@@ -30,10 +30,11 @@ namespace CodexBridgeConsole.Tests
                     },
                     choices.ClaudeModels);
                 Assert.Equal(new[] { "low", "medium", "high", "xhigh", "max" }, choices.ClaudeEfforts);
-                Assert.Equal(new[] { "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5" }, choices.GptModels);
+                Assert.Equal(new[] { "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5" }, choices.GptModels);
                 Assert.Equal(new[] { "low", "medium", "high", "xhigh", "max", "ultra" }, choices.GptEfforts);
                 var expectedGptEfforts = new Dictionary<string, string[]>
                 {
+                    { "gpt-6.1-sol", new[] { "low", "medium", "high", "xhigh", "max", "ultra" } },
                     { "gpt-6-astra", new[] { "low", "medium", "high", "xhigh", "max", "ultra" } },
                     { "gpt-6-sol", new[] { "low", "medium", "high", "xhigh", "max", "ultra" } },
                     { "gpt-6-luna", new[] { "low", "medium", "high", "xhigh", "max" } },
