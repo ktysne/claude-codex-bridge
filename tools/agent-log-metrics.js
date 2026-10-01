@@ -134,7 +134,8 @@
 //     並行した委譲で同じ編集を二重に数えないためである。
 //     スクラッチパッド、メモリー、相互レビューの記録、計画、一時ディレクトリ、TASKS* への編集は成果物でないので数えない。
 //     窓と編集は、委譲を含む親の記録のうち最後の時刻が最も遅いものの中で判定する。会話を引き継いだセッションの記録は、
-//     前の記録を写したうえで続くためである。窓は委譲の期間の後ろへはみ出してよい。
+//     前の記録を写したうえで続くためである。1 つの記録から複数のセッションが分かれた場合も、その 1 本だけで判定する。
+//     窓は委譲の期間の後ろへはみ出してよい。
 //     この値はレビュー指摘への対応のような担当の成果物の修正以外も含みうる、上限側の目安である。
 
 const fs = require('fs');
@@ -710,7 +711,7 @@ function isNonArtifactPath(filePath) {
   const lower = p.toLowerCase();
   const name = p.slice(p.lastIndexOf('/') + 1);
   return ['/scratchpad/', '/.claude/projects/', '/.cross-review/', '/docs/plans/'].some((part) => p.includes(part))
-    || ['/temp/', '/tmp/'].some((part) => lower.includes(part))
+    || /^(?:[a-z]:\/temp\/|[a-z]:\/windows\/temp\/|\/tmp\/)|\/appdata\/local\/temp\//.test(lower)
     || name === 'MEMORY.md'
     || name.startsWith('TASKS');
 }

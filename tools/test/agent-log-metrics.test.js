@@ -1917,6 +1917,7 @@ test('collect は成果物でない場所への編集を報告後の編集に数
       ...writeSession(root, 'artifact-named-memory', [
         agentEvent('2026-09-10T10:00:00.000Z', 'memory-src', 'impl-hard', '依頼'),
         editEvent('2026-09-10T10:20:00.000Z', 'y1', 'D:/repo/src/memory/pool.cpp'),
+        editEvent('2026-09-10T10:21:00.000Z', 'y2', 'D:/repo/src/temp/buffer.cpp'),
       ], [['memory-src', [handbackEvent('2026-09-10T10:10:00.000Z', '実装した')]]]),
     ];
 
