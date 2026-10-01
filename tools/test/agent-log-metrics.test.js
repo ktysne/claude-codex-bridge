@@ -122,6 +122,16 @@ function writeDelegations(root, calls, children) {
   return files;
 }
 
+// モデル別の内訳と報告後の編集を除いた行。それらを確かめないテストで、行の残りを丸ごと比べるために使う。
+function rowWithoutModelAndEdits(row) {
+  const { byModel, mainEdited, mainEditJudged, ...rest } = row;
+  return rest;
+}
+
+function byAgentWithoutModelAndEdits(byAgent) {
+  return Object.fromEntries(Object.entries(byAgent).map(([k, row]) => [k, rowWithoutModelAndEdits(row)]));
+}
+
 function assertOutcomeInvariants(byAgent) {
   for (const row of Object.values(byAgent)) {
     const total = Object.values(row.outcomes).reduce((sum, v) => sum + v, 0);
@@ -215,7 +225,7 @@ test('collect は委譲を止める指定を最初の空でない行だけで判
 
     const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
 
-    assert.deepEqual(metrics.byAgent['impl-standard'], {
+    assert.deepEqual(rowWithoutModelAndEdits(metrics.byAgent['impl-standard']), {
       calls: 6,
       noCodex: 4,
       committed: 0,
@@ -961,7 +971,7 @@ test('collect は同一分の起動、結果、待機、親子の紐付けを規
     assert.equal(metrics.background, 1);
     assert.deepEqual(metrics.offloaded, [950]);
     assert.equal(metrics.waitCalls, 3);
-    assert.deepEqual(metrics.byAgent, {
+    assert.deepEqual(byAgentWithoutModelAndEdits(metrics.byAgent), {
       'impl-standard': {
         calls: 2,
         noCodex: 1,
@@ -1140,7 +1150,7 @@ test('CLI は数え方の版と追加指標を JSON に出す', () => {
 
     assert.equal(result.status, 0);
     const summary = JSON.parse(result.stdout);
-    assert.equal(summary['数え方の版'], 6);
+    assert.equal(summary['数え方の版'], 7);
     assert.equal(summary['メインセッションの待つためのBash'], 0);
     assert.equal(summary['並行書き込み警告を含む起動'], 0);
   });
@@ -1460,7 +1470,7 @@ test('collect は別の記録に写った同じ識別子の起動、待機、委
     assert.equal(metrics.runs, 2);
     assert.deepEqual(metrics.results, { ok: 2 });
     assert.equal(metrics.waitCalls, 1);
-    assert.deepEqual(metrics.byAgent['impl-standard'], {
+    assert.deepEqual(rowWithoutModelAndEdits(metrics.byAgent['impl-standard']), {
       calls: 1,
       noCodex: 0,
       committed: 0,
@@ -1714,9 +1724,9 @@ test('--json とテキスト出力は数え方の版を出す', () => {
     const text = runMetrics(root, ['--since', '2026-09-10', '--until', '2026-09-10']);
 
     assert.equal(json.status, 0, json.stderr);
-    assert.equal(JSON.parse(json.stdout).数え方の版, 6);
+    assert.equal(JSON.parse(json.stdout).数え方の版, 7);
     assert.equal(text.status, 0, text.stderr);
-    assert.match(text.stdout, /^期間: .*\n数え方の版: 6\n/);
+    assert.match(text.stdout, /^期間: .*\n数え方の版: 7\n/);
   });
 });
 
@@ -1730,5 +1740,289 @@ test('メイン処理はタイムゾーンの無い日時と実在しない日�
     assert.match(noZone.stderr, /--since の日時にはタイムゾーン/);
     assert.equal(invalid.status, 2);
     assert.match(invalid.stderr, /--until に実在しない日時が指定された/);
+  });
+});
+
+const auditText = (model, rest = 'codex-agent: result=ok') => (
+  `codex-agent: agent=impl-standard model=${model} effort=medium\n最終報告\n${rest}`
+);
+
+function editEvent(timestamp, id, filePath, name = 'Edit') {
+  return event(timestamp, { type: 'tool_use', name, id, input: { file_path: filePath } });
+}
+
+function coordinatorEvent(timestamp, body) {
+  return { timestamp, message: { role: 'user', content: `The coordinator sent a message while you were working:\n${body}` } };
+}
+
+// 親の記録 1 本と、その委譲の子の記録を書く。セッションごとに別の親の記録になる。
+function writeSession(root, name, parentRows, children) {
+  const sessionDir = path.join(root, 'project', name);
+  const files = [writeJsonl(logPath(sessionDir, 'session.jsonl'), parentRows)];
+  children.forEach(([toolUseId, rows], i) => {
+    const file = writeJsonl(logPath(sessionDir, 'subagents', `agent-${i}.jsonl`), rows);
+    writeMeta(file, toolUseId);
+    files.push(file);
+  });
+  return files;
+}
+
+test('collect は委譲を最初に監査行が取れた起動のモデルで分け、疑似の起動と結び付かない読み取りの監査行を使わない', () => {
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['luna', 'impl-standard'], ['after-sim', 'impl-standard'], ['bg-read', 'impl-standard'], ['first-audited', 'impl-standard']],
+      [
+        ['luna', [invokeEvent('2026-09-10T10:01:00.000Z', 'm1', auditText('gpt-6-luna'))]],
+        ['after-sim', [
+          event('2026-09-10T10:01:00.000Z', bashUse('m2', SIMULATE_INVOKE), {
+            type: 'tool_result',
+            tool_use_id: 'm2',
+            content: auditText('simulated-model', 'codex-agent: result=rate-limited (simulated)'),
+          }),
+          invokeEvent('2026-09-10T10:02:00.000Z', 'm3', auditText('gpt-5.6-luna')),
+        ]],
+        ['bg-read', [
+          invokeEvent('2026-09-10T10:01:00.000Z', 'm4', BG_TEXT),
+          toolEvent('2026-09-10T10:02:00.000Z', 'm5', 'Read', { file_path: 'docs/gpt-agents.md' }, auditText('doc-model')),
+          toolEvent('2026-09-10T10:12:00.000Z', 'm6', 'Bash', { command: 'grep -n . "$TMP/tasks/bgx123abc.output"' },
+            '12:codex-agent: agent=impl-standard model=gpt-6-sol effort=high\n40:codex-agent: result=ok'),
+        ]],
+        ['first-audited', [
+          invokeEvent('2026-09-10T10:01:00.000Z', 'm7', 'Exit code 75\ncodex-agent: result=rate-limited', true),
+          invokeEvent('2026-09-10T10:02:00.000Z', 'm8', auditText('gpt-6-luna')),
+          invokeEvent('2026-09-10T10:03:00.000Z', 'm9', auditText('gpt-5.6-luna')),
+        ]],
+      ],
+    );
+
+    const metrics = collect(files, ...RANGE_0910);
+
+    const byModel = metrics.byAgent['impl-standard'].byModel;
+    assert.deepEqual(Object.keys(byModel).sort(), ['gpt-5.6-luna', 'gpt-6-luna', 'gpt-6-sol']);
+    assert.equal(byModel['gpt-6-luna'].calls, 2);
+    assert.deepEqual(byModel['gpt-6-luna'].outcomes, outcomesOf({ gptRan: 2 }));
+    assert.equal(byModel['gpt-5.6-luna'].calls, 1);
+    assert.equal(byModel['gpt-6-sol'].calls, 1);
+    assert.deepEqual(byModel['gpt-6-sol'].outcomes, outcomesOf({ gptRan: 1 }));
+  });
+});
+
+test('collect は末尾の読み取りで結果が確定した起動でも、後で先頭を読んだ読み取りの監査行でモデルを取る', () => {
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['tail-then-head', 'impl-standard']],
+      [['tail-then-head', [
+        invokeEvent('2026-09-10T10:01:00.000Z', 'h1', BG_TEXT),
+        toolEvent('2026-09-10T10:12:00.000Z', 'h2', 'Bash', { command: 'tail -n 5 "$TMP/tasks/bgx123abc.output"' },
+          '最終報告\ncodex-agent: result=ok'),
+        toolEvent('2026-09-10T10:13:00.000Z', 'h3', 'Read', { file_path: 'docs/gpt-agents.md' }, auditText('doc-model')),
+        toolEvent('2026-09-10T10:14:00.000Z', 'h4', 'Bash', { command: 'head -n 3 "$TMP/tasks/bgx123abc.output"' },
+          'codex-agent: agent=impl-standard model=gpt-6-luna effort=high\ncodex-agent: run=r1 pid=1'),
+      ]]],
+    );
+
+    const metrics = collect(files, ...RANGE_0910);
+
+    assert.deepEqual(Object.keys(metrics.byAgent['impl-standard'].byModel), ['gpt-6-luna']);
+    assert.deepEqual(metrics.byAgent['impl-standard'].outcomes, outcomesOf({ gptRan: 1 }));
+  });
+});
+
+test('collect は起動の無い委譲を Claude 側のみ、監査行の無い委譲を監査行なし、紐付かない委譲を紐付け不明に分ける', () => {
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['claude-only', 'impl-hard'], ['sim-only', 'impl-hard'], ['no-audit', 'impl-hard'], ['unlinked', 'impl-hard']],
+      [
+        ['claude-only', [bashEvent({ timestamp: '2026-09-10T10:01:00.000Z', id: 'c1', command: 'echo 自分で実装した' })]],
+        ['sim-only', [simulatedEvent('2026-09-10T10:01:00.000Z', 'c2')]],
+        ['no-audit', [invokeEvent('2026-09-10T10:01:00.000Z', 'c3', 'codex-agent: result=ok')]],
+      ],
+    );
+
+    const metrics = collect(files, ...RANGE_0910);
+
+    const byModel = metrics.byAgent['impl-hard'].byModel;
+    assert.deepEqual(byModel['Claude 側のみ'], {
+      calls: 2, outcomes: outcomesOf({ notInvoked: 2 }), mainEdited: 0, mainEditJudged: 2,
+    });
+    assert.deepEqual(byModel['監査行なし'], {
+      calls: 1, outcomes: outcomesOf({ gptRan: 1 }), mainEdited: 0, mainEditJudged: 1,
+    });
+    assert.deepEqual(byModel['紐付け不明'], {
+      calls: 1, outcomes: outcomesOf({}), mainEdited: 0, mainEditJudged: 0,
+    });
+  });
+});
+
+test('collect は報告後、最初のコミットより前のメインの編集を数え、コミット後の編集だけなら数えない', () => {
+  withTempDir((root) => {
+    const handback = (id) => [id, [
+      invokeEvent('2026-09-10T10:01:00.000Z', `${id}-run`, auditText('gpt-6-luna')),
+      handbackEvent('2026-09-10T10:10:00.000Z', '実装した'),
+    ]];
+    const files = [
+      ...writeSession(root, 'edit-before-commit', [
+        agentEvent('2026-09-10T10:00:00.000Z', 'before', 'impl-standard', '依頼'),
+        editEvent('2026-09-10T10:20:00.000Z', 'e1', 'D:\\repo\\src\\a.js'),
+        bashEvent({ timestamp: '2026-09-10T10:30:00.000Z', id: 'k1', command: 'git commit -m 修正' }),
+      ], [handback('before')]),
+      ...writeSession(root, 'edit-after-commit', [
+        agentEvent('2026-09-10T10:00:00.000Z', 'after', 'impl-hard', '依頼'),
+        toolEvent('2026-09-10T10:15:00.000Z', 'k2', 'PowerShell',
+          { command: 'git -C "D:/repo dir" commit -m @\'\n修正\n\'@' }, ''),
+        editEvent('2026-09-10T10:20:00.000Z', 'e2', 'D:/repo/src/a.js', 'Write'),
+      ], [handback('after')]),
+    ];
+
+    const metrics = collect(files, ...RANGE_0910);
+
+    assert.equal(metrics.byAgent['impl-standard'].mainEdited, 1);
+    assert.equal(metrics.byAgent['impl-standard'].mainEditJudged, 1);
+    assert.equal(metrics.byAgent['impl-standard'].byModel['gpt-6-luna'].mainEdited, 1);
+    assert.equal(metrics.byAgent['impl-hard'].mainEdited, 0);
+    assert.equal(metrics.byAgent['impl-hard'].mainEditJudged, 1);
+  });
+});
+
+test('collect は成果物でない場所への編集を報告後の編集に数えない', () => {
+  withTempDir((root) => {
+    const excluded = [
+      'E:\\Temp\\claude\\proj\\session\\scratchpad\\prompt.md',
+      'C:/Users/someone/.claude/projects/proj/memory/phase.md',
+      'C:\\Users\\someone\\.claude\\projects\\proj\\memory\\MEMORY.md',
+      'D:/repo/MEMORY.md',
+      'D:/repo/TASKS.md',
+      'D:/repo/docs/plans/plan.md',
+      'D:\\repo\\.cross-review\\round-1-triage.md',
+      'C:/Users/someone/AppData/Local/Temp/x.txt',
+      '/tmp/x.txt',
+    ];
+    const files = writeSession(root, 'excluded', [
+      agentEvent('2026-09-10T10:00:00.000Z', 'excluded-call', 'impl-standard', '依頼'),
+      ...excluded.map((p, i) => editEvent(`2026-09-10T10:2${i}:00.000Z`, `x${i}`, p)),
+    ], [['excluded-call', [handbackEvent('2026-09-10T10:10:00.000Z', '実装した')]]]);
+
+    const metrics = collect(files, ...RANGE_0910);
+
+    assert.equal(metrics.byAgent['impl-standard'].mainEdited, 0);
+    assert.equal(metrics.byAgent['impl-standard'].mainEditJudged, 1);
+  });
+});
+
+test('collect は並行した委譲で、1 つの編集を報告が遅いほうの委譲にだけ結び付ける', () => {
+  withTempDir((root) => {
+    const files = writeSession(root, 'parallel', [
+      agentEvent('2026-09-10T10:00:00.000Z', 'early', 'impl-standard', '依頼 A'),
+      agentEvent('2026-09-10T10:01:00.000Z', 'late', 'impl-hard', '依頼 B'),
+      editEvent('2026-09-10T10:30:00.000Z', 'p1', 'D:/repo/src/a.js'),
+    ], [
+      ['early', [handbackEvent('2026-09-10T10:10:00.000Z', '実装した')]],
+      ['late', [handbackEvent('2026-09-10T10:20:00.000Z', '実装した')]],
+    ]);
+
+    const metrics = collect(files, ...RANGE_0910);
+
+    assert.equal(metrics.byAgent['impl-standard'].mainEdited, 0);
+    assert.equal(metrics.byAgent['impl-standard'].mainEditJudged, 1);
+    assert.equal(metrics.byAgent['impl-hard'].mainEdited, 1);
+    assert.equal(metrics.byAgent['impl-hard'].mainEditJudged, 1);
+  });
+});
+
+test('collect は報告後の編集の窓を次の実装担当への委譲の開始と 4 時間の上限で閉じる', () => {
+  withTempDir((root) => {
+    const reported = (id) => [id, [handbackEvent('2026-09-10T10:10:00.000Z', '実装した')]];
+    const files = [
+      // 次の委譲は紐付かないので報告の時刻を持たず、編集は前の委譲に結び付く。それでも窓の外である。
+      ...writeSession(root, 'next-delegation', [
+        agentEvent('2026-09-10T10:00:00.000Z', 'first', 'impl-standard', '依頼'),
+        agentEvent('2026-09-10T10:20:00.000Z', 'next', 'impl-light', '依頼'),
+        editEvent('2026-09-10T10:30:00.000Z', 'w1', 'D:/repo/src/a.js'),
+      ], [reported('first')]),
+      ...writeSession(root, 'over-limit', [
+        agentEvent('2026-09-10T10:00:00.000Z', 'over', 'impl-hard', '依頼'),
+        editEvent('2026-09-10T14:10:00.001Z', 'w2', 'D:/repo/src/a.js'),
+      ], [reported('over')]),
+      ...writeSession(root, 'within-limit', [
+        agentEvent('2026-09-10T10:00:00.000Z', 'within', 'impl-hard', '依頼'),
+        editEvent('2026-09-10T14:09:59.999Z', 'w3', 'D:/repo/src/a.js'),
+      ], [reported('within')]),
+    ];
+
+    const metrics = collect(files, ...RANGE_0910);
+
+    assert.equal(metrics.byAgent['impl-standard'].mainEdited, 0);
+    assert.equal(metrics.byAgent['impl-standard'].mainEditJudged, 1);
+    assert.equal(metrics.byAgent['impl-light'].mainEditJudged, 0);
+    assert.equal(metrics.byAgent['impl-hard'].mainEdited, 1);
+    assert.equal(metrics.byAgent['impl-hard'].mainEditJudged, 2);
+  });
+});
+
+test('collect は「進行中」の報告を報告の時刻に使わず、後の報告か追加の指示の直前の時刻を使う', () => {
+  withTempDir((root) => {
+    const inProgress = handbackEvent('2026-09-10T10:05:00.000Z', '進行中\ncodex-agent: agent=impl-standard');
+    const instructed = [
+      inProgress,
+      assistantTextEvent('2026-09-10T10:06:00.000Z', '待っています'),
+      coordinatorEvent('2026-09-10T10:06:30.000Z', 'codex-agent の状態確認'),
+      assistantTextEvent('2026-09-10T10:07:00.000Z', '完了しました'),
+      coordinatorEvent('2026-09-10T10:30:00.000Z', '追加の修正をお願いします'),
+      assistantTextEvent('2026-09-10T10:40:00.000Z', '追加の修正をしました'),
+    ];
+    const files = [
+      // 後の報告(10:20)が報告の時刻なので、10:10 の編集は報告より前である。
+      ...writeSession(root, 'later-handback', [
+        agentEvent('2026-09-10T10:00:00.000Z', 'later', 'impl-standard', '依頼'),
+        editEvent('2026-09-10T10:10:00.000Z', 'h1', 'D:/repo/src/a.js'),
+      ], [['later', [
+        inProgress,
+        coordinatorEvent('2026-09-10T10:06:00.000Z', 'codex-agent の状態確認'),
+        handbackEvent('2026-09-10T10:20:00.000Z', '実装した'),
+      ]]]),
+      // 状態確認は追加の指示に数えないので、報告の時刻は 10:30 の指示の直前の 10:07 である。
+      ...writeSession(root, 'before-status-check', [
+        agentEvent('2026-09-10T10:00:00.000Z', 'status', 'impl-hard', '依頼'),
+        editEvent('2026-09-10T10:06:45.000Z', 'h2', 'D:/repo/src/a.js'),
+      ], [['status', instructed]]),
+      // 記録の最後(10:40)ではなく、追加の指示の直前(10:07)を報告の時刻とする。
+      ...writeSession(root, 'before-instruction', [
+        agentEvent('2026-09-10T10:00:00.000Z', 'instruction', 'impl-light', '依頼'),
+        editEvent('2026-09-10T10:20:00.000Z', 'h3', 'D:/repo/src/a.js'),
+      ], [['instruction', instructed]]),
+    ];
+
+    const metrics = collect(files, ...RANGE_0910);
+
+    assert.equal(metrics.byAgent['impl-standard'].mainEdited, 0);
+    assert.equal(metrics.byAgent['impl-standard'].mainEditJudged, 1);
+    assert.equal(metrics.byAgent['impl-hard'].mainEdited, 0);
+    assert.equal(metrics.byAgent['impl-hard'].mainEditJudged, 1);
+    assert.equal(metrics.byAgent['impl-light'].mainEdited, 1);
+    assert.equal(metrics.byAgent['impl-light'].mainEditJudged, 1);
+  });
+});
+
+test('テキスト出力と --json は委譲のモデル別の内訳を出す', () => {
+  withTempDir((root) => {
+    writeDelegations(
+      root,
+      [['cli-model', 'impl-standard']],
+      [['cli-model', [invokeEvent('2026-09-10T10:01:00.000Z', 'cm1', auditText('gpt-6-luna'))]]],
+    );
+
+    const json = runMetrics(root, ['--since', '2026-09-10', '--until', '2026-09-10', '--json']);
+    const text = runMetrics(root, ['--since', '2026-09-10', '--until', '2026-09-10']);
+
+    assert.equal(json.status, 0, json.stderr);
+    const row = JSON.parse(json.stdout).委譲の内訳['impl-standard'];
+    assert.equal(row.byModel['gpt-6-luna'].calls, 1);
+    assert.equal(row.mainEditJudged, 1);
+    assert.equal(text.status, 0, text.stderr);
+    assert.ok(text.stdout.includes('委譲のモデル別の内訳(委譲 / GPT で実行 / 報告後にメインが編集 / 編集を判定できた委譲 / 定義とモデル)'));
+    assert.match(text.stdout, /^\s+1\s+1\s+0\s+1\s+impl-standard gpt-6-luna$/m);
   });
 });
