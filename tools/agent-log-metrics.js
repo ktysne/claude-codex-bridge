@@ -133,7 +133,8 @@
 //     1 つの編集は、同じ親の記録の委譲のうち報告の時刻がその編集より前で最も遅いもの 1 件にだけ結び付ける。
 //     並行した委譲で同じ編集を二重に数えないためである。
 //     スクラッチパッド、メモリー、相互レビューの記録、計画、一時ディレクトリ、TASKS* への編集は成果物でないので数えない。
-//     委譲は最初に読んだ記録で数えるので、窓と編集もその記録の中で判定する。窓は委譲の期間の後ろへはみ出してよい。
+//     窓と編集は、委譲を含む親の記録のうち最後の時刻が最も遅いものの中で判定する。会話を引き継いだセッションの記録は、
+//     前の記録を写したうえで続くためである。窓は委譲の期間の後ろへはみ出してよい。
 //     この値はレビュー指摘への対応のような担当の成果物の修正以外も含みうる、上限側の目安である。
 
 const fs = require('fs');
@@ -688,26 +689,28 @@ const MAIN_EDIT_WINDOW_MS = 4 * 3600 * 1000;
 const IN_PROGRESS_REPORT = '進行中';
 const COORDINATOR_MESSAGE = 'The coordinator sent a message';
 const STATUS_CHECK_MESSAGE = 'codex-agent の状態確認';
-// 子の git commit の判定に、`git -C <ディレクトリ> commit` の形を足したもの。
-const MAIN_COMMIT = /git(?: -C (?:"[^"]*"|'[^']*'|\S+))* commit/;
+// 子の git commit の判定に、`git -C <ディレクトリ> commit` と `git -c <設定> commit` の形を足したもの。
+const MAIN_COMMIT = /git(?: -[Cc] (?:"[^"]*"|'[^']*'|\S+))* commit/;
 
 // 本文が「進行中」で始まる報告は、Codex の実行中にターンを終えた未完了の報告である。
 const isInProgressReport = (message) => message.replace(/^[#>*_\-\s]+/, '').startsWith(IN_PROGRESS_REPORT);
 
 // 追加の指示の本文は、案内の 1 行目の後ろに続く。状態の確認だけを求める指示は追加の指示に数えない。
+// 本文の後ろには配送側の定型文の段落が付くことがあるので、本文の最初の空でない行で見分ける。
 function isAdditionalInstruction(text) {
   if (!text.startsWith(COORDINATOR_MESSAGE)) return false;
-  const newline = text.indexOf('\n');
-  const body = newline < 0 ? '' : text.slice(newline + 1).trim();
-  return body !== STATUS_CHECK_MESSAGE;
+  const firstBodyLine = text.split('\n').slice(1).map((line) => line.trim()).find((line) => line !== '');
+  return firstBodyLine !== STATUS_CHECK_MESSAGE;
 }
 
 // 成果物でない場所への編集か。区切りは `/` にそろえて比べる。
+// メモリーは `.claude/projects/` の下にあるので、その除外に含まれる。
 function isNonArtifactPath(filePath) {
   const p = normalizeClue(filePath);
+  const lower = p.toLowerCase();
   const name = p.slice(p.lastIndexOf('/') + 1);
-  return p.includes('scratchpad')
-    || ['/.claude/projects/', '/memory/', '/.cross-review/', '/docs/plans/', '/Temp/', '/tmp/'].some((part) => p.includes(part))
+  return ['/scratchpad/', '/.claude/projects/', '/.cross-review/', '/docs/plans/'].some((part) => p.includes(part))
+    || ['/temp/', '/tmp/'].some((part) => lower.includes(part))
     || name === 'MEMORY.md'
     || name.startsWith('TASKS');
 }
@@ -782,6 +785,7 @@ function collect(files, start, endExclusive, options = {}) {
     subByToolUse: new Map(),
     agentCalls: [],
     parentTimelines: new Map(),
+    parentFilesByCall: new Map(),
   };
 
   const markConcurrentWriter = (inv) => {
@@ -827,7 +831,7 @@ function collect(files, start, endExclusive, options = {}) {
     let firstReportTime = null;
     let beforeInstructionTime = null;
     let lastLineTime = null;
-    // 親の記録の委譲、編集、コミットを時刻とともに持つ。窓と編集は委譲を数えた記録の中で判定する。
+    // 親の記録の委譲、編集、コミットを時刻とともに持つ。窓と編集は 1 本の記録の中で判定する。
     const timeline = { delegations: [], implStarts: [], edits: [], commits: [] };
     let lineNo = 0;
 
@@ -965,6 +969,9 @@ function collect(files, start, endExclusive, options = {}) {
         }
         if (c.type === 'tool_use' && c.name === 'Agent' && !isSub(file)) {
           const st = String((c.input && c.input.subagent_type) || '');
+          const filesWithCall = m.parentFilesByCall.get(c.id) || [];
+          if (!filesWithCall.includes(file)) filesWithCall.push(file);
+          m.parentFilesByCall.set(c.id, filesWithCall);
           // 会話を引き継いだセッションの記録には、前のセッションの委譲が同じ識別子で写っている。
           if (WRAPPER_AGENTS.includes(st) && inRange(o.timestamp, at) && once(`agent|${c.id}`)) {
             m.agentCalls.push({
@@ -1056,6 +1063,7 @@ function collect(files, start, endExclusive, options = {}) {
         m.subByToolUse.set(link.toolUseId, list);
       }
     } else {
+      timeline.lastTime = lastLineTime === null ? -Infinity : lastLineTime;
       m.parentTimelines.set(file, timeline);
     }
   }
@@ -1065,13 +1073,19 @@ function collect(files, start, endExclusive, options = {}) {
     const times = (m.subByToolUse.get(toolUseId) || []).map((s) => s.reportTime).filter((t) => t !== null);
     return times.length > 0 ? Math.max(...times) : null;
   };
+  // 引き継いだセッションの記録は前の記録を写したうえで続くので、委譲を含む親の記録のうち最後の時刻が最も遅いもので判定する。
+  // 同じ時刻ならパスの辞書順で先のものを使い、読む順で値が変わらないようにする。
+  const judgeFileOf = (call) => (m.parentFilesByCall.get(call.toolUseId) || [call.file])
+    .filter((f) => m.parentTimelines.has(f))
+    .sort((a, b) => (m.parentTimelines.get(b).lastTime - m.parentTimelines.get(a).lastTime) || (a < b ? -1 : a > b ? 1 : 0))[0];
   const mainEditedByFile = new Map();
   const mainEditedOf = (call) => {
-    if (!mainEditedByFile.has(call.file)) {
-      const timeline = m.parentTimelines.get(call.file);
-      mainEditedByFile.set(call.file, timeline ? judgeMainEdits(timeline, reportTimeOf) : new Map());
+    const file = judgeFileOf(call);
+    if (file === undefined) return null;
+    if (!mainEditedByFile.has(file)) {
+      mainEditedByFile.set(file, judgeMainEdits(m.parentTimelines.get(file), reportTimeOf));
     }
-    const judged = mainEditedByFile.get(call.file);
+    const judged = mainEditedByFile.get(file);
     return judged.has(call.toolUseId) ? judged.get(call.toolUseId) : null;
   };
   const emptyCounts = () => ({
@@ -1133,6 +1147,7 @@ function collect(files, start, endExclusive, options = {}) {
   delete m.subByToolUse;
   delete m.agentCalls;
   delete m.parentTimelines;
+  delete m.parentFilesByCall;
   return m;
 }
 

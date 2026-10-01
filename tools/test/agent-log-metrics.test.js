@@ -1751,8 +1751,15 @@ function editEvent(timestamp, id, filePath, name = 'Edit') {
   return event(timestamp, { type: 'tool_use', name, id, input: { file_path: filePath } });
 }
 
+// 配送側は本文の後ろに定型文の段落を付ける。
 function coordinatorEvent(timestamp, body) {
-  return { timestamp, message: { role: 'user', content: `The coordinator sent a message while you were working:\n${body}` } };
+  return {
+    timestamp,
+    message: {
+      role: 'user',
+      content: `The coordinator sent a message while you were working:\n${body}\n\nAddress this before completing your current task.`,
+    },
+  };
 }
 
 // 親の記録 1 本と、その委譲の子の記録を書く。セッションごとに別の親の記録になる。
@@ -1898,17 +1905,65 @@ test('collect は成果物でない場所への編集を報告後の編集に数
       'D:/repo/docs/plans/plan.md',
       'D:\\repo\\.cross-review\\round-1-triage.md',
       'C:/Users/someone/AppData/Local/Temp/x.txt',
+      'C:\\temp\\x.txt',
       '/tmp/x.txt',
     ];
-    const files = writeSession(root, 'excluded', [
-      agentEvent('2026-09-10T10:00:00.000Z', 'excluded-call', 'impl-standard', '依頼'),
-      ...excluded.map((p, i) => editEvent(`2026-09-10T10:2${i}:00.000Z`, `x${i}`, p)),
-    ], [['excluded-call', [handbackEvent('2026-09-10T10:10:00.000Z', '実装した')]]]);
+    const files = [
+      ...writeSession(root, 'excluded', [
+        agentEvent('2026-09-10T10:00:00.000Z', 'excluded-call', 'impl-standard', '依頼'),
+        ...excluded.map((p, i) => editEvent(`2026-09-10T10:${20 + i}:00.000Z`, `x${i}`, p)),
+      ], [['excluded-call', [handbackEvent('2026-09-10T10:10:00.000Z', '実装した')]]]),
+      // 名前が除外の語を含むだけの、リポジトリの中の成果物は数える。
+      ...writeSession(root, 'artifact-named-memory', [
+        agentEvent('2026-09-10T10:00:00.000Z', 'memory-src', 'impl-hard', '依頼'),
+        editEvent('2026-09-10T10:20:00.000Z', 'y1', 'D:/repo/src/memory/pool.cpp'),
+      ], [['memory-src', [handbackEvent('2026-09-10T10:10:00.000Z', '実装した')]]]),
+    ];
 
     const metrics = collect(files, ...RANGE_0910);
 
     assert.equal(metrics.byAgent['impl-standard'].mainEdited, 0);
     assert.equal(metrics.byAgent['impl-standard'].mainEditJudged, 1);
+    assert.equal(metrics.byAgent['impl-hard'].mainEdited, 1);
+  });
+});
+
+test('collect は git -c を挟んだコミットも窓の中のコミットとして扱う', () => {
+  withTempDir((root) => {
+    const files = writeSession(root, 'commit-with-config', [
+      agentEvent('2026-09-10T10:00:00.000Z', 'config-commit', 'impl-standard', '依頼'),
+      bashEvent({ timestamp: '2026-09-10T10:15:00.000Z', id: 'c1', command: 'git -c core.autocrlf=false commit -m 修正' }),
+      editEvent('2026-09-10T10:20:00.000Z', 'c2', 'D:/repo/src/a.js'),
+    ], [['config-commit', [handbackEvent('2026-09-10T10:10:00.000Z', '実装した')]]]);
+
+    const metrics = collect(files, ...RANGE_0910);
+
+    assert.equal(metrics.byAgent['impl-standard'].mainEdited, 0);
+    assert.equal(metrics.byAgent['impl-standard'].mainEditJudged, 1);
+  });
+});
+
+test('collect は引き継いだセッションの記録で、委譲を含む最も新しい記録の編集を判定する', () => {
+  withTempDir((root) => {
+    const sessionDir = path.join(root, 'project', 'continued');
+    const call = agentEvent('2026-09-10T10:00:00.000Z', 'carried', 'impl-standard', '依頼');
+    // 前のセッションは報告の前に終わり、引き継いだ記録が同じ委譲を写したうえで編集する。
+    const older = writeJsonl(logPath(sessionDir, 'a-old.jsonl'), [call]);
+    const newer = writeJsonl(logPath(sessionDir, 'b-new.jsonl'), [
+      call,
+      editEvent('2026-09-10T10:20:00.000Z', 'n1', 'D:/repo/src/a.js'),
+    ]);
+    const child = writeJsonl(logPath(sessionDir, 'b-new', 'subagents', 'agent-0.jsonl'), [
+      handbackEvent('2026-09-10T10:10:00.000Z', '実装した'),
+    ]);
+    writeMeta(child, 'carried');
+
+    for (const files of [[older, newer, child], [newer, older, child]]) {
+      const metrics = collect(files, ...RANGE_0910);
+
+      assert.equal(metrics.byAgent['impl-standard'].calls, 1);
+      assert.equal(metrics.byAgent['impl-standard'].mainEdited, 1);
+    }
   });
 });
 
