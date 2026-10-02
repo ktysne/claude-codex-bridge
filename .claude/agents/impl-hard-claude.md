@@ -1,8 +1,8 @@
 ---
 name: impl-hard-claude
 description: 'メインセッションは直接選ばない。窓口の impl-hard が `再委譲: impl-hard-claude` を報告した後か、依頼文の最初の行に `委譲: Claude 側で実装` を置いて impl-hard の区分の実装を Claude 側で行うときだけ使う。'
-model: claude-opus-5-5
-effort: medium
+model: "claude-sonnet-5-5"
+effort: "high"
 disallowedTools: Agent
 ---
 

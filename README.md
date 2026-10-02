@@ -19,7 +19,7 @@ Claude Code から Codex CLI を、用途別のサブエージェントとして
 ```text
 Claude Code(メインセッション)
 ├─ パターン 1(1 アカウント、実装用だけ)
-│   ├─ impl-hard        .claude/agents/impl-hard.md(既定は codex_model 未設定で impl-hard-claude へ再委譲)
+│   ├─ impl-hard        .claude/agents/impl-hard.md
 │   ├─ impl-light       .claude/agents/impl-light.md
 │   ├─ impl-standard    .claude/agents/impl-standard.md
 │   │   └─ CODEX_HOME=~/.codex
@@ -37,8 +37,7 @@ Claude Code(メインセッション)
 
 各定義は Claude 側の `.claude/agents/<name>.md` から `~/.claude/tools/codex-agent.sh` を呼び出し、スクリプトが `.claude/gpt-agents/<name>.md` を読んで `codex exec` を組み立てる。
 `impl-hard`、`impl-light`、`impl-standard` は Codex へ転送するだけの窓口で、自分では実装しない。
-`impl-light` と `impl-standard` は既定で GPT 側に実装を委ね、GPT 側が使えないときだけ、Claude 側の実装用の `impl-light-claude` か `impl-standard-claude` への再委譲を報告する。メインセッションがその定義へ委譲し直す。
-`impl-hard` も同じ手順を持つが、出荷時の GPT 側定義には `codex_model` を書いていないため、既定では `impl-hard-claude` への再委譲を経て Claude 側のモデルが実装する。GPT 側に委ねたい場合は `.claude/gpt-agents/impl-hard.md` に `codex_model` を設定する。
+3 区分とも出荷時から GPT 側に実装を委ね、GPT 側が使えないときは該当区分の `impl-*-claude` への再委譲を報告する。メインセッションがその定義へ委譲し直す。
 `codex-review` と `codex-subagent` は非 0 終了時にフォールバックせず、終了コードと出力末尾を返して停止する。
 Codex 側のモデル、effort、認証ホームは `.claude/gpt-agents/` の定義に集約する([docs/gpt-agents.md](docs/gpt-agents.md))。
 
@@ -88,7 +87,7 @@ Claude Code から Codex を呼ぶ入口は、このリポジトリのほかに 
 |---|---|
 | `.claude/agents/codex-review.md` | レビュー用サブエージェントの定義。`~/.claude/tools/codex-agent.sh` への転送を持つ |
 | `.claude/agents/codex-subagent.md` | 実装補助用サブエージェントの定義。`~/.claude/tools/codex-agent.sh` への転送を持つ |
-| `.claude/agents/impl-hard.md` | 高難度実装の窓口。`~/.claude/tools/codex-agent.sh` への転送と、Claude 側へ倒すときの再委譲の報告を持つ。既定は `codex_model` 未設定で、毎回 `impl-hard-claude` への再委譲を報告する |
+| `.claude/agents/impl-hard.md` | 高難度実装の窓口。`~/.claude/tools/codex-agent.sh` への転送と、Claude 側へ倒すときの再委譲の報告を持つ |
 | `.claude/agents/impl-light.md` | 小規模実装の窓口。転送と再委譲の報告を持つ |
 | `.claude/agents/impl-standard.md` | 一般実装の窓口。転送と再委譲の報告を持つ |
 | `.claude/agents/impl-hard-claude.md` | 高難度実装を Claude 側で行う定義。委譲を止める指定のある依頼だけを実装する |
@@ -96,7 +95,7 @@ Claude Code から Codex を呼ぶ入口は、このリポジトリのほかに 
 | `.claude/agents/impl-standard-claude.md` | 一般実装を Claude 側で行う定義。委譲を止める指定のある依頼だけを実装する |
 | `.claude/gpt-agents/codex-review.md` | レビュー用 GPT 側定義。Codex のモデル、effort、認証ホーム、サンドボックス、役割文を持つ |
 | `.claude/gpt-agents/codex-subagent.md` | 実装補助用 GPT 側定義。Codex のモデル、effort、認証ホーム、サンドボックス、役割文を持つ |
-| `.claude/gpt-agents/impl-hard.md` | 高難度実装用 GPT 側定義。出荷時は `codex_model` を書かず GPT 側へ委譲しない。設定すれば他の定義と同じく Codex のモデル、effort、認証ホーム、サンドボックス、役割文を持つ |
+| `.claude/gpt-agents/impl-hard.md` | 高難度実装用 GPT 側定義。Codex のモデル、effort、認証ホーム、サンドボックス、役割文を持つ |
 | `.claude/gpt-agents/impl-light.md` | 小規模実装用 GPT 側定義。Codex のモデル、effort、認証ホーム、サンドボックス、役割文を持つ |
 | `.claude/gpt-agents/impl-standard.md` | 一般実装用 GPT 側定義。Codex のモデル、effort、認証ホーム、サンドボックス、役割文を持つ |
 | `tools/codex-agent.sh` | GPT 側の定義を読んで `codex exec` を組み立てるスクリプト |
