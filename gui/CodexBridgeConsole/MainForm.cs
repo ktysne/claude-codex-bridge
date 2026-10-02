@@ -59,15 +59,16 @@ namespace CodexBridgeConsole
         private Label _codexVersionLabel;
         private Label _codexCatalogLabel;
         private CheckBox _codexEnabledCheckBox;
-        private ComboBox _hardModelComboBox;
-        private ComboBox _hardEffortComboBox;
+        private ClaudeRow _hardGatewayRow;
+        private ClaudeRow _hardClaudeRow;
         private GptRow _hardGptRow;
-        private ComboBox _standardModelComboBox;
-        private ComboBox _standardEffortComboBox;
+        private ClaudeRow _standardGatewayRow;
+        private ClaudeRow _standardClaudeRow;
         private GptRow _standardGptRow;
-        private ComboBox _lightModelComboBox;
-        private ComboBox _lightEffortComboBox;
+        private ClaudeRow _lightGatewayRow;
+        private ClaudeRow _lightClaudeRow;
         private GptRow _lightGptRow;
+        private ClaudeRow[] _claudeRows;
         private GptRow[] _subagentGptRows;
         private CodexAgentRow[] _codexAgentRows;
         private GptRow[] _reviewGptRows;
@@ -355,15 +356,21 @@ namespace CodexBridgeConsole
 
         private TableLayoutPanel BuildDefinitionsTable()
         {
-            TableLayoutPanel table = CreateDefinitionTable(5, 4);
+            TableLayoutPanel table = CreateDefinitionTable(7, 4);
 
             int claudeModelWidth = ComboBoxWidth(
                 _choices.ClaudeModels,
+                _settings.ImplHard.GatewayModel,
+                _settings.ImplStandard.GatewayModel,
+                _settings.ImplLight.GatewayModel,
                 _settings.ImplHard.ClaudeModel,
                 _settings.ImplStandard.ClaudeModel,
                 _settings.ImplLight.ClaudeModel);
             int claudeEffortWidth = ComboBoxWidth(
                 _choices.ClaudeEfforts,
+                _settings.ImplHard.GatewayEffort,
+                _settings.ImplStandard.GatewayEffort,
+                _settings.ImplLight.GatewayEffort,
                 _settings.ImplHard.ClaudeEffort,
                 _settings.ImplStandard.ClaudeEffort,
                 _settings.ImplLight.ClaudeEffort);
@@ -379,44 +386,65 @@ namespace CodexBridgeConsole
                 _settings.ImplStandard.CodexReasoningEffort,
                 _settings.ImplLight.CodexReasoningEffort);
 
+            // 見出しは 2 行にして列幅を中身の幅に近づける。1 行にすると見出しの長さで画面が横に広がる。
             table.Controls.Add(CreateHeaderLabel("区分"), 0, 0);
-            table.Controls.Add(CreateHeaderLabel("Claude モデル (フォールバック時)"), 1, 0);
-            table.Controls.Add(CreateHeaderLabel("effort (フォールバック時)"), 2, 0);
-            table.Controls.Add(CreateHeaderLabel("GPT モデル"), 3, 0);
-            table.Controls.Add(CreateHeaderLabel("effort"), 4, 0);
+            table.Controls.Add(CreateHeaderLabel("窓口\nClaude モデル"), 1, 0);
+            table.Controls.Add(CreateHeaderLabel("窓口\neffort"), 2, 0);
+            table.Controls.Add(CreateHeaderLabel("Claude 側で実装するとき\nClaude モデル"), 3, 0);
+            table.Controls.Add(CreateHeaderLabel("Claude 側で実装するとき\neffort"), 4, 0);
+            table.Controls.Add(CreateHeaderLabel("GPT 側\nGPT モデル"), 5, 0);
+            table.Controls.Add(CreateHeaderLabel("GPT 側\neffort"), 6, 0);
 
-            table.Controls.Add(CreateRowLabel("hard"), 0, 1);
-            _hardModelComboBox = CreateComboBox(claudeModelWidth);
-            _hardEffortComboBox = CreateComboBox(claudeEffortWidth);
-            _hardGptRow = CreateGptRow(gptModelWidth, gptEffortWidth, true);
-            _hardModelComboBox.TextChanged += ClaudeModelTextChanged;
-            table.Controls.Add(_hardModelComboBox, 1, 1);
-            table.Controls.Add(_hardEffortComboBox, 2, 1);
-            table.Controls.Add(_hardGptRow.ModelComboBox, 3, 1);
-            table.Controls.Add(_hardGptRow.EffortComboBox, 4, 1);
+            AddSubagentRow(table, 1, "hard", claudeModelWidth, claudeEffortWidth, gptModelWidth, gptEffortWidth,
+                out _hardGatewayRow, out _hardClaudeRow, out _hardGptRow);
+            AddSubagentRow(table, 2, "standard", claudeModelWidth, claudeEffortWidth, gptModelWidth, gptEffortWidth,
+                out _standardGatewayRow, out _standardClaudeRow, out _standardGptRow);
+            AddSubagentRow(table, 3, "light", claudeModelWidth, claudeEffortWidth, gptModelWidth, gptEffortWidth,
+                out _lightGatewayRow, out _lightClaudeRow, out _lightGptRow);
 
-            table.Controls.Add(CreateRowLabel("standard"), 0, 2);
-            _standardModelComboBox = CreateComboBox(claudeModelWidth);
-            _standardEffortComboBox = CreateComboBox(claudeEffortWidth);
-            _standardGptRow = CreateGptRow(gptModelWidth, gptEffortWidth, true);
-            _standardModelComboBox.TextChanged += ClaudeModelTextChanged;
-            table.Controls.Add(_standardModelComboBox, 1, 2);
-            table.Controls.Add(_standardEffortComboBox, 2, 2);
-            table.Controls.Add(_standardGptRow.ModelComboBox, 3, 2);
-            table.Controls.Add(_standardGptRow.EffortComboBox, 4, 2);
-
-            table.Controls.Add(CreateRowLabel("light"), 0, 3);
-            _lightModelComboBox = CreateComboBox(claudeModelWidth);
-            _lightEffortComboBox = CreateComboBox(claudeEffortWidth);
-            _lightGptRow = CreateGptRow(gptModelWidth, gptEffortWidth, true);
-            _lightModelComboBox.TextChanged += ClaudeModelTextChanged;
-            table.Controls.Add(_lightModelComboBox, 1, 3);
-            table.Controls.Add(_lightEffortComboBox, 2, 3);
-            table.Controls.Add(_lightGptRow.ModelComboBox, 3, 3);
-            table.Controls.Add(_lightGptRow.EffortComboBox, 4, 3);
-
+            _claudeRows = new[]
+            {
+                _hardGatewayRow,
+                _standardGatewayRow,
+                _lightGatewayRow,
+                _hardClaudeRow,
+                _standardClaudeRow,
+                _lightClaudeRow
+            };
             _subagentGptRows = new[] { _hardGptRow, _standardGptRow, _lightGptRow };
             return table;
+        }
+
+        private void AddSubagentRow(
+            TableLayoutPanel table,
+            int rowIndex,
+            string label,
+            int claudeModelWidth,
+            int claudeEffortWidth,
+            int gptModelWidth,
+            int gptEffortWidth,
+            out ClaudeRow gatewayRow,
+            out ClaudeRow claudeRow,
+            out GptRow gptRow)
+        {
+            gatewayRow = CreateClaudeRow(claudeModelWidth, claudeEffortWidth);
+            claudeRow = CreateClaudeRow(claudeModelWidth, claudeEffortWidth);
+            gptRow = CreateGptRow(gptModelWidth, gptEffortWidth, true);
+
+            table.Controls.Add(CreateRowLabel(label), 0, rowIndex);
+            table.Controls.Add(gatewayRow.ModelComboBox, 1, rowIndex);
+            table.Controls.Add(gatewayRow.EffortComboBox, 2, rowIndex);
+            table.Controls.Add(claudeRow.ModelComboBox, 3, rowIndex);
+            table.Controls.Add(claudeRow.EffortComboBox, 4, rowIndex);
+            table.Controls.Add(gptRow.ModelComboBox, 5, rowIndex);
+            table.Controls.Add(gptRow.EffortComboBox, 6, rowIndex);
+        }
+
+        private ClaudeRow CreateClaudeRow(int modelWidth, int effortWidth)
+        {
+            var row = new ClaudeRow(CreateComboBox(modelWidth), CreateComboBox(effortWidth));
+            row.ModelComboBox.TextChanged += ClaudeModelTextChanged;
+            return row;
         }
 
         // codex_home と codex_sandbox は表示だけにする。書き換えない理由は
@@ -822,26 +850,23 @@ namespace CodexBridgeConsole
             _loadingControls = true;
             try
             {
-                SetComboItems(_hardModelComboBox, _choices.ClaudeModels, _settings.ImplHard.ClaudeModel);
-                SetComboItems(
-                    _hardEffortComboBox,
-                    _choices.ClaudeEffortsFor(_settings.ImplHard.ClaudeModel),
-                    _settings.ImplHard.ClaudeEffort);
+                LoadClaudeRow(_hardGatewayRow, _settings.ImplHard.GatewayModel, _settings.ImplHard.GatewayEffort);
+                LoadClaudeRow(_hardClaudeRow, _settings.ImplHard.ClaudeModel, _settings.ImplHard.ClaudeEffort);
                 LoadGptRow(_hardGptRow, _settings.ImplHard.CodexModel, _settings.ImplHard.CodexReasoningEffort);
-                SetComboItems(_standardModelComboBox, _choices.ClaudeModels, _settings.ImplStandard.ClaudeModel);
-                SetComboItems(
-                    _standardEffortComboBox,
-                    _choices.ClaudeEffortsFor(_settings.ImplStandard.ClaudeModel),
+                LoadClaudeRow(
+                    _standardGatewayRow,
+                    _settings.ImplStandard.GatewayModel,
+                    _settings.ImplStandard.GatewayEffort);
+                LoadClaudeRow(
+                    _standardClaudeRow,
+                    _settings.ImplStandard.ClaudeModel,
                     _settings.ImplStandard.ClaudeEffort);
                 LoadGptRow(
                     _standardGptRow,
                     _settings.ImplStandard.CodexModel,
                     _settings.ImplStandard.CodexReasoningEffort);
-                SetComboItems(_lightModelComboBox, _choices.ClaudeModels, _settings.ImplLight.ClaudeModel);
-                SetComboItems(
-                    _lightEffortComboBox,
-                    _choices.ClaudeEffortsFor(_settings.ImplLight.ClaudeModel),
-                    _settings.ImplLight.ClaudeEffort);
+                LoadClaudeRow(_lightGatewayRow, _settings.ImplLight.GatewayModel, _settings.ImplLight.GatewayEffort);
+                LoadClaudeRow(_lightClaudeRow, _settings.ImplLight.ClaudeModel, _settings.ImplLight.ClaudeEffort);
                 LoadGptRow(_lightGptRow, _settings.ImplLight.CodexModel, _settings.ImplLight.CodexReasoningEffort);
                 _codexEnabledCheckBox.Checked = _settings.CodexEnabled;
                 LoadCodexHomeItems();
@@ -869,6 +894,12 @@ namespace CodexBridgeConsole
             // 読み直しで認証ホームが変わっていることがある。表示中の取得結果を持ち越さない。
             RefreshCodexHomeInfo();
             RefreshReviewCodexHomeInfo();
+        }
+
+        private void LoadClaudeRow(ClaudeRow row, string model, string effort)
+        {
+            SetComboItems(row.ModelComboBox, _choices.ClaudeModels, model);
+            SetComboItems(row.EffortComboBox, _choices.ClaudeEffortsFor(model), effort);
         }
 
         private void LoadGptRow(GptRow row, string model, string effort)
@@ -1175,12 +1206,13 @@ namespace CodexBridgeConsole
             bool available = _settings.SubagentTabAvailable;
             _codexEnabledCheckBox.Enabled = available;
             _codexHomeComboBox.Enabled = available;
-            _hardModelComboBox.Enabled = available;
-            _hardEffortComboBox.Enabled = available;
-            _standardModelComboBox.Enabled = available;
-            _standardEffortComboBox.Enabled = available;
-            _lightModelComboBox.Enabled = available;
-            _lightEffortComboBox.Enabled = available;
+
+            // 窓口の欄は GPT 経路のトグルに連動させない。経路が無効でも窓口が起動され、再委譲を報告するためである。
+            for (int i = 0; i < _claudeRows.Length; i++)
+            {
+                _claudeRows[i].ModelComboBox.Enabled = available;
+                _claudeRows[i].EffortComboBox.Enabled = available;
+            }
 
             bool gptEnabled = available && _codexEnabledCheckBox.Checked;
             for (int i = 0; i < _subagentGptRows.Length; i++)
@@ -1213,18 +1245,9 @@ namespace CodexBridgeConsole
         {
             if (_settings.SubagentTabAvailable)
             {
-                _settings.ImplHard.ClaudeModel = _hardModelComboBox.Text;
-                _settings.ImplHard.ClaudeEffort = _hardEffortComboBox.Text;
-                _settings.ImplHard.CodexModel = GptModelValue(_hardGptRow);
-                _settings.ImplHard.CodexReasoningEffort = _hardGptRow.EffortComboBox.Text;
-                _settings.ImplStandard.ClaudeModel = _standardModelComboBox.Text;
-                _settings.ImplStandard.ClaudeEffort = _standardEffortComboBox.Text;
-                _settings.ImplStandard.CodexModel = GptModelValue(_standardGptRow);
-                _settings.ImplStandard.CodexReasoningEffort = _standardGptRow.EffortComboBox.Text;
-                _settings.ImplLight.ClaudeModel = _lightModelComboBox.Text;
-                _settings.ImplLight.ClaudeEffort = _lightEffortComboBox.Text;
-                _settings.ImplLight.CodexModel = GptModelValue(_lightGptRow);
-                _settings.ImplLight.CodexReasoningEffort = _lightGptRow.EffortComboBox.Text;
+                SyncAgentSettings(_settings.ImplHard, _hardGatewayRow, _hardClaudeRow, _hardGptRow);
+                SyncAgentSettings(_settings.ImplStandard, _standardGatewayRow, _standardClaudeRow, _standardGptRow);
+                SyncAgentSettings(_settings.ImplLight, _lightGatewayRow, _lightClaudeRow, _lightGptRow);
                 _settings.CodexEnabled = _codexEnabledCheckBox.Checked;
                 _settings.CodexHome = SelectedCodexHome();
             }
@@ -1239,6 +1262,16 @@ namespace CodexBridgeConsole
                     agent.CodexReasoningEffort = row.Gpt.EffortComboBox.Text;
                 }
             }
+        }
+
+        private static void SyncAgentSettings(AgentSettings agent, ClaudeRow gateway, ClaudeRow claude, GptRow gpt)
+        {
+            agent.GatewayModel = gateway.ModelComboBox.Text;
+            agent.GatewayEffort = gateway.EffortComboBox.Text;
+            agent.ClaudeModel = claude.ModelComboBox.Text;
+            agent.ClaudeEffort = claude.EffortComboBox.Text;
+            agent.CodexModel = GptModelValue(gpt);
+            agent.CodexReasoningEffort = gpt.EffortComboBox.Text;
         }
 
         private void CodexHomeComboBox_SelectedIndexChanged(object sender, EventArgs e)
@@ -1735,41 +1768,38 @@ namespace CodexBridgeConsole
 
         private ComboBox ClaudeEffortComboBoxFor(ComboBox modelComboBox)
         {
-            if (modelComboBox == _hardModelComboBox)
+            for (int i = 0; i < _claudeRows.Length; i++)
             {
-                return _hardEffortComboBox;
+                if (_claudeRows[i].ModelComboBox == modelComboBox)
+                {
+                    return _claudeRows[i].EffortComboBox;
+                }
             }
 
-            return modelComboBox == _standardModelComboBox
-                ? _standardEffortComboBox
-                : _lightEffortComboBox;
+            throw new ArgumentOutOfRangeException(nameof(modelComboBox));
         }
 
         // 選択肢を差し替えると必要な幅が変わる。列は中身の希望する大きさで決まるため、幅を計算し直す。
+        // 窓口と Claude 側の実装用の列は同じ選択肢を持つため、幅も揃える。
         private void ResizeClaudeComboBoxes()
         {
-            int modelWidth = ComboBoxWidth(
-                _choices.ClaudeModels,
-                _hardModelComboBox.Text,
-                _standardModelComboBox.Text,
-                _lightModelComboBox.Text);
-
+            var modelTexts = new string[_claudeRows.Length];
+            var effortTexts = new string[_claudeRows.Length];
             var efforts = new List<string>();
-            CollectItems(efforts, _hardEffortComboBox);
-            CollectItems(efforts, _standardEffortComboBox);
-            CollectItems(efforts, _lightEffortComboBox);
-            int effortWidth = ComboBoxWidth(
-                efforts,
-                _hardEffortComboBox.Text,
-                _standardEffortComboBox.Text,
-                _lightEffortComboBox.Text);
+            for (int i = 0; i < _claudeRows.Length; i++)
+            {
+                modelTexts[i] = _claudeRows[i].ModelComboBox.Text;
+                effortTexts[i] = _claudeRows[i].EffortComboBox.Text;
+                CollectItems(efforts, _claudeRows[i].EffortComboBox);
+            }
 
-            SetComboBoxWidth(_hardModelComboBox, modelWidth);
-            SetComboBoxWidth(_standardModelComboBox, modelWidth);
-            SetComboBoxWidth(_lightModelComboBox, modelWidth);
-            SetComboBoxWidth(_hardEffortComboBox, effortWidth);
-            SetComboBoxWidth(_standardEffortComboBox, effortWidth);
-            SetComboBoxWidth(_lightEffortComboBox, effortWidth);
+            int modelWidth = ComboBoxWidth(_choices.ClaudeModels, modelTexts);
+            int effortWidth = ComboBoxWidth(efforts, effortTexts);
+            for (int i = 0; i < _claudeRows.Length; i++)
+            {
+                SetComboBoxWidth(_claudeRows[i].ModelComboBox, modelWidth);
+                SetComboBoxWidth(_claudeRows[i].EffortComboBox, effortWidth);
+            }
         }
 
         private void GptModelTextChanged(object sender, EventArgs e)
@@ -2033,6 +2063,20 @@ namespace CodexBridgeConsole
         }
 
         // GPT モデルと effort の欄の組。目録は行の認証ホームで引くため、行ごとに持つ。
+        // サブエージェントタブの Claude 側の 1 組。窓口と Claude 側の実装用の定義で同じ形を使う。
+        private sealed class ClaudeRow
+        {
+            public ClaudeRow(ComboBox modelComboBox, ComboBox effortComboBox)
+            {
+                ModelComboBox = modelComboBox;
+                EffortComboBox = effortComboBox;
+            }
+
+            public ComboBox ModelComboBox { get; private set; }
+
+            public ComboBox EffortComboBox { get; private set; }
+        }
+
         private sealed class GptRow
         {
             public GptRow(ComboBox modelComboBox, ComboBox effortComboBox, bool allowsUnset)
