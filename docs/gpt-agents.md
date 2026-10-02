@@ -1,7 +1,8 @@
 # GPT 系サブエージェントを Codex CLI で動かす
 
 Claude Code のサブエージェント `impl-hard`、`impl-light`、`impl-standard`、`codex-review`、`codex-subagent` は、ユーザ側の `~/.claude/tools/codex-agent.sh` を通じて Codex CLI を呼び出す。
-`impl-hard`、`impl-light`、`impl-standard` は、GPT 側が未設定、未導入、無効化、または GPT 側の事情で使えないときだけ、サブエージェント自身が Claude として実装する。
+`impl-hard`、`impl-light`、`impl-standard` は Codex へ転送するだけの窓口であり、自分では実装しない。
+GPT 側が未設定、未導入、無効化、または GPT 側の事情で使えないときは、Claude 側の実装用の定義(`impl-hard-claude`、`impl-light-claude`、`impl-standard-claude`)への再委譲を報告し、メインセッションがそちらへ委譲し直す。
 
 ## 目的
 
@@ -9,10 +10,11 @@ Claude Code のサブエージェント `impl-hard`、`impl-light`、`impl-stand
 2 アカウントで運用する場合は、通常利用とレビューに使うアカウントを既定ホーム(`~/.codex`)に置き、サブエージェント専用のアカウントに `~/.codex-subagent` を与える。
 ここでいう**通常利用**は Codex CLI の対話、VS Code や Chrome の Codex 拡張、Claude Code の Codex プラグインを指し、**サブエージェント**は GPT 側へ実装を委譲する `impl-hard`、`impl-light`、`impl-standard`、`codex-subagent` の 4 定義を指す。
 `codex-review` も Claude Code からはサブエージェントとして起動されるが、役割はレビューなので既定ホーム側に置く。
+Claude 側の実装用の 3 定義は Codex を呼ばないので、この文書で「5 定義」「4 定義」と数えるときには含めない。
 どの定義を配置するかは、実装用の委譲だけを使うパターンと、レビュー用も使うパターンで選べる。
 
 委譲の対象は `impl-hard`、`impl-light`、`impl-standard`、`codex-review`、`codex-subagent` の 5 つである。
-このうち `impl-hard`(`.claude/agents/impl-hard.md`)だけは、出荷時の GPT 側定義(`.claude/gpt-agents/impl-hard.md`)に `codex_model` を書いておらず、既定では GPT 側へ委譲せず、定義に書いた Claude 側のモデルが担う。
+このうち `impl-hard`(`.claude/agents/impl-hard.md`)だけは、出荷時の GPT 側定義(`.claude/gpt-agents/impl-hard.md`)に `codex_model` を書いておらず、既定では GPT 側へ委譲せず、窓口の再委譲の報告を経て、`impl-hard-claude`(`.claude/agents/impl-hard-claude.md`)に書いた Claude 側のモデルが担う。
 設計判断を伴う変更や、正しさの検証が難しい変更は、メインセッションと同じ Claude 系に留めたほうが、監査で挙動の食い違いを追いやすいためである。
 GPT 側に委ねたい場合は、`.claude/gpt-agents/impl-hard.md` に `codex_model` と `codex_reasoning_effort` を書く(設定コンソールからも設定できる)。
 
@@ -26,24 +28,29 @@ Claude Code(メインセッション)
 ├─ codex-subagent                    .claude/agents/codex-subagent.md
 │   └─ ~/.claude/tools/codex-agent.sh  .claude/gpt-agents/codex-subagent.md を読む
 │       └─ codex exec                 CODEX_HOME=~/.codex、workspace-write
-├─ impl-hard                         .claude/agents/impl-hard.md
+├─ impl-hard(窓口)                 .claude/agents/impl-hard.md
 │   └─ ~/.claude/tools/codex-agent.sh  .claude/gpt-agents/impl-hard.md を読む(既定は codex_model 未設定)
 │       └─ codex exec                 codex_model を設定した場合のみ実行。CODEX_HOME=~/.codex、workspace-write
-├─ impl-light                        .claude/agents/impl-light.md
+├─ impl-light(窓口)                .claude/agents/impl-light.md
 │   └─ ~/.claude/tools/codex-agent.sh  .claude/gpt-agents/impl-light.md を読む
 │       └─ codex exec                 CODEX_HOME=~/.codex、workspace-write
-└─ impl-standard                     .claude/agents/impl-standard.md
-    └─ ~/.claude/tools/codex-agent.sh  .claude/gpt-agents/impl-standard.md を読む
-        └─ codex exec                 CODEX_HOME=~/.codex、workspace-write
+├─ impl-standard(窓口)             .claude/agents/impl-standard.md
+│   └─ ~/.claude/tools/codex-agent.sh  .claude/gpt-agents/impl-standard.md を読む
+│       └─ codex exec                 CODEX_HOME=~/.codex、workspace-write
+├─ impl-hard-claude                  .claude/agents/impl-hard-claude.md(Claude 側で実装する。Codex を呼ばない)
+├─ impl-light-claude                 .claude/agents/impl-light-claude.md(同上)
+└─ impl-standard-claude              .claude/agents/impl-standard-claude.md(同上)
 ```
 
 この図の `CODEX_HOME` は 1 アカウント運用の値である。
 2 アカウント運用の値は「認証ホームの割り当て」の表に従う。
 
 `codex-review` と `codex-subagent` は同じ形で、サンドボックスだけが異なる。
-`impl-hard`、`impl-light`、`impl-standard` も同じ形で、定義に書くモデルと effort だけが異なる。
-`impl-hard` は出荷時の GPT 側定義に `codex_model` を書いていないため、既定ではこの経路を使わず Claude 側にフォールバックする。
-Claude 側と GPT 側のモデルと effort は各定義のフロントマターが正であり、設定コンソール([gui.md](gui.md))や手編集で変えられる。
+`impl-hard`、`impl-light`、`impl-standard` の窓口も同じ形で、GPT 側の定義に書くモデルと effort だけが異なる。
+`impl-hard` は出荷時の GPT 側定義に `codex_model` を書いていないため、既定ではこの経路を使わず、窓口が `impl-hard-claude` への再委譲を報告する。
+窓口と Claude 側の実装用の定義を分けるのは、effort が定義のフロントマターでしか決まらず、Agent ツールの呼び出しで上書きできないためである。
+1 つの定義が転送と実装を兼ねると、GPT 側で実行する大半の委譲でも、Claude 側の実装に耐えるモデルと effort で転送役を起動することになる。
+窓口、Claude 側の実装用、GPT 側のモデルと effort は各定義のフロントマターが正であり、設定コンソール([gui.md](gui.md))や手編集で変えられる。
 そのため、この文書には具体値を書かない。
 
 5 つのサブエージェントは依頼を受けると、最初に Bash で `bash ~/.claude/tools/codex-agent.sh --new-prompt <定義名> "<スクラッチパッド>"` を実行して置き場を払い出す。
@@ -60,14 +67,15 @@ Claude 側と GPT 側のモデルと effort は各定義のフロントマター
 通常転送で標準入力が通常ファイルのときは、監査行の直後に `codex-agent: prompt-file=<パス> sha256=<64 桁の 16 進>` を出し、`--wait` の報告にも含める。
 パイプやヒアストリングから読んだ場合、またはパス取得やハッシュ計算が失敗した場合は、この行を出さない。
 スクリプトが成功すれば、その出力をそのまま返す。
-`impl-hard`、`impl-light`、`impl-standard` は、GPT 側が未導入、無効化、未設定、または GPT 側の事情で実行できないときだけ、サブエージェント自身が Claude として実装する。
+`impl-hard`、`impl-light`、`impl-standard` の窓口は、GPT 側が未導入、無効化、未設定、または GPT 側の事情で実行できないときは、Claude 側の実装用の定義への再委譲を報告して停止する(「再委譲の流れ」)。
 `codex-review` と `codex-subagent` は、非 0 終了時にフォールバックせず、終了コードと出力末尾を報告して停止する。
 
 ## ラッパー役の定義の道具を絞る
 
-`codex-review` と `codex-subagent` は、依頼文を Codex へ転送するだけの定義である。
+`codex-review`、`codex-subagent` と、窓口の `impl-hard`、`impl-light`、`impl-standard` は、依頼文を Codex へ転送するだけの定義である。
+この文書では、この 5 定義をラッパー役の定義と呼ぶ。
 定義の文言で禁じても、ラッパーを実行せずに Bash で差分やファイルを読み、自分でレビューや調査をする例が測定で見つかった。
-そこで 2 定義のフロントマターに PreToolUse のフックを置き、Bash と Write を転送に要る形だけに道具の側で絞る。
+そこで 5 定義のフロントマターに PreToolUse のフックを置き、Bash と Write を転送に要る形だけに道具の側で絞る。
 
 ```yaml
 hooks:
@@ -78,7 +86,7 @@ hooks:
           command: "node \"$HOME/.claude/tools/codex-agent-hook.js\" codex-review || exit 2"
 ```
 
-`codex-subagent` の定義では、引数を `codex-subagent` にする。
+ほかの定義では、引数をそれぞれの定義名にする。
 フックの本体は `tools/codex-agent-hook.js` で、標準入力にフックの JSON を受け取る。
 許すときは何も出さずに終了コード 0 で終わり、拒否するときは標準エラーに 1 段落の理由を書いて終了コード 2 で終わる。
 PreToolUse のフックが 2 で終わると、権限のモードに関係なくツールの呼び出しが止まり、理由がモデルへ渡る。
@@ -111,12 +119,13 @@ bash ~/.claude/tools/codex-agent.sh --header-of "<出力ファイル>"
 - その親ディレクトリ(祖父母)の名前が `scratchpad` か、そのパスが `/.claude/codex-agent/prompts` で終わる。
 
 Bash と Write 以外のツール、JSON として読めない入力、`tool_name` か `tool_input` の無い入力も拒否する。
-フックの引数が `codex-review` と `codex-subagent` のどちらでもないときも拒否する。
+フックの引数がラッパー役の定義名(`tools/codex-agent-hook.js` の `WRAPPER_AGENTS`)のどれでもないときも拒否する。
 
 **フックが起動できないときは拒否する。**
 command の末尾の `|| exit 2` は、node が無い、`~/.claude/tools/codex-agent-hook.js` が無いといった理由でフック自体が失敗したとき、終了コードを 2 に揃える。
 2 以外の終了コードでは、Claude Code はツールの呼び出しを止めないためである。
-そのため、フックのスクリプトより先に定義だけを配ると、2 定義の Bash と Write はすべて拒否される。
+そのため、フックのスクリプトより先に定義だけを配ると、ラッパー役の定義の Bash と Write はすべて拒否される。
+窓口の名前を知らない古いフックのまま新しい窓口の定義を配った場合も、引数の検査で同じく拒否される。
 
 **効く条件。**
 フロントマターの `hooks` は、そのサブエージェントの実行中だけ効く。
@@ -129,16 +138,19 @@ worktree で動くときは、worktree ではなく元のリポジトリのフ�
 フックのコマンドは、Claude Code が Git Bash を見つけられるときに bash で実行される。
 見つけられない環境では PowerShell で実行され、フックの拒否が止める拒否として扱われなかった(同じ版で確認)。
 その環境では Bash ツール自体が使えないが、Write は絞られない。
+フックが効かない環境に備えて、5 定義の本文にも、転送以外のことをしないと書いている。
 
 **拒否されたときの定義の振る舞い。**
-2 定義は、フックの拒否を権限判定の拒否と同じく扱う。
+5 定義は、フックの拒否を権限判定の拒否と同じく扱う。
 拒否の文言(`codex-agent-hook:` で始まる)をそのまま報告して停止し、別の形で試し直したり、自分で調べたりしない。
+窓口の 3 定義は、`--new-prompt`、依頼文の Write、転送の 1 行が拒否されたときは、拒否の文言を添えて再委譲を報告する(「再委譲の流れ」)。
+`--wait` と `--header-of` が拒否されたときは、Codex が動き続けている可能性があるため再委譲せず、拒否の文言と出力ファイルのパスを報告して停止する。
 Bash ツールがラッパーを背景へ移したときは、出力ファイルを読む代わりに `--header-of` で実行 ID を取る(「フォールバックの条件と終了コード」の「完了を待つ」)。
 「進行中」の報告には、`--header-of` が返した行(監査行、`prompt-file=`、`run=`、`log=`、警告の行)を添える。`not-found` のときは出力ファイルのパスを添える。
 
 ## 実装担当に許す操作
 
-`impl-hard`、`impl-light`、`impl-standard`、`codex-subagent` と、それらが委譲する GPT 側の実行が行うのは、作業ツリーの変更と検証までである。
+窓口の `impl-hard`、`impl-light`、`impl-standard`、Claude 側の実装用の `impl-hard-claude`、`impl-light-claude`、`impl-standard-claude`、`codex-subagent` と、それらが委譲する GPT 側の実行が行うのは、作業ツリーの変更と検証までである。
 コミット、push、git の履歴やブランチを変える操作、PR や Issue への投稿は、依頼文が求めても行わない。
 これらは、メインセッションが差分を読み、検証コマンドを再実行して監査したうえで行う。
 依頼文による例外を設けないのは、メインセッションが書いた依頼文だけで実装担当の権限が増える構成を避けるためである。
@@ -151,7 +163,10 @@ GPT への委譲を止めて Claude 側で実装させたいときは、依頼�
 理由: <委譲を止める理由>
 ```
 
-最初の空でない行がこの指定である依頼では、`impl-hard`、`impl-light`、`impl-standard` は `codex-agent.sh` を呼ばずに自分で実装し、報告の冒頭に「委譲の指定により Claude 側で実装した」と書いて、指定の行と理由の行を添える。
+この指定を置いた依頼は、区分に対応する `impl-*-claude` へ委譲する。
+`impl-*-claude` は `codex-agent.sh` を呼ばずに自分で実装し、報告の冒頭に「委譲の指定により Claude 側で実装した」と書いて、指定の行と理由の行を添える。
+指定の無い依頼を受けた `impl-*-claude` は、実装せず「窓口の impl-* へ委譲し直すこと」と報告して止まる。GPT 側を試さないまま Claude 側で実装しないためである。
+指定を置いた依頼を窓口へ送った場合は、窓口が `codex-agent.sh` を呼ばずに再委譲を報告する。
 指定として認めるのは、最初の空でない行にあるこの書き方だけである。
 依頼文の途中やコードブロックの中にある同じ行は指定として扱わない。
 このリポジトリでは定義や文書そのものにこの行が書かれているため、それらを引用した依頼で委譲が止まらないようにするためである。
@@ -159,11 +174,11 @@ GPT への委譲を止めて Claude 側で実装させたいときは、依頼�
 書き方を 1 つに決めておくのは、表現が揺れると、実装担当が定義の「必ず GPT 側へ委譲を試みる」と依頼文のどちらに従うかを毎回裁定することになるためである。
 
 依頼の種類ごとの担当と、実装担当が行う操作は次のとおりである。
-同じ表を 3 つの Claude 側定義にも載せている。
+`impl-*-claude` の 3 定義には、指定の無い依頼を受けたときの行を足した同じ趣旨の表を載せている。
 
 | 依頼 | 実装の担当 | 行う操作 |
 |---|---|---|
-| 通常の依頼 | GPT 側。使えなければ Claude 側 | 作業ツリーの変更と検証 |
+| 通常の依頼 | GPT 側。使えなければ、窓口の再委譲の報告を経て Claude 側 | 作業ツリーの変更と検証 |
 | 最初の空でない行が `委譲: Claude 側で実装` の依頼 | Claude 側 | 作業ツリーの変更と検証 |
 | コミットを求める依頼 | 上の 2 行と同じ | 作業ツリーの変更と検証。コミットは行わず、行っていないことを報告に書く |
 | push、PR の作成、PR や Issue への投稿を求める依頼 | 上の 2 行と同じ | 作業ツリーの変更と検証。求められた操作は行わず、行っていないことを報告に書く |
@@ -204,30 +219,34 @@ GPT 側の定義(`.claude/gpt-agents/<name>.md`)で使うキーは次の 5 つ�
 承認方針はスクリプトが `-c approval_policy=never` で固定し、フロントマターや呼び出し側の `config.toml` では変えられない。
 このスクリプトは非対話の委譲専用で承認を返す相手がいないため、承認待ちで止まる余地を残さない。
 
-Claude 側の定義(`.claude/agents/<name>.md`)のフロントマターは、Claude Code の通常のサブエージェント定義と同じ `name`、`description`、`model`、`effort` に、`disallowedTools` を加えたものである。
-`impl-hard`、`impl-light`、`impl-standard` は `disallowedTools: Agent` で Agent ツールを外している。
+Claude 側の定義(`.claude/agents/<name>.md`)のフロントマターは、Claude Code の通常のサブエージェント定義と同じ `name`、`description`、`model`、`effort` に、道具を絞るキーを加えたものである。
+ラッパー役の 5 定義は `tools: Bash, Write` と `hooks` を持つ(「ラッパー役の定義の道具を絞る」)。
+`impl-hard-claude`、`impl-light-claude`、`impl-standard-claude` は `disallowedTools: Agent` で Agent ツールを外している。
 実装担当が別のサブエージェントを立ててそこへ委譲すると、報告が 2 段になり、メインセッションが起動していない担当の通知が届くためである。
 禁止事項の文だけでは、「委譲」を Codex CLI への依頼でなくサブエージェントへの依頼と読んだモデルを止められないので、ツールの許可で塞ぐ。
 許可リスト(`tools`)でなく `disallowedTools` を使うのは、Bash 以外に継承している MCP ツールを列挙せずに済ませるためである。
 
 ## フォールバックの条件と終了コード
 
-`impl-hard`、`impl-light`、`impl-standard` はスクリプトの終了コードでフォールバックの要否を決める。
+窓口の `impl-hard`、`impl-light`、`impl-standard` は、スクリプトの終了コードで再委譲の要否を決める。
+窓口は自分では実装も検証もしない。Claude 側で実装する必要があるときは、再委譲を報告して止まる(「再委譲の流れ」)。
 
-- **0**：Codex が完了した。出力にある Codex の最終報告をそのまま返し、Claude 側では実装しない。ただし、Codex が依頼文の検証を実行できなかった場合は、検証だけを Claude 側で実行する(「既知の制約」の「子プロセスを起こす検証は `spawn EPERM` で失敗する」)。
-- **2**：引数、定義ファイルの内容、環境の不備でスクリプトが起動しなかった。フロントマターのキー不足、effort やサンドボックスの不正値、`codex_home` の不在、作業ディレクトリの不在、端末からの起動、空の依頼文がこれにあたる。実装せず、終了コードと出力の末尾を報告して終わる。
-- **3**：GPT 側が未導入、無効化、または未設定である。`codex` コマンドが PATH に無い、`.claude/gpt-agents/<name>.md` が見つからない、`codex_enabled: false` が書かれている、`codex_model` が無いか空である、のいずれかに当たる場合である。サブエージェント自身が Claude として実装し、その旨を報告の冒頭に書く。キー名の誤記も `codex_model` の未設定と同じ経路で Claude 側へ倒れるため、報告の冒頭には `codex-agent:` の理由行をそのまま添える。
-- **75**：呼び出し側では直せない GPT 側の事情で実行できなかった。利用上限の場合は `codex-agent: result=rate-limited`、それ以外の場合は `codex-agent: result=unavailable` として理由を区別する。`unavailable` は、いまのところモデルの混雑を示す `Selected model is at capacity` と、終了コード 0 でもツール接続が一度も成立しなかった実行(`code-mode host exited during handshake`)を対象にする。利用上限なら `codex-agent: rate-limit evidence: ...`、それ以外なら `codex-agent: unavailable evidence: ...` の行に判定の根拠を残す。サブエージェント自身が Claude として実装し、フォールバックした旨を報告の冒頭に書く。
-- **権限判定で拒否された場合**：Bash の実行自体が拒否され、終了コードを得られない。
-  `impl-hard`、`impl-light`、`impl-standard` は Claude 側で実装し、報告の冒頭に「Codex の呼び出しが権限判定で拒否されたため Claude 側で実装した」と書く。
+- **0**：Codex が完了した。標準出力の全体をそのまま返す。ただし、子プロセスの起動失敗やビルドの停止の警告の行があるか、Codex が依頼文の検証を実行できなかった場合は、報告の 1 行目に「検証未実行」と書いて警告の行を添える。検証はメインセッションが監査で実行し直す(「既知の制約」の「子プロセスを起こす検証は `spawn EPERM` で失敗する」)。
+- **2**：引数、定義ファイルの内容、環境の不備でスクリプトが起動しなかった。フロントマターのキー不足、effort やサンドボックスの不正値、`codex_home` の不在、作業ディレクトリの不在、端末からの起動、空の依頼文がこれにあたる。再委譲せず、終了コードと出力の末尾を報告して終わる。
+- **3**：GPT 側が未導入、無効化、または未設定である。`codex` コマンドが PATH に無い、`.claude/gpt-agents/<name>.md` が見つからない、`codex_enabled: false` が書かれている、`codex_model` が無いか空である、のいずれかに当たる場合である。窓口は再委譲を報告し、ラッパーが出した `codex-agent:` の理由行と `result=` の行を添える。キー名の誤記も `codex_model` の未設定と同じ経路で Claude 側へ倒れるため、理由行で見分けられるようにする。
+- **75**：呼び出し側では直せない GPT 側の事情で実行できなかった。利用上限の場合は `codex-agent: result=rate-limited`、それ以外の場合は `codex-agent: result=unavailable` として理由を区別する。`unavailable` は、いまのところモデルの混雑を示す `Selected model is at capacity` と、終了コード 0 でもツール接続が一度も成立しなかった実行(`code-mode host exited during handshake`)を対象にする。利用上限なら `codex-agent: rate-limit evidence: ...`、それ以外なら `codex-agent: unavailable evidence: ...` の行に判定の根拠を残す。窓口は再委譲を報告し、根拠の行と `result=` の行を添える。
+- **権限判定で拒否された場合**：Bash の実行自体が拒否され、終了コードを得られない。フックによる拒否もこれに含む。
+  窓口は、`--new-prompt`、依頼文の Write、転送の 1 行が拒否されたときは、拒否の文言を添えて再委譲を報告する。`--wait` と `--header-of` が拒否されたときは、再委譲せずに拒否の文言を報告して停止する。
   `codex-review` と `codex-subagent` は拒否の文言をそのまま報告して停止する。
-- **その他**：Codex の終了コードをそのまま返している。実装せず、同じく終了コードと出力の末尾を報告して終わる。
+- **その他**：Codex の終了コードをそのまま返している。再委譲せず、同じく終了コードと出力の末尾を報告して終わる。
+
+依頼文の最初の空でない行が `委譲: Claude 側で実装` のときは、窓口は `codex-agent.sh` を呼ばずに再委譲を報告し、指定の行と理由の行を添える。
 
 `codex-review` と `codex-subagent` は、終了コードが 0 以外ならフォールバックしない。
 終了コードと出力の末尾を報告して停止する。
 これらは Codex への明示的なレビューまたは実装補助の依頼を扱うため、Claude 側が代行すると依頼の意味が変わるからである。
 
-引数や定義の不備は呼び出し側で直せるため終了コード 2 で止め、GPT 側の事情は呼び出し側で直せないため終了コード 75 として呼び出し側が Claude 側へフォールバックできるようにする。
+引数や定義の不備は呼び出し側で直せるため終了コード 2 で止め、GPT 側の事情は呼び出し側で直せないため終了コード 75 として、窓口が Claude 側への再委譲を報告できるようにする。
 
 Codex 自身が 75 で終了した場合だけは、レートリミットの 75 と区別できないため 1 に写像する。
 元の値は `codex-agent: result=failed exit=75` の行に残る。
@@ -332,7 +351,7 @@ bash ~/.claude/tools/codex-agent.sh --header-of "<出力ファイル>"
 出力ファイルの先頭から `codex-agent: ` で始まる行が続く間(監査行、`prompt-file=`、`run=`、`log=`、`warning=concurrent-writer` の行)だけを、行末の CR を除いて標準出力へ出し、終了コード 0 で終わる。
 最初の別の行から後は出さない。出す行は 50 行までとする。
 ファイルが無い、読めない、出す行の中に `run=` の行が無いときは、`codex-agent: not-found header-of=<出力ファイル>` を出して終了コード 2 で終わる。
-ラッパー役の 2 定義はフックで出力ファイルを読めないため、この入口で実行 ID と「進行中」の報告に添える行を取る。
+ラッパー役の 5 定義はフックで出力ファイルを読めないため、この入口で実行 ID と「進行中」の報告に添える行を取る。
 先頭の案内の行に限るのは、Codex の報告や任意のファイルの中身を、この入口で読めないようにするためである。
 `--header-of` は `--wait`、エージェント名、`-C`、`--effort` と併用できず、依頼文も読まない。
 
@@ -379,7 +398,41 @@ PowerShell が無い環境と、ログの 1 行目に `run=` の行が無い実�
 5 つのサブエージェントは `bash ~/.claude/tools/codex-agent.sh` を固定で呼び、カレントディレクトリのスクリプトを探さない。
 変数への代入や `[ -f ... ] ||` の分岐を前に付けないのは、権限の許可規則がコマンドの先頭一致で判定されるためである。
 カレントディレクトリを先に探すのは GPT 側の定義ファイル(`.claude/gpt-agents/<name>.md`)だけであり、無ければ `%USERPROFILE%\.claude\gpt-agents\` の定義を使う。
-ユーザ側の `~/.claude/tools/codex-agent.sh` が無ければ GPT 側が未導入として扱い、`impl-hard`、`impl-light`、`impl-standard` は自分で実装し、`codex-review` と `codex-subagent` は終了コードと出力の末尾を報告して停止する。
+ユーザ側の `~/.claude/tools/codex-agent.sh` が無ければ GPT 側が未導入として扱い、窓口の `impl-hard`、`impl-light`、`impl-standard` は再委譲を報告し、`codex-review` と `codex-subagent` は終了コードと出力の末尾を報告して停止する。
+
+## 再委譲の流れ
+
+窓口が再委譲を報告すると、メインセッションが Claude 側の実装用の定義へ委譲し直す。
+窓口が自分で実装しないのは、転送だけを担う安いモデルと effort で窓口を起動するためである。
+起動した後に Claude 側へ倒れる委譲は少ないので、往復が 1 回増える費用は小さい。
+
+**再委譲の報告の形。**
+窓口の報告は、1 行目が `再委譲: <定義名>-claude`(`impl-hard-claude`、`impl-light-claude`、`impl-standard-claude` のどれか)で、2 行目以降に次のどれかをそのまま置いた固定の形である。
+
+- ラッパーが出した `codex-agent:` の行(理由行、`run=`、`log=`、警告、evidence、`result=` の行)
+- 権限判定やフックによる拒否の文言
+- 依頼文の `委譲: Claude 側で実装` の指定の行と理由の行
+
+この形の報告は、`codex-agent: agent=` の監査行を含まなくても有効な報告として受け取る。
+
+**委譲し直す前に作業ツリーを確かめる。**
+終了コード 75 では、Codex が作業ツリーを途中まで書き換えてから止まっていることがある。
+メインセッションは、委譲し直す前に作業ツリーの変更の有無を確かめる。
+Codex が途中まで書いた変更があれば、捨ててから Claude 側へ渡すことを既定にする。
+GPT 側の変更に Claude 側の修正が混ざると、監査で変更の出所を見分けられなくなるためである。
+途中の変更を活かすほうが明らかに得なときは、その変更を残すことと、その扱いを依頼文に書いてから渡す。
+
+**委譲し直すときの依頼文。**
+同じ依頼文の最初の行に `委譲: Claude 側で実装` を置き、次の行を `理由:` で始めて、窓口が報告した `codex-agent:` の理由行か `result=` の行(拒否なら拒否の文言)を書く。
+開発者の指示で委譲を止めるときは、これまでどおりその理由を書く。
+`impl-*-claude` は、この指定の無い依頼を実装せず、「窓口の impl-* へ委譲し直すこと」と報告して止まる。
+
+**隔離した担当の再委譲。**
+`isolation: "worktree"` で起動した窓口が再委譲を報告したときは、作業ツリーの確かめを、窓口に割り当てられた worktree で Bash の git(`git -C <窓口の worktree>`)により行う。
+`impl-*-claude` も `isolation: "worktree"` で起動し直す。
+新しい worktree が作られるので、窓口の worktree に Codex が途中まで書いた変更は引き継がれない。これは途中の変更を捨てる既定の扱いと同じ結果になる。
+窓口の worktree は、変更を確かめた後にメインセッションが片付ける。
+隔離の検査で `codex-agent.sh` の起動が拒否された再委譲(「既知の制約」の「隔離した worktree で実装担当を動かす流れ」)では、並行が本当に要るかを先に見直す。
 
 ## 認証ホームの割り当て
 
@@ -420,7 +473,7 @@ EOF
 ## 既知の制約
 
 **1 つの worktree に同時に書き込む担当は 1 つである。**
-担当には、メインセッション、`impl-hard`、`impl-light`、`impl-standard`(Claude 側で実装する場合の実装担当自身と、委譲する GPT 側の実行)、`codex-subagent`、`npm run review:codex:fix`(ai-cross-review の `--fix`)を含む。
+担当には、メインセッション、窓口の `impl-hard`、`impl-light`、`impl-standard` が委譲する GPT 側の実行、`impl-hard-claude`、`impl-light-claude`、`impl-standard-claude`、`codex-subagent`、`npm run review:codex:fix`(ai-cross-review の `--fix`)を含む。
 担当するファイルを分けても足りないのは、ビルドの生成物、テストの実行、git の索引が worktree の中で共有されるためである。
 `codex-review` は `read-only` で動き、ファイルを書き換えないため、担当に数えない。
 GPT 側へ委譲した実行や `codex-subagent` が同じ worktree に書き込むあいだ、メインセッションはその worktree を編集しない。
@@ -458,10 +511,9 @@ This agent is isolated in the worktree <パス>, but this command runs bash in a
 これは、依頼文の語が原因の拒否(文言に `feeds bash text naming git` を含む)とは別のもので、「依頼文に git の語を入れない」規則では防げない。
 2026-09-14 から 09-17 のあいだに 6 件観測し、09-18 以降は記録に無い。Claude Code の版で検査の判定が変わった可能性があるが、確かめていない。
 拒否を受けた担当の動きは、定義の「Bash の実行そのものが権限判定で拒否された場合」の規則で決まり、担当によって違う。
-`impl-hard`、`impl-light`、`impl-standard` は Claude 側で実装し、報告の冒頭に「Codex の呼び出しが権限判定で拒否されたため Claude 側で実装した」と書いて拒否の文言を添える。
+窓口の `impl-hard`、`impl-light`、`impl-standard` は、拒否の文言を添えて再委譲を報告し、自分では作業しない。
 `codex-subagent` は文言をそのまま報告して止まり、自分では作業しない。
-前者の報告を受けたメインセッションは、Claude 側で済んだ変更を通常どおり監査する。未着手と取り違えて委譲し直すと、済んだ変更に同じ作業を重ねるためである。
-後者の報告を受けたときは、並行が本当に要るかを見直す。
+どちらの報告を受けたときも、並行が本当に要るかを見直す。
 要らなければ、隔離せずに自分の worktree で直列に委譲し直す。要るなら、隔離の代わりに担当ごとの別 worktree を用意して委譲する。
 どちらの場合も、同じ作業を続けて隔離した担当に回すかは、この見直しで決める。
 起動の形を変えて検査を避ける工夫は採らない。検査の判定がまた変われば、同じく拒否されうるためである。
@@ -557,10 +609,9 @@ CODEX_HOME="$USERPROFILE/.codex-subagent" codex sandbox -P :workspace -C <作業
 最終報告(標準出力)の本文は数えない。
 最終報告が検証の失敗を文章で引用しても、二重に数えないためである。
 
-`impl-hard`、`impl-light`、`impl-standard` は、終了コード 0 で警告の行があるか、最終報告が依頼文の検証を実行できなかったと述べている場合に、依頼文の検証コマンドだけを Claude 側で実行し、結果を報告に添える。
-コードは変えず、検証が失敗しても直さない。
-GPT 側の変更に Claude 側の修正が混ざると、メインセッションがどちらの変更かを見分けられなくなるためである。
-報告の冒頭には、検証を Claude 側で実行したことを書く。
+窓口の `impl-hard`、`impl-light`、`impl-standard` は、終了コード 0 で警告の行があるか、最終報告が依頼文の検証を実行できなかったと述べている場合に、自分では検証せず、報告の 1 行目に「検証未実行」と書いて警告の行を添える。
+メインセッションは、監査で依頼文の検証コマンドを実行し直す。
+検証が失敗したときに GPT 側の変更へ Claude 側の修正を重ねるかは、その監査で決める。窓口が修正まで行うと、メインセッションがどちらの変更かを見分けられなくなるためである。
 `codex-review` と `codex-subagent` は標準出力の全体をそのまま返すので、警告の行がそのまま報告に含まれる。検証は実行し直さない。
 
 **サンドボックスの中の MSBuild がエラー文を出さずに止まる。**
@@ -579,7 +630,7 @@ worktree の中の CMake のビルド(`cmake --build build --config Debug`)を C
 
 根拠の行には、`exited` の直前にある、Codex がコマンドを起動した行を出す。
 GPT 側の `impl-hard`、`impl-light`、`impl-standard` の定義は、サンドボックスの制約による検証の失敗を実装の失敗や止まって報告する条件として扱わず、実装を最後まで進めて「検証を実行できなかった」と報告するよう指示している。
-Claude 側の定義は、この警告の行があれば、子プロセスの起動失敗と同じく検証だけを Claude 側で実行する。
+窓口は、この警告の行があれば、子プロセスの起動失敗と同じく「検証未実行」と報告する。
 そのため依頼文では、ビルドの失敗を止まって報告する条件に書かなくてよい。
 
 **Claude Code 2.1.281 では、呼び出し側が担当を前面で起動すると、担当がターンを終えた時点で背景の Bash と Monitor の追跡が切れる。**
@@ -591,8 +642,7 @@ Claude 側の定義は、この警告の行があれば、子プロセスの起�
 **1 回の委譲は Bash ツールの上限である 10 分に収める。**
 Claude Code の版によって、Bash ツールは長時間のコマンドをバックグラウンドへ移すか、上限で打ち切る。
 バックグラウンドへ移った場合、担当は実行 ID を取り、次のコマンドを前面で実行する。
-`impl-hard`、`impl-light`、`impl-standard` は、出力ファイルの `codex-agent: run=` の行から実行 ID を取る。
-`codex-review` と `codex-subagent` は、フックで出力ファイルを読めないため、`--header-of` で取る(「ラッパー役の定義の道具を絞る」)。
+ラッパー役の 5 定義は、フックで出力ファイルを読めないため、`--header-of` で取る(「ラッパー役の定義の道具を絞る」)。
 
 ```bash
 bash ~/.claude/tools/codex-agent.sh --wait <実行 ID>
@@ -720,9 +770,9 @@ GPT 側の定義は、スクリプトを起動したカレントディレクト�
 このリポジトリで作業しているあいだは、スクリプトがユーザ側の複製、GPT 側の定義がリポジトリ側という混在で動く。
 全プロジェクトに適用するなら、次の 3 つを置く。
 配布は、ラッパーとフック(3)を定義(1)より先に行う。
-定義を先に配ると、フックのスクリプトが無いあいだはラッパー役の 2 定義の Bash と Write がすべて拒否され、`--header-of` を持たない古いラッパーでは実行 ID を取れないためである。
+定義を先に配ると、フックのスクリプトが無いか、窓口の名前を知らない古いフックのままのあいだは、ラッパー役の 5 定義の Bash と Write がすべて拒否され、`--header-of` を持たない古いラッパーでは実行 ID を取れないためである。
 
-1. `.claude/agents/` の 5 定義を `%USERPROFILE%\.claude\agents\` に置き換える。
+1. `.claude/agents/` の 8 定義(ラッパー役の 5 定義と `impl-*-claude` の 3 定義)を `%USERPROFILE%\.claude\agents\` に置き換える。
 2. `.claude/gpt-agents/` の 5 定義を `%USERPROFILE%\.claude\gpt-agents\` にコピーする。
 3. `tools/codex-agent.sh` と `tools/codex-agent-hook.js` を `%USERPROFILE%\.claude\tools\` にコピーする。
 
