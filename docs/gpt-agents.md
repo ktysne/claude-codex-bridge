@@ -26,23 +26,22 @@ Claude Code(メインセッション)
 │       └─ codex exec                 CODEX_HOME=~/.codex、read-only
 ├─ codex-subagent                    .claude/agents/codex-subagent.md
 │   └─ ~/.claude/tools/codex-agent.sh  .claude/gpt-agents/codex-subagent.md を読む
-│       └─ codex exec                 CODEX_HOME=~/.codex、workspace-write
+│       └─ codex exec                 CODEX_HOME=~/.codex-subagent、workspace-write
 ├─ impl-hard(窓口)                 .claude/agents/impl-hard.md
 │   └─ ~/.claude/tools/codex-agent.sh  .claude/gpt-agents/impl-hard.md を読む
-│       └─ codex exec                 CODEX_HOME=~/.codex、workspace-write
+│       └─ codex exec                 CODEX_HOME=~/.codex-subagent、workspace-write
 ├─ impl-light(窓口)                .claude/agents/impl-light.md
 │   └─ ~/.claude/tools/codex-agent.sh  .claude/gpt-agents/impl-light.md を読む
-│       └─ codex exec                 CODEX_HOME=~/.codex、workspace-write
+│       └─ codex exec                 CODEX_HOME=~/.codex-subagent、workspace-write
 ├─ impl-standard(窓口)             .claude/agents/impl-standard.md
 │   └─ ~/.claude/tools/codex-agent.sh  .claude/gpt-agents/impl-standard.md を読む
-│       └─ codex exec                 CODEX_HOME=~/.codex、workspace-write
+│       └─ codex exec                 CODEX_HOME=~/.codex-subagent、workspace-write
 ├─ impl-hard-claude                  .claude/agents/impl-hard-claude.md(Claude 側で実装する。Codex を呼ばない)
 ├─ impl-light-claude                 .claude/agents/impl-light-claude.md(同上)
 └─ impl-standard-claude              .claude/agents/impl-standard-claude.md(同上)
 ```
 
-この図の `CODEX_HOME` は 1 アカウント運用の値である。
-2 アカウント運用の値は「認証ホームの割り当て」の表に従う。
+1 アカウント運用では割り当てが異なるため、「認証ホームの割り当て」の表に従う。
 
 `codex-review` と `codex-subagent` は同じ形で、サンドボックスだけが異なる。
 `impl-hard`、`impl-light`、`impl-standard` の窓口も同じ形で、GPT 側の定義に書くモデルと effort だけが異なる。
@@ -478,6 +477,11 @@ EOF
 GPT 側へ委譲した実行や `codex-subagent` が同じ worktree に書き込むあいだ、メインセッションはその worktree を編集しない。
 `codex-subagent` は、カレントディレクトリが対象の worktree であれば `-C` を省いてよい。
 
+**worktree でエージェント定義を変更したとき。**
+worktree のセッションは、その worktree の `.claude/agents/` を読み込まない。
+変更をマージして元のチェックアウトとユーザ側へ配布し、Claude Code を再起動してから動作を確かめる。
+GPT 側定義は `tools/codex-agent.sh` が呼び出しごとに worktree の `.claude/gpt-agents/` を先に読み、無ければユーザ側の定義を読む。
+
 並行させたいときは、担当ごとに別 worktree を使う。
 Agent ツールの `isolation: "worktree"` でも別 worktree を用意できる。
 隔離した担当の流れは下の「隔離した worktree で実装担当を動かす流れ」に書く。
@@ -765,7 +769,8 @@ Codex の回答本文が流れる標準出力にはフィルタを掛けず、�
 GPT 側の定義は、スクリプトを起動したカレントディレクトリの定義を先に探し、無ければユーザ定義を使う。
 サブエージェントが呼ぶスクリプトはユーザ側の固定パスにあるため、リポジトリ側の `tools/codex-agent.sh` を直しても、ユーザ側へ配布するまでサブエージェントの動きは変わらない。
 `.claude/agents/` の定義も、ユーザ側へ配布するまではサブエージェントの動きが変わらない。
-配布先のディレクトリがセッション開始時から在れば、書き換えは数秒で次の委譲に反映される。そのディレクトリを新しく作った場合など、再起動が要る条件は [setup.md](setup.md) の共通手順 6 にある。
+`.claude/agents/` の定義を追加または変更したときは、Claude Code を再起動してから委譲に使う。
+再起動が必要な条件は [setup.md](setup.md) の共通手順 6 にある。
 このリポジトリで作業しているあいだは、スクリプトがユーザ側の複製、GPT 側の定義がリポジトリ側という混在で動く。
 全プロジェクトに適用するなら、次の 3 つを置く。
 配布は、ラッパーとフック(3)を定義(1)より先に行う。

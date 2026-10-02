@@ -135,16 +135,9 @@ Claude 側で実装するときのモデルと effort は、`impl-hard-claude`�
 手順 5 で追加した役割分担を有効にするため、Claude Code を再起動する。
 再起動後に表示される定義は、`impl-hard`、`impl-hard-claude` と、選んだパターンで配置したものだけになる。
 
-Claude 側定義(`.claude/agents/`)が反映される条件は、Claude Code の版によって変わる。
-2.1.273 では `~/.claude/agents/` と `<プロジェクト>/.claude/agents/` を監視しており、セッション開始時から在ったディレクトリの中でファイルを足したり直したりすると、数秒のうちに次の委譲へ反映される。
-次の 3 つの場合は監視が効かないため、再起動して読み込ませる([サブエージェントの公式文書](https://code.claude.com/docs/en/sub-agents))。
-
-- 手順 3 の配置先のディレクトリがセッション開始時に無く、そこで初めて定義を作った場合。
-- `--add-dir` や `/add-dir` で足したディレクトリの下に置いた場合。
-- `--disable-slash-commands` を付けて起動したセッションの場合。
-
-導入直後は最初の場合に当たる。
-ここで再起動しないと、`Agent type 'codex-review' not found` のように定義が見つからない失敗になる。
+エージェント定義を追加または変更したときは、Claude Code を再起動してから委譲する。
+2026-10-03 に Claude Code 2.1.287 のデスクトップアプリの Code タブで確認した範囲では、再起動前はユーザ側と元のチェックアウトにある定義の変更が反映されず、worktree の `.claude/agents/` は読み込まれなかった。
+CLI のセッションで再起動せずに変更が反映される場合があるかは確認していない。
 
 GPT 側定義(`.claude/gpt-agents/`)と `tools/codex-agent.sh` は、`codex-agent.sh` が呼び出しのたびに読む。
 `tools/codex-agent-hook.js` も、フックの起動のたびに読まれる。
