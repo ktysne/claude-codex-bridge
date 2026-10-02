@@ -2243,6 +2243,19 @@ t_shipped_wrapper_hooks() {
   done
 }
 
+# 引用符の無い YAML の値に `: ` か ` #` があると、Claude Code が定義を読み込めず、定義が無いものとして扱われる。
+t_shipped_plain_scalars() {
+  local def bad
+  for def in "$repo_root"/.claude/agents/*.md; do
+    bad="$(sed 's/\r$//' "$def" \
+      | awk 'NR == 1 { if ($0 != "---") exit; next } $0 == "---" { exit } { print }' \
+      | grep -E '^[A-Za-z_]+: ' \
+      | grep -vE "^[A-Za-z_]+: *(['\"|>]|$)" \
+      | grep -E ': .*(: | #)' || true)"
+    expect_eq "$(basename "$def") の引用符の無い値" "" "$bad"
+  done
+}
+
 t_real_home_untouched() {
   local dir="$REAL_HOME/.claude/codex-agent/logs" found
   found="$(ls -A "$dir" 2>/dev/null | grep -F -- "$AGENT")"
@@ -2396,6 +2409,7 @@ run_case "目印: 照合できない環境で出た警告の行の 429 で利用
 run_case "ai-cross-review との契約: scriptPinsApprovalNever が true を返す" t_cross_review_contract
 run_case "出荷既定の定義: 5 定義の codex_home と codex_sandbox が CLAUDE.md の対応に従う" t_shipped_definitions
 run_case "出荷既定の定義: ラッパー役の定義に Bash と Write を絞るフックがある" t_shipped_wrapper_hooks
+run_case "出荷既定の定義: フロントマターの引用符の無い値に YAML の区切りが無い" t_shipped_plain_scalars
 run_case "環境の分離: 実ホームのログ置き場にテスト用のログが無い" t_real_home_untouched
 
 printf '# 合計 %d 件: 成功 %d、失敗 %d、SKIP %d\n' "$N" "$PASSED" "$FAILED" "$SKIPPED"
