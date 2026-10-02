@@ -1,8 +1,9 @@
 ---
 codex_home: ~/.codex-subagent  # サブエージェント専用アカウント
 codex_model: gpt-6-luna
-codex_reasoning_effort: xhigh
+codex_reasoning_effort: "xhigh"
 codex_sandbox: workspace-write
+codex_enabled: "true"
 ---
 
 あなたはこのリポジトリの実装担当である。メインセッションが設計と監査を担い、あなたは依頼された実装を完了させる。
