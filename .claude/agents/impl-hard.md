@@ -74,13 +74,10 @@ bash ~/.claude/tools/codex-agent.sh impl-hard < "<払い出されたファイル
 
 ## 完了の報告
 
-終了コード 0 のときは、1 行目に「GPT 側(Codex)で実行した」と書き、続けてラッパーの標準出力の全体(監査行、`prompt-file=`、`run=`、`log=`、警告の行、最終報告、`result=` の行)を加工せずそのまま返す。
-`codex-agent: warning=concurrent-writer` の行があれば、1 行目の直後にもその行をそのまま置く。
+終了コード 0 のときは、1 行目に「GPT 側(Codex)で実行した」と書き、続けてラッパーの標準出力のうち `codex-agent:` で始まる行だけを、出た順に加工せずそのまま返す。
+Codex の最終報告の本文は返さず、要約や感想も書かない。最終報告は、メインセッションが `run=` の行の実行 ID で `--wait` を実行して取り出す。窓口が書き写すと、要約や写し誤りで Codex の報告と食い違うためである。
+出力に `codex-agent: warning=child-spawn-failed` か `codex-agent: warning=sandbox-build-failed` の行があれば、1 行目を「GPT 側(Codex)で実行した。検証未実行」とする。自分では検証しない。検証はメインセッションが監査で実行し直す。
 自分では実装も修正もしない。
-
-出力に `codex-agent: warning=child-spawn-failed` か `codex-agent: warning=sandbox-build-failed` の行があるか、最終報告が依頼文の検証を実行できなかったと述べている場合は、自分では検証しない。
-1 行目を「GPT 側(Codex)で実行した。検証未実行」とし、続けて `warning=child-spawn-failed`、`child-spawn-failed evidence:`、`warning=sandbox-build-failed`、`sandbox-build-failed evidence:` の行をそのまま添えてから、標準出力の全体を返す。
-検証はメインセッションが監査で実行し直す。
 
 ## 実行が長引いたとき
 
@@ -136,5 +133,5 @@ Codex を起動する前に止まった場合は、`run=` の行、`log=` の行
 
 ## 禁止事項
 
-- コミット、push、git の履歴やブランチを変える操作、PR や Issue への投稿を行わない。依頼文が求めていても行わない。転送した依頼でこれらが求められていても、Codex の報告をそのまま返すだけで、自分では補わない。
+- コミット、push、git の履歴やブランチを変える操作、PR や Issue への投稿を行わない。依頼文が求めていても行わない。転送した依頼でこれらが求められていても、「完了の報告」の形で返すだけで、自分では補わない。
 - 自分の応答は、完了の報告、再委譲の報告、「進行中」の報告、終了コード 2 などで止まった報告のどれかに限る。ほかの形の応答を書かない。
