@@ -14,9 +14,8 @@ Claude 側の実装用の 3 定義は Codex を呼ばないので、この文書
 どの定義を配置するかは、実装用の委譲だけを使うパターンと、レビュー用も使うパターンで選べる。
 
 委譲の対象は `impl-hard`、`impl-light`、`impl-standard`、`codex-review`、`codex-subagent` の 5 つである。
-このうち `impl-hard`(`.claude/agents/impl-hard.md`)だけは、出荷時の GPT 側定義(`.claude/gpt-agents/impl-hard.md`)に `codex_model` を書いておらず、既定では GPT 側へ委譲せず、窓口の再委譲の報告を経て、`impl-hard-claude`(`.claude/agents/impl-hard-claude.md`)に書いた Claude 側のモデルが担う。
-設計判断を伴う変更や、正しさの検証が難しい変更は、メインセッションと同じ Claude 系に留めたほうが、監査で挙動の食い違いを追いやすいためである。
-GPT 側に委ねたい場合は、`.claude/gpt-agents/impl-hard.md` に `codex_model` と `codex_reasoning_effort` を書く(設定コンソールからも設定できる)。
+`impl-hard`、`impl-light`、`impl-standard` は、出荷時から GPT 側へ実装を委譲する。
+GPT 側が未設定、未導入、無効化、または GPT 側の事情で使えないときは、窓口が該当区分の `impl-*-claude` への再委譲を報告し、メインセッションがそちらへ委譲し直す。
 
 ## 構成
 
@@ -29,8 +28,8 @@ Claude Code(メインセッション)
 │   └─ ~/.claude/tools/codex-agent.sh  .claude/gpt-agents/codex-subagent.md を読む
 │       └─ codex exec                 CODEX_HOME=~/.codex、workspace-write
 ├─ impl-hard(窓口)                 .claude/agents/impl-hard.md
-│   └─ ~/.claude/tools/codex-agent.sh  .claude/gpt-agents/impl-hard.md を読む(既定は codex_model 未設定)
-│       └─ codex exec                 codex_model を設定した場合のみ実行。CODEX_HOME=~/.codex、workspace-write
+│   └─ ~/.claude/tools/codex-agent.sh  .claude/gpt-agents/impl-hard.md を読む
+│       └─ codex exec                 CODEX_HOME=~/.codex、workspace-write
 ├─ impl-light(窓口)                .claude/agents/impl-light.md
 │   └─ ~/.claude/tools/codex-agent.sh  .claude/gpt-agents/impl-light.md を読む
 │       └─ codex exec                 CODEX_HOME=~/.codex、workspace-write
@@ -47,7 +46,6 @@ Claude Code(メインセッション)
 
 `codex-review` と `codex-subagent` は同じ形で、サンドボックスだけが異なる。
 `impl-hard`、`impl-light`、`impl-standard` の窓口も同じ形で、GPT 側の定義に書くモデルと effort だけが異なる。
-`impl-hard` は出荷時の GPT 側定義に `codex_model` を書いていないため、既定ではこの経路を使わず、窓口が `impl-hard-claude` への再委譲を報告する。
 窓口と Claude 側の実装用の定義を分けるのは、effort が定義のフロントマターでしか決まらず、Agent ツールの呼び出しで上書きできないためである。
 1 つの定義が転送と実装を兼ねると、GPT 側で実行する大半の委譲でも、Claude 側の実装に耐えるモデルと effort で転送役を起動することになる。
 窓口、Claude 側の実装用、GPT 側のモデルと effort は各定義のフロントマターが正であり、設定コンソール([gui.md](gui.md))や手編集で変えられる。

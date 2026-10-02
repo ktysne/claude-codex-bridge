@@ -52,8 +52,8 @@ codex login status
 各パターンで配置する定義は、パターンごとの追加手順に示す。
 
 `.claude/agents/impl-hard.md`、`.claude/agents/impl-hard-claude.md`、`.claude/gpt-agents/impl-hard.md` は、どのパターンでも配置する。
-`.claude/gpt-agents/impl-hard.md` は出荷時のフロントマターに `codex_model` を書いておらず、既定では GPT 側を使わず、窓口の `impl-hard` が `impl-hard-claude` への再委譲を報告して、Claude 側のモデルだけで実装する。
-GPT 側に委ねたい場合は `codex_model` と `codex_reasoning_effort` を書く(設定コンソールからも設定できる)。
+`.claude/gpt-agents/impl-hard.md` は出荷時から GPT 経路が有効であり、他の実装用定義と同じく GPT 側が使えないときに `impl-hard-claude` への再委譲を報告する。
+GPT 経路の有効状態やモデル、effort は定義ファイルを正とし、設定コンソールからも変更できる。
 次の手順で書く役割分担の表が `impl-hard` を参照するので、配置を省くと表の hard 区分を呼び出せなくなる。
 
 特定の利用先プロジェクトだけで使う場合は、Claude 側定義を `<利用先プロジェクト>/.claude/agents/` に、GPT 側定義を `<利用先プロジェクト>/.claude/gpt-agents/` に置いてもよい。
@@ -125,8 +125,7 @@ Claude Code はサブエージェント定義を呼び出せるものとして�
 値は各定義のフロントマターが正であり、設定コンソールや手編集で変えたときに表を直さずに済ませるためである。
 表の 3 定義は Codex へ転送する窓口で、窓口の値は転送役の起動にだけ使われる。
 Claude 側で実装するときのモデルと effort は、`impl-hard-claude`、`impl-light-claude`、`impl-standard-claude` の値が使われる。
-`impl-light` と `impl-standard` は既定で GPT 側へ委譲し、`impl-*-claude` は GPT 側が使えないときの再委譲で使われる。
-`impl-hard` は既定では GPT 側定義の `codex_model` が未設定のため、毎回 `impl-hard-claude` への再委譲を経て実装する。GPT 側に委ねるよう設定した場合は、他の 2 定義と同じく GPT 側が使えないときだけ再委譲する。
+3 区分とも既定で GPT 側へ委譲し、GPT 側が使えないときは該当する `impl-*-claude` への再委譲を報告する。
 パターン 2 とパターン 3 で配置する `codex-review` と `codex-subagent` は、難易度で選ぶ定義ではないため表に含めない。
 レビューや調査を Codex に依頼するときに、メインセッションが明示的に指定する。
 
@@ -190,11 +189,9 @@ bash ~/.claude/tools/codex-agent.sh impl-light --effort low <<< "Reply with exac
 bash ~/.claude/tools/codex-agent.sh impl-standard --effort low <<< "Reply with exactly: PONG-IMPL-STANDARD"
 ```
 
-`impl-hard` は既定で `codex_model` が未設定のため、`codex-agent: result=failed exit=3` と、理由が「codex_model が未設定である」ことを示す行が出ることを確認する。この経路は Codex を起動しないため利用枠を消費しない。
-`.claude/gpt-agents/impl-hard.md` に `codex_model` を設定した場合だけ、他の 2 定義と同じく監査行に `agent=impl-hard` と `sandbox=workspace-write` が出て、応答の末尾に `codex-agent: result=ok` が出ることを確認する。
-`impl-light` と `impl-standard` は、それぞれの監査行に `agent=impl-light` または `agent=impl-standard` と `sandbox=workspace-write` が出ることを確認する。
+3 定義それぞれの監査行に `agent=<定義名>` と `sandbox=workspace-write` が出て、応答の末尾に `codex-agent: result=ok` が出ることを確認する。
 `codex_home` に `~/.codex` に対応するパスが出て、各応答の末尾に `codex-agent: result=ok` が出ればよい。
-Claude Code の `Agent` ツールからも `subagent_type: impl-hard`、`subagent_type: impl-light`、`subagent_type: impl-standard` をそれぞれ指定して同じ応答を確認する(`impl-hard` は `codex_model` を設定した場合に限り Codex 側の応答を確認できる。未設定なら `再委譲: impl-hard-claude` で始まる報告が返る)。
+Claude Code の `Agent` ツールからも `subagent_type: impl-hard`、`subagent_type: impl-light`、`subagent_type: impl-standard` をそれぞれ指定して同じ応答を確認する。
 `Agent type '<定義名>' not found` のように定義が見つからないときは、手順 3 の配置と、共通手順 6 の反映条件を確認する。
 
 ## パターン 2
@@ -232,12 +229,10 @@ bash ~/.claude/tools/codex-agent.sh codex-review --effort low <<< "Reply with ex
 bash ~/.claude/tools/codex-agent.sh codex-subagent --effort low <<< "Reply with exactly: PONG-SUBAGENT"
 ```
 
-`impl-hard` は既定で `codex_model` が未設定のため、`codex-agent: result=failed exit=3` と、理由が「codex_model が未設定である」ことを示す行が出ることを確認する。
-`.claude/gpt-agents/impl-hard.md` に `codex_model` を設定した場合だけ、他の実装用定義と同じ PONG 確認をする。
-実装用の `impl-light` と `impl-standard` では、監査行に `sandbox=workspace-write` と `codex_home=...` が出ることを確認する。
+実装用の 3 定義では、監査行に `sandbox=workspace-write` と `codex_home=...` が出て、応答の末尾に `codex-agent: result=ok` が出ることを確認する。
 レビュー用の `codex-review` では `sandbox=read-only` が出ることを確認する。
 実装補助用の `codex-subagent` では `sandbox=workspace-write` が出ることを確認する。
-`impl-hard` を除く 4 つすべての応答の末尾に `codex-agent: result=ok` が出ればよい。
+5 定義すべての応答の末尾に `codex-agent: result=ok` が出ればよい。
 Claude Code の `Agent` ツールからも、窓口の 3 定義と `codex-review`、`codex-subagent` の 5 つの `subagent_type` をそれぞれ指定して確認する。
 `Agent type '<定義名>' not found` のように定義が見つからないときは、手順 3 の配置と、共通手順 6 の反映条件を確認する。
 
@@ -340,11 +335,9 @@ bash ~/.claude/tools/codex-agent.sh codex-review --effort low <<< "Reply with ex
 bash ~/.claude/tools/codex-agent.sh codex-subagent --effort low <<< "Reply with exactly: PONG-SUBAGENT"
 ```
 
-`impl-hard` は既定で `codex_model` が未設定のため、`codex-agent: result=failed exit=3` と、理由が「codex_model が未設定である」ことを示す行が出ることを確認する。
-`.claude/gpt-agents/impl-hard.md` に `codex_model` を設定した場合だけ、他の実装用定義と同じく監査行に `codex_home=.../.codex-subagent` が出て、応答の末尾に `codex-agent: result=ok` が出ることを確認する。
-`codex-review` の監査行に `codex_home=.../.codex` が出て、他の 4 定義の監査行に `codex_home=.../.codex-subagent` が出ることを確認する(`impl-hard` は `codex_model` を設定した場合に限る)。
+`codex-review` の監査行に `codex_home=.../.codex` が出て、他の 4 定義の監査行に `codex_home=.../.codex-subagent` が出ることを確認する。
 `codex-review` では `sandbox=read-only`、`codex-subagent` では `sandbox=workspace-write` が出ることを確認する。
-`impl-hard` を除く 4 つすべての応答の末尾に `codex-agent: result=ok` が出ればよい。
+5 定義すべての応答の末尾に `codex-agent: result=ok` が出ればよい。
 Claude Code の `Agent` ツールからも、窓口の 3 定義と `codex-review`、`codex-subagent` の 5 つの `subagent_type` をそれぞれ指定して確認する。
 `Agent type '<定義名>' not found` のように定義が見つからないときは、手順 3 の配置と、共通手順 6 の反映条件を確認する。
 
