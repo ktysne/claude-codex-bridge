@@ -44,21 +44,21 @@ codex login status
 
 このリポジトリの `.claude/agents/` にある必要な Claude 側定義を、`~/.claude/agents/` (`%USERPROFILE%\.claude\agents\`) にコピーする。
 必要な GPT 側定義を、`~/.claude/gpt-agents/` (`%USERPROFILE%\.claude\gpt-agents\`) にコピーする。
-`tools/codex-agent.sh` を `%USERPROFILE%\.claude\tools\` にコピーする。
-`codex-review` か `codex-subagent` を配置するパターンでは、`tools/codex-agent-hook.js` も同じ場所にコピーする。
-この 2 定義はフロントマターのフックで、このスクリプトを node で起動する。
-スクリプトか node が無いと、2 定義の Bash と Write はすべて拒否される。
+`tools/codex-agent.sh` と `tools/codex-agent-hook.js` を `%USERPROFILE%\.claude\tools\` にコピーする。
+ラッパー役の定義(窓口の `impl-hard`、`impl-light`、`impl-standard` と、`codex-review`、`codex-subagent`)は、フロントマターのフックで `codex-agent-hook.js` を node で起動する。
+スクリプトか node が無いと、これらの定義の Bash と Write はすべて拒否される。
+窓口の名前を知らない古い `codex-agent-hook.js` のまま新しい窓口の定義を置いた場合も、同じく拒否される。
 そのため、スクリプトは定義より先に置く。仕組みは [gpt-agents.md](gpt-agents.md) の「ラッパー役の定義の道具を絞る」にある。
 各パターンで配置する定義は、パターンごとの追加手順に示す。
 
-`.claude/agents/impl-hard.md` と `.claude/gpt-agents/impl-hard.md` は、どのパターンでも配置する。
-`.claude/gpt-agents/impl-hard.md` は出荷時のフロントマターに `codex_model` を書いておらず、既定では GPT 側を使わずに Claude 側のモデルだけで実装する。
+`.claude/agents/impl-hard.md`、`.claude/agents/impl-hard-claude.md`、`.claude/gpt-agents/impl-hard.md` は、どのパターンでも配置する。
+`.claude/gpt-agents/impl-hard.md` は出荷時のフロントマターに `codex_model` を書いておらず、既定では GPT 側を使わず、窓口の `impl-hard` が `impl-hard-claude` への再委譲を報告して、Claude 側のモデルだけで実装する。
 GPT 側に委ねたい場合は `codex_model` と `codex_reasoning_effort` を書く(設定コンソールからも設定できる)。
 次の手順で書く役割分担の表が `impl-hard` を参照するので、配置を省くと表の hard 区分を呼び出せなくなる。
 
 特定の利用先プロジェクトだけで使う場合は、Claude 側定義を `<利用先プロジェクト>/.claude/agents/` に、GPT 側定義を `<利用先プロジェクト>/.claude/gpt-agents/` に置いてもよい。
 この場合も、Claude 側定義が呼び出すスクリプトを `%USERPROFILE%\.claude\tools\codex-agent.sh` に置く。
-`codex-review` と `codex-subagent` のフックは、プロジェクト側に置いた定義では、そのフォルダのワークスペース信頼が無いと効かない。worktree では元のリポジトリのフォルダの信頼で判定される(詳細は [gpt-agents.md](gpt-agents.md) の「ラッパー役の定義の道具を絞る」)。
+ラッパー役の定義のフックは、プロジェクト側に置いた定義では、そのフォルダのワークスペース信頼が無いと効かない。worktree では元のリポジトリのフォルダの信頼で判定される(詳細は [gpt-agents.md](gpt-agents.md) の「ラッパー役の定義の道具を絞る」)。
 プロジェクト側の GPT 側定義は、ユーザー定義側より優先して使われる。
 
 `tools/codex-agent.sh` は行末が LF のまま配置する。
@@ -118,12 +118,15 @@ Claude Code はサブエージェント定義を呼び出せるものとして�
 - 差分などから進行が確認できる間は、待機を継続する。
 - 進捗報告がなく、差分に変化がなく、実行中の処理もない状態が継続した場合に限り、中断または再開を検討する。判断に恣意的な固定時間を設けない。
 - 各段階で同じ全テストを繰り返さない。担当中は関連するテストを実行し、変更完了後に全体検証をまとめて実施する。
+- 3 定義は Codex へ転送する窓口である。窓口が `再委譲: impl-*-claude` を報告したら、作業ツリーの変更の有無を確かめ、Codex が途中まで書いた変更は既定で捨ててから、同じ依頼文の最初の行に `委譲: Claude 側で実装`、次の行に `理由:` と窓口が報告した `codex-agent:` の行を置いて、報告に書かれた `impl-*-claude` へ委譲し直す。`impl-*-claude` は表に載せず、それ以外では選ばない。
 ```
 
 表にモデルと effort を書かない。
 値は各定義のフロントマターが正であり、設定コンソールや手編集で変えたときに表を直さずに済ませるためである。
-`impl-light` と `impl-standard` は既定で GPT 側へ委譲し、Claude 側の値はレートリミット時のフォールバックで使われる。
-`impl-hard` は既定では GPT 側定義の `codex_model` が未設定のため、Claude 側の値で実装する。GPT 側に委ねるよう設定した場合は、他の 2 定義と同じくレートリミット時のフォールバックとして Claude 側の値が使われる。
+表の 3 定義は Codex へ転送する窓口で、窓口の値は転送役の起動にだけ使われる。
+Claude 側で実装するときのモデルと effort は、`impl-hard-claude`、`impl-light-claude`、`impl-standard-claude` の値が使われる。
+`impl-light` と `impl-standard` は既定で GPT 側へ委譲し、`impl-*-claude` は GPT 側が使えないときの再委譲で使われる。
+`impl-hard` は既定では GPT 側定義の `codex_model` が未設定のため、毎回 `impl-hard-claude` への再委譲を経て実装する。GPT 側に委ねるよう設定した場合は、他の 2 定義と同じく GPT 側が使えないときだけ再委譲する。
 パターン 2 とパターン 3 で配置する `codex-review` と `codex-subagent` は、難易度で選ぶ定義ではないため表に含めない。
 レビューや調査を Codex に依頼するときに、メインセッションが明示的に指定する。
 
@@ -131,7 +134,7 @@ Claude Code はサブエージェント定義を呼び出せるものとして�
 
 `CLAUDE.md` はセッション開始時にだけ読み込まれる。
 手順 5 で追加した役割分担を有効にするため、Claude Code を再起動する。
-再起動後に表示される定義は、`impl-hard` と、選んだパターンで配置したものだけになる。
+再起動後に表示される定義は、`impl-hard`、`impl-hard-claude` と、選んだパターンで配置したものだけになる。
 
 Claude 側定義(`.claude/agents/`)が反映される条件は、Claude Code の版によって変わる。
 2.1.273 では `~/.claude/agents/` と `<プロジェクト>/.claude/agents/` を監視しており、セッション開始時から在ったディレクトリの中でファイルを足したり直したりすると、数秒のうちに次の委譲へ反映される。
@@ -168,11 +171,14 @@ GPT 側定義(`.claude/gpt-agents/`)と `tools/codex-agent.sh` は、`codex-agen
 - `.claude/agents/impl-hard.md`
 - `.claude/agents/impl-light.md`
 - `.claude/agents/impl-standard.md`
+- `.claude/agents/impl-hard-claude.md`
+- `.claude/agents/impl-light-claude.md`
+- `.claude/agents/impl-standard-claude.md`
 - `.claude/gpt-agents/impl-hard.md`
 - `.claude/gpt-agents/impl-light.md`
 - `.claude/gpt-agents/impl-standard.md`
 
-共通手順で `tools/codex-agent.sh` も配置する。
+共通手順で `tools/codex-agent.sh` と `tools/codex-agent-hook.js` も配置する。
 
 ### 動作確認
 
@@ -188,7 +194,7 @@ bash ~/.claude/tools/codex-agent.sh impl-standard --effort low <<< "Reply with e
 `.claude/gpt-agents/impl-hard.md` に `codex_model` を設定した場合だけ、他の 2 定義と同じく監査行に `agent=impl-hard` と `sandbox=workspace-write` が出て、応答の末尾に `codex-agent: result=ok` が出ることを確認する。
 `impl-light` と `impl-standard` は、それぞれの監査行に `agent=impl-light` または `agent=impl-standard` と `sandbox=workspace-write` が出ることを確認する。
 `codex_home` に `~/.codex` に対応するパスが出て、各応答の末尾に `codex-agent: result=ok` が出ればよい。
-Claude Code の `Agent` ツールからも `subagent_type: impl-hard`、`subagent_type: impl-light`、`subagent_type: impl-standard` をそれぞれ指定して同じ応答を確認する(`impl-hard` は `codex_model` を設定した場合に限り Codex 側の応答を確認できる)。
+Claude Code の `Agent` ツールからも `subagent_type: impl-hard`、`subagent_type: impl-light`、`subagent_type: impl-standard` をそれぞれ指定して同じ応答を確認する(`impl-hard` は `codex_model` を設定した場合に限り Codex 側の応答を確認できる。未設定なら `再委譲: impl-hard-claude` で始まる報告が返る)。
 `Agent type '<定義名>' not found` のように定義が見つからないときは、手順 3 の配置と、共通手順 6 の反映条件を確認する。
 
 ## パターン 2
@@ -201,6 +207,9 @@ Claude Code の `Agent` ツールからも `subagent_type: impl-hard`、`subagen
 - `.claude/agents/impl-hard.md`
 - `.claude/agents/impl-light.md`
 - `.claude/agents/impl-standard.md`
+- `.claude/agents/impl-hard-claude.md`
+- `.claude/agents/impl-light-claude.md`
+- `.claude/agents/impl-standard-claude.md`
 - `.claude/agents/codex-review.md`
 - `.claude/agents/codex-subagent.md`
 - `.claude/gpt-agents/impl-hard.md`
@@ -229,7 +238,7 @@ bash ~/.claude/tools/codex-agent.sh codex-subagent --effort low <<< "Reply with 
 レビュー用の `codex-review` では `sandbox=read-only` が出ることを確認する。
 実装補助用の `codex-subagent` では `sandbox=workspace-write` が出ることを確認する。
 `impl-hard` を除く 4 つすべての応答の末尾に `codex-agent: result=ok` が出ればよい。
-Claude Code の `Agent` ツールからも、5 つの `subagent_type` をそれぞれ指定して確認する。
+Claude Code の `Agent` ツールからも、窓口の 3 定義と `codex-review`、`codex-subagent` の 5 つの `subagent_type` をそれぞれ指定して確認する。
 `Agent type '<定義名>' not found` のように定義が見つからないときは、手順 3 の配置と、共通手順 6 の反映条件を確認する。
 
 ## パターン 3
@@ -290,11 +299,14 @@ codex login status      # 既定ホーム側に戻っていることを確認す
 
 ### 使う定義
 
-5 つの Claude 側定義、5 つの GPT 側定義、`tools/codex-agent.sh`、`tools/codex-agent-hook.js` を配置する。
+8 つの Claude 側定義(ラッパー役の 5 定義と `impl-*-claude` の 3 定義)、5 つの GPT 側定義、`tools/codex-agent.sh`、`tools/codex-agent-hook.js` を配置する。
 
 - `.claude/agents/impl-hard.md`
 - `.claude/agents/impl-light.md`
 - `.claude/agents/impl-standard.md`
+- `.claude/agents/impl-hard-claude.md`
+- `.claude/agents/impl-light-claude.md`
+- `.claude/agents/impl-standard-claude.md`
 - `.claude/agents/codex-review.md`
 - `.claude/agents/codex-subagent.md`
 - `.claude/gpt-agents/impl-hard.md`
@@ -333,7 +345,7 @@ bash ~/.claude/tools/codex-agent.sh codex-subagent --effort low <<< "Reply with 
 `codex-review` の監査行に `codex_home=.../.codex` が出て、他の 4 定義の監査行に `codex_home=.../.codex-subagent` が出ることを確認する(`impl-hard` は `codex_model` を設定した場合に限る)。
 `codex-review` では `sandbox=read-only`、`codex-subagent` では `sandbox=workspace-write` が出ることを確認する。
 `impl-hard` を除く 4 つすべての応答の末尾に `codex-agent: result=ok` が出ればよい。
-Claude Code の `Agent` ツールからも、5 つの `subagent_type` をそれぞれ指定して確認する。
+Claude Code の `Agent` ツールからも、窓口の 3 定義と `codex-review`、`codex-subagent` の 5 つの `subagent_type` をそれぞれ指定して確認する。
 `Agent type '<定義名>' not found` のように定義が見つからないときは、手順 3 の配置と、共通手順 6 の反映条件を確認する。
 
 ## 設定に関する注意

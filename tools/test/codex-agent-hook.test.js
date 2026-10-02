@@ -60,6 +60,24 @@ test('Bash は依頼文のファイルを渡す転送の形を許す', () => {
   assertAllowed(bash('codex-subagent', `${WRAPPER} codex-subagent < "E:/Temp/claude/p/scratchpad/codex-agent-codex-subagent-20260928-120000-abc123/prompt.md"`));
 });
 
+test('窓口の impl-hard、impl-standard、impl-light に転送の形と依頼文の置き場を許す', () => {
+  for (const agent of ['impl-hard', 'impl-standard', 'impl-light']) {
+    const promptFile = `${SCRATCHPAD}/codex-agent-${agent}-20261003-120000-abc123/prompt.md`;
+    assertAllowed(bash(agent, `${WRAPPER} --new-prompt ${agent} "${SCRATCHPAD}"`));
+    assertAllowed(write(agent, promptFile));
+    assertAllowed(bash(agent, `${WRAPPER} ${agent} -C "${WORKTREE}" < "${promptFile}"`));
+    assertAllowed(bash(agent, WAIT));
+    assertAllowed(bash(agent, RUN_ID_OF));
+  }
+});
+
+test('窓口は別の区分の定義名への転送と、転送以外の道具を拒否する', () => {
+  assertRejected(bash('impl-light', `${WRAPPER} impl-hard < "${SCRATCHPAD}/codex-agent-impl-hard-20261003-120000-abc123/prompt.md"`));
+  assertRejected(write('impl-light', `${SCRATCHPAD}/codex-agent-impl-standard-20261003-120000-abc123/prompt.md`));
+  assertRejected(bash('impl-hard', 'git diff'));
+  assertRejected(runHook(['impl-standard'], hookInput('Edit', { file_path: `${WORKTREE}/README.md` })));
+});
+
 test('Bash は --new-prompt を親ディレクトリの有無にかかわらず許す', () => {
   assertAllowed(bash('codex-review', NEW_PROMPT));
   assertAllowed(bash('codex-review', `${WRAPPER} --new-prompt codex-review`));
@@ -196,6 +214,12 @@ test('JSON でない入力と、tool_name か tool_input の無い入力を拒�
 
 test('定義名の引数が無いか不正なら、許す形の入力でも拒否する', () => {
   assertRejected(runHook([], hookInput('Bash', { command: WAIT })));
-  assertRejected(runHook(['impl-hard'], hookInput('Bash', { command: WAIT })));
+  assertRejected(runHook(['impl-hard-claude'], hookInput('Bash', { command: WAIT })));
   assertRejected(runHook(['codex-review;'], hookInput('Bash', { command: WAIT })));
+});
+
+test('定義名の引数が不正なときの理由は、定義名を列挙せずに書く', () => {
+  const result = runHook(['impl-hard-claude'], hookInput('Bash', { command: WAIT }));
+  assertRejected(result);
+  assert.match(result.stderr, /フックの定義名の引数\(impl-hard-claude\)がラッパー役の定義名ではない/);
 });

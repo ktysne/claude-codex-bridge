@@ -84,7 +84,9 @@ function writeMeta(jsonlFile, toolUseId) {
   );
 }
 
-const OUTCOME_KEYS = ['gptRan', 'notConfigured', 'gptUnavailable', 'gptFailed', 'denied', 'unknown', 'notInvoked'];
+const OUTCOME_KEYS = [
+  'gptRan', 'redelegated', 'notConfigured', 'gptUnavailable', 'gptFailed', 'denied', 'unknown', 'notInvoked', 'claudeImplementation',
+];
 
 // 指定しない分類を 0 で埋めた outcomes を作る。
 function outcomesOf(values) {
@@ -136,7 +138,7 @@ function assertOutcomeInvariants(byAgent) {
   for (const row of Object.values(byAgent)) {
     const total = Object.values(row.outcomes).reduce((sum, v) => sum + v, 0);
     assert.equal(total, row.calls - row.unlinked);
-    assert.equal(row.outcomes.notInvoked, row.noCodex);
+    assert.ok(row.outcomes.notInvoked <= row.noCodex);
   }
 }
 
@@ -185,92 +187,166 @@ test('collect は委譲ごとの結果を最後の起動で 7 つの分類に分
   });
 });
 
-test('collect は委譲を止める指定を最初の空でない行だけで判定する', () => {
-  // 先頭空行と CRLF は指定として扱い、後続行やコードブロックの引用は扱わない。
+test('collect は指定直後の理由行から開発者の指示と再委譲を分ける', () => {
   withTempDir((root) => {
     const files = writeDelegations(
       root,
       [
-        ['designated-not-invoked', 'impl-standard', `${CLAUDE_DESIGNATION}\n理由: Claude 側で実装するため`],
-        ['designated-ran', 'impl-standard', `  ${CLAUDE_DESIGNATION}  \r\n理由: Claude 側で実装するため`],
-        ['leading-empty-designated', 'impl-standard', `\r\n \r\n  ${CLAUDE_DESIGNATION}  \r\n理由: Claude 側で実装するため`],
-        ['second-line-only', 'impl-standard', `実装内容の説明\r\n${CLAUDE_DESIGNATION}\r\n理由: 引用`],
-        ['code-block-only', 'impl-standard', `実装内容の説明\n\`\`\`text\n${CLAUDE_DESIGNATION}\n\`\`\`\n理由: 引用`],
-        ['unlinked-designated', 'impl-standard', `${CLAUDE_DESIGNATION}\n理由: 紐付け不明の例`],
+        ['developer-directive', 'impl-standard', `${CLAUDE_DESIGNATION}\n理由: 開発者の指示`],
+        ['wrapper-redelegation', 'impl-hard', `${CLAUDE_DESIGNATION}\n理由: codex-agent: result=failed exit=75`],
+        ['later-audit-line', 'impl-light', `${CLAUDE_DESIGNATION}\n理由: 開発者の指示\ncodex-agent: result=failed exit=75`],
+        ['directive-in-body', 'impl-standard', `作業の説明\n${CLAUDE_DESIGNATION}\n理由: 引用`],
+        ['unlinked-directive', 'impl-hard', `${CLAUDE_DESIGNATION}\n理由: 開発者の指示`],
       ],
       [
-        ['designated-not-invoked', [bashEvent({
-          timestamp: '2026-09-10T10:01:00.000Z',
-          id: 'not-invoked',
-          command: 'echo Claude 側で実装した',
-        })]],
-        ['designated-ran', [invokeEvent('2026-09-10T10:02:00.000Z', 'ran', 'codex-agent: result=ok')]],
-        ['leading-empty-designated', [bashEvent({
-          timestamp: '2026-09-10T10:03:00.000Z',
-          id: 'leading-empty',
-          command: 'echo Claude 側で実装した',
-        })]],
-        ['second-line-only', [bashEvent({
-          timestamp: '2026-09-10T10:04:00.000Z',
-          id: 'second-line',
-          command: 'echo 引用を実行しない',
-        })]],
-        ['code-block-only', [bashEvent({
-          timestamp: '2026-09-10T10:05:00.000Z',
-          id: 'code-block',
-          command: 'echo 引用を実行しない',
-        })]],
+        ['developer-directive', [bashEvent({ timestamp: '2026-09-10T10:01:00.000Z', id: 'dev', command: 'echo Claude 側で実装した' })]],
+        ['wrapper-redelegation', [
+          invokeEvent('2026-09-10T10:02:00.000Z', 'relay', 'codex-agent: result=rate-limited'),
+          handbackEvent('2026-09-10T10:03:00.000Z', '\n再委譲: impl-hard-claude\ncodex-agent: result=rate-limited'),
+        ]],
+        ['later-audit-line', [bashEvent({ timestamp: '2026-09-10T10:04:00.000Z', id: 'later', command: 'echo Claude 側で実装した' })]],
+        ['directive-in-body', [bashEvent({ timestamp: '2026-09-10T10:05:00.000Z', id: 'body', command: 'echo 指定ではない' })]],
       ],
     );
 
     const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
 
-    assert.deepEqual(rowWithoutModelAndEdits(metrics.byAgent['impl-standard']), {
-      calls: 6,
-      noCodex: 4,
-      committed: 0,
-      spawnedAgents: 0,
-      unlinked: 1,
-      designated: 4,
-      designatedNotInvoked: 2,
-      outcomes: outcomesOf({ gptRan: 1, notInvoked: 4 }),
-    });
+    assert.equal(metrics.byAgent['impl-standard'].designatedByDeveloper, 1);
+    assert.equal(metrics.byAgent['impl-hard'].designatedRedelegated, 1);
+    assert.equal(metrics.byAgent['impl-hard'].designatedByDeveloper, 1);
+    assert.equal(metrics.byAgent['impl-light'].designatedByDeveloper, 1);
+    assert.equal(metrics.byAgent['impl-standard'].deviations, 0);
   });
 });
 
-test('collect は最後の報告が委譲を止める指定を示す委譲を数える', () => {
+test('collect は拒否の文言を理由にした再委譲を、再委譲の目印で再委譲と数える', () => {
   withTempDir((root) => {
     const files = writeDelegations(
       root,
-      [['report-designated', 'impl-standard']],
-      [['report-designated', [assistantTextEvent(
-        '2026-09-10T10:01:00.000Z',
-        '  委譲の指定により Claude 側で実装した\n指定の行と理由を記載した',
-      )]]],
+      [
+        ['hook-denied', 'impl-hard-claude', `${CLAUDE_DESIGNATION}\n理由: 再委譲: codex-agent-hook: 許す形ではないため拒否した。`],
+        ['permission-denied', 'impl-light-claude', `${CLAUDE_DESIGNATION}\n理由: 再委譲: Permission to use Bash has been denied.`],
+        ['denied-without-marker', 'impl-standard-claude', `${CLAUDE_DESIGNATION}\n理由: Permission to use Bash has been denied.`],
+      ],
+      [],
     );
 
     const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
 
-    assert.equal(metrics.byAgent['impl-standard'].designated, 1);
-    assert.equal(metrics.byAgent['impl-standard'].designatedNotInvoked, 1);
+    assert.equal(metrics.byAgent['impl-hard-claude'].designatedRedelegated, 1);
+    assert.equal(metrics.byAgent['impl-light-claude'].designatedRedelegated, 1);
+    assert.equal(metrics.byAgent['impl-standard-claude'].designatedByDeveloper, 1);
   });
 });
 
-test('collect は途中の発言に指定があっても最後の報告で判定する', () => {
+test('collect は窓口の再委譲を元の Codex 結果と二重に数えない', () => {
   withTempDir((root) => {
     const files = writeDelegations(
       root,
-      [['intermediate-designation', 'impl-standard']],
-      [['intermediate-designation', [
+      [
+        ['relay-unconfigured', 'impl-standard'],
+        ['relay-unavailable', 'impl-light'],
+        ['relay-rate-limited', 'impl-hard'],
+        ['not-a-wrapper-relay', 'codex-subagent'],
+      ],
+      [
+        ['relay-unconfigured', [
+          invokeEvent('2026-09-10T10:01:00.000Z', 'exit-3', 'codex-agent: result=failed exit=3'),
+          handbackEvent('2026-09-10T10:02:00.000Z', '再委譲: impl-standard-claude\ncodex-agent: result=failed exit=3'),
+        ]],
+        ['relay-unavailable', [
+          invokeEvent('2026-09-10T10:03:00.000Z', 'exit-75', 'codex-agent: result=unavailable'),
+          handbackEvent('2026-09-10T10:04:00.000Z', '再委譲: impl-light-claude\ncodex-agent: result=unavailable'),
+        ]],
+        ['relay-rate-limited', [
+          invokeEvent('2026-09-10T10:04:30.000Z', 'rate-limited', 'codex-agent: result=rate-limited'),
+          handbackEvent('2026-09-10T10:04:45.000Z', '再委譲: impl-hard-claude\ncodex-agent: result=rate-limited'),
+        ]],
+        ['not-a-wrapper-relay', [
+          invokeEvent('2026-09-10T10:05:00.000Z', 'subagent', 'codex-agent: result=failed exit=3'),
+          handbackEvent('2026-09-10T10:06:00.000Z', '再委譲: impl-standard-claude\ncodex-agent: result=failed exit=3'),
+        ]],
+      ],
+    );
+
+    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+
+    assert.deepEqual(metrics.byAgent['impl-standard'].outcomes, outcomesOf({ redelegated: 1 }));
+    assert.deepEqual(metrics.byAgent['impl-light'].outcomes, outcomesOf({ redelegated: 1 }));
+    assert.deepEqual(metrics.byAgent['impl-hard'].outcomes, outcomesOf({ redelegated: 1 }));
+    assert.deepEqual(metrics.byAgent['codex-subagent'].outcomes, outcomesOf({ notConfigured: 1 }));
+    assertOutcomeInvariants(metrics.byAgent);
+  });
+});
+
+test('collect は impl-*-claude を Codex 対象外として数え、指定の無い依頼を逸脱にする', () => {
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [
+        ['hard-claude', 'impl-hard-claude', `\n${CLAUDE_DESIGNATION}\n理由: codex-agent: result=unavailable`],
+        ['standard-claude', 'impl-standard-claude', `${CLAUDE_DESIGNATION}\n理由: 開発者の指示`],
+        ['light-claude', 'impl-light-claude', `実装依頼\n${CLAUDE_DESIGNATION}\n理由: 引用`],
+      ],
+      [
+        ['hard-claude', [bashEvent({ timestamp: '2026-09-10T10:01:00.000Z', id: 'hard', command: 'echo 実装' })]],
+        ['standard-claude', [bashEvent({ timestamp: '2026-09-10T10:02:00.000Z', id: 'standard', command: 'echo 実装' })]],
+        ['light-claude', [bashEvent({ timestamp: '2026-09-10T10:03:00.000Z', id: 'light', command: 'echo 実装' })]],
+      ],
+    );
+
+    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+
+    for (const name of ['impl-hard-claude', 'impl-standard-claude', 'impl-light-claude']) {
+      assert.equal(metrics.byAgent[name].noCodex, 0);
+      assert.deepEqual(metrics.byAgent[name].outcomes, outcomesOf({ claudeImplementation: 1 }));
+    }
+    assert.equal(metrics.byAgent['impl-hard-claude'].designatedRedelegated, 1);
+    assert.equal(metrics.byAgent['impl-standard-claude'].designatedByDeveloper, 1);
+    assert.equal(metrics.byAgent['impl-light-claude'].deviations, 1);
+    assertOutcomeInvariants(metrics.byAgent);
+  });
+});
+
+function handbackEvent(timestamp, message) {
+  return {
+    timestamp,
+    message: { role: 'assistant', content: [{ type: 'tool_use', name: 'SubagentHandback', id: `hb-${timestamp}`, input: { message } }] },
+  };
+}
+
+test('collect は SubagentHandback のある子では、途中のテキストの指定を数えない', () => {
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['handback-text-designation', 'impl-standard']],
+      [['handback-text-designation', [
         assistantTextEvent('2026-09-10T10:01:00.000Z', '委譲の指定により Claude 側で実装した'),
-        assistantTextEvent('2026-09-10T10:02:00.000Z', '実装を完了しました。'),
+        handbackEvent('2026-09-10T10:02:00.000Z', '実装を完了しました。'),
       ]]],
     );
 
-    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+    const metrics = collect(files, ...RANGE_0910);
 
-    assert.equal(metrics.byAgent['impl-standard'].designated, 0);
-    assert.equal(metrics.byAgent['impl-standard'].designatedNotInvoked, 0);
+    assert.equal(metrics.byAgent['impl-standard'].designatedByDeveloper, 0);
+    assert.equal(metrics.byAgent['impl-standard'].designatedRedelegated, 0);
+  });
+});
+
+test('collect は SubagentHandback の報告が指定を示す委譲を、後に続くテキストがあっても数える', () => {
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['handback-designated', 'impl-standard']],
+      [['handback-designated', [
+        handbackEvent('2026-09-10T10:01:00.000Z', '委譲の指定により Claude 側で実装した\n委譲: Claude 側で実装'),
+        assistantTextEvent('2026-09-10T10:01:05.000Z', '報告を呼び出し元へ渡しました。'),
+      ]]],
+    );
+
+    const metrics = collect(files, ...RANGE_0910);
+
+    assert.equal(metrics.byAgent['impl-standard'].designatedByDeveloper, 1);
   });
 });
 
@@ -285,35 +361,102 @@ test('collect は依頼文と最後の報告の両方に指定があっても 1 
       )]]],
     );
 
-    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+    const metrics = collect(files, ...RANGE_0910);
 
-    assert.equal(metrics.byAgent['impl-standard'].designated, 1);
-    assert.equal(metrics.byAgent['impl-standard'].designatedNotInvoked, 1);
+    assert.equal(metrics.byAgent['impl-standard'].designatedByDeveloper, 1);
+    assert.equal(metrics.byAgent['impl-standard'].designatedRedelegated, 0);
   });
 });
 
-function handbackEvent(timestamp, message) {
-  return {
-    timestamp,
-    message: { role: 'assistant', content: [{ type: 'tool_use', name: 'SubagentHandback', id: `hb-${timestamp}`, input: { message } }] },
-  };
-}
-
-test('collect は SubagentHandback の報告が指定を示す委譲を、後に続くテキストがあっても数える', () => {
+test('collect は報告の冒頭の Markdown の装飾を除いて指定を判定する', () => {
   withTempDir((root) => {
     const files = writeDelegations(
       root,
-      [['handback-designated', 'impl-standard']],
-      [['handback-designated', [
-        handbackEvent('2026-09-10T10:01:00.000Z', '委譲の指定により Claude 側で実装した\n委譲: Claude 側で実装'),
-        assistantTextEvent('2026-09-10T10:01:05.000Z', '報告を呼び出し元へ渡しました。'),
-      ]]],
+      [['decorated-report', 'impl-standard']],
+      [['decorated-report', [handbackEvent(
+        '2026-09-10T10:01:00.000Z',
+        '## **委譲の指定により Claude 側で実装した**',
+      )]]],
     );
 
-    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+    const metrics = collect(files, ...RANGE_0910);
 
-    assert.equal(metrics.byAgent['impl-standard'].designated, 1);
-    assert.equal(metrics.byAgent['impl-standard'].designatedNotInvoked, 1);
+    assert.equal(metrics.byAgent['impl-standard'].designatedByDeveloper, 1);
+  });
+});
+
+test('collect は委譲を止める指定を最初の空でない行だけで判定する', () => {
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [
+        ['designated', 'impl-standard', `${CLAUDE_DESIGNATION}\n理由: Claude 側で実装するため`],
+        ['spaced-designated', 'impl-standard', `  ${CLAUDE_DESIGNATION}  \r\n理由: Claude 側で実装するため`],
+        ['leading-empty-designated', 'impl-standard', `\r\n \r\n  ${CLAUDE_DESIGNATION}  \r\n理由: Claude 側で実装するため`],
+        ['second-line-only', 'impl-standard', `実装内容の説明\r\n${CLAUDE_DESIGNATION}\r\n理由: 引用`],
+        ['code-block-only', 'impl-standard', `実装内容の説明\n\`\`\`text\n${CLAUDE_DESIGNATION}\n\`\`\`\n理由: 引用`],
+        ['unlinked-designated', 'impl-standard', `${CLAUDE_DESIGNATION}\n理由: 紐付け不明の例`],
+      ],
+      [
+        ['designated', [bashEvent({ timestamp: '2026-09-10T10:01:00.000Z', id: 'designated', command: 'echo Claude 側で実装した' })]],
+        ['spaced-designated', [bashEvent({ timestamp: '2026-09-10T10:02:00.000Z', id: 'spaced', command: 'echo Claude 側で実装した' })]],
+        ['leading-empty-designated', [bashEvent({ timestamp: '2026-09-10T10:03:00.000Z', id: 'leading-empty', command: 'echo Claude 側で実装した' })]],
+        ['second-line-only', [bashEvent({ timestamp: '2026-09-10T10:04:00.000Z', id: 'second-line', command: 'echo 引用を実行しない' })]],
+        ['code-block-only', [bashEvent({ timestamp: '2026-09-10T10:05:00.000Z', id: 'code-block', command: 'echo 引用を実行しない' })]],
+      ],
+    );
+
+    const metrics = collect(files, ...RANGE_0910);
+
+    assert.equal(metrics.byAgent['impl-standard'].designatedByDeveloper, 4);
+  });
+});
+
+test('collect は指定の行そのものから書き出した報告も指定として数える', () => {
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [
+        ['designation-line-report', 'impl-light'],
+        ['bold-designation-line', 'impl-light'],
+        ['code-designation-line', 'impl-light'],
+      ],
+      [
+        ['designation-line-report', [handbackEvent(
+          '2026-09-10T10:01:00.000Z',
+          `${CLAUDE_DESIGNATION}\n理由: 利用できない`,
+        )]],
+        ['bold-designation-line', [handbackEvent(
+          '2026-09-10T10:02:00.000Z',
+          `**${CLAUDE_DESIGNATION}**\n理由: 利用できない`,
+        )]],
+        ['code-designation-line', [handbackEvent(
+          '2026-09-10T10:03:00.000Z',
+          `\`${CLAUDE_DESIGNATION}\`\n理由: 利用できない`,
+        )]],
+      ],
+    );
+
+    const metrics = collect(files, ...RANGE_0910);
+
+    assert.equal(metrics.byAgent['impl-light'].designatedByDeveloper, 3);
+  });
+});
+
+test('collect は最後の報告が委譲を止める指定を示す委譲を数える', () => {
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [['report-designated', 'impl-standard']],
+      [['report-designated', [assistantTextEvent(
+        '2026-09-10T10:01:00.000Z',
+        '  委譲の指定により Claude 側で実装した\n指定の行と理由を記載した',
+      )]]],
+    );
+
+    const metrics = collect(files, ...RANGE_0910);
+
+    assert.equal(metrics.byAgent['impl-standard'].designatedByDeveloper, 1);
   });
 });
 
@@ -328,62 +471,63 @@ test('collect は続きの依頼への報告が後にあっても、先の報告
       ]]],
     );
 
-    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+    const metrics = collect(files, ...RANGE_0910);
 
-    assert.equal(metrics.byAgent['impl-standard'].designated, 1);
+    assert.equal(metrics.byAgent['impl-standard'].designatedByDeveloper, 1);
   });
 });
 
-test('collect は SubagentHandback のある子では、途中のテキストの指定を数えない', () => {
+test('collect は途中の発言に指定があっても最後の報告で判定する', () => {
   withTempDir((root) => {
     const files = writeDelegations(
       root,
-      [['handback-text-designation', 'impl-standard']],
-      [['handback-text-designation', [
+      [['intermediate-designation', 'impl-standard']],
+      [['intermediate-designation', [
         assistantTextEvent('2026-09-10T10:01:00.000Z', '委譲の指定により Claude 側で実装した'),
-        handbackEvent('2026-09-10T10:02:00.000Z', '実装を完了しました。'),
+        assistantTextEvent('2026-09-10T10:02:00.000Z', '実装を完了しました。'),
       ]]],
     );
 
-    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+    const metrics = collect(files, ...RANGE_0910);
 
-    assert.equal(metrics.byAgent['impl-standard'].designated, 0);
+    assert.equal(metrics.byAgent['impl-standard'].designatedByDeveloper, 0);
+    assert.equal(metrics.byAgent['impl-standard'].designatedRedelegated, 0);
   });
 });
 
-test('collect は指定の行そのものから書き出した報告も指定として数える', () => {
+test('collect は報告だけが示す指定を理由行で再委譲か開発者の指示に分け、依頼文を優先する', () => {
   withTempDir((root) => {
     const files = writeDelegations(
       root,
       [
-        ['designation-line-report', 'impl-light'],
-        ['bold-designation-line', 'impl-light'],
-        ['code-designation-line', 'impl-light'],
+        ['report-redelegated', 'impl-hard'],
+        ['report-developer', 'impl-light'],
+        ['prompt-priority', 'impl-standard', `${CLAUDE_DESIGNATION}\n理由: 開発者の指示`],
       ],
       [
-        ['designation-line-report', [handbackEvent('2026-09-10T10:01:00.000Z', `${CLAUDE_DESIGNATION}\n理由: 利用できない`)]],
-        ['bold-designation-line', [handbackEvent('2026-09-10T10:02:00.000Z', `**${CLAUDE_DESIGNATION}**\n理由: 利用できない`)]],
-        ['code-designation-line', [handbackEvent('2026-09-10T10:03:00.000Z', `\`${CLAUDE_DESIGNATION}\`\n理由: 利用できない`)]],
+        ['report-redelegated', [handbackEvent(
+          '2026-09-10T10:01:00.000Z',
+          '委譲の指定により Claude 側で実装した\n理由: codex-agent: result=unavailable',
+        )]],
+        ['report-developer', [handbackEvent(
+          '2026-09-10T10:02:00.000Z',
+          '委譲の指定により Claude 側で実装した\n理由: ローカル定義の不足',
+        )]],
+        ['prompt-priority', [handbackEvent(
+          '2026-09-10T10:03:00.000Z',
+          '委譲の指定により Claude 側で実装した\n理由: codex-agent: result=unavailable',
+        )]],
       ],
     );
 
-    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+    const metrics = collect(files, ...RANGE_0910);
 
-    assert.equal(metrics.byAgent['impl-light'].designated, 3);
-  });
-});
-
-test('collect は報告の冒頭の Markdown の装飾を除いて指定を判定する', () => {
-  withTempDir((root) => {
-    const files = writeDelegations(
-      root,
-      [['decorated-report', 'impl-standard']],
-      [['decorated-report', [handbackEvent('2026-09-10T10:01:00.000Z', '## **委譲の指定により Claude 側で実装した**')]]],
-    );
-
-    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
-
-    assert.equal(metrics.byAgent['impl-standard'].designated, 1);
+    assert.equal(metrics.byAgent['impl-hard'].designatedRedelegated, 1);
+    assert.equal(metrics.byAgent['impl-hard'].designatedByDeveloper, 0);
+    assert.equal(metrics.byAgent['impl-light'].designatedRedelegated, 0);
+    assert.equal(metrics.byAgent['impl-light'].designatedByDeveloper, 1);
+    assert.equal(metrics.byAgent['impl-standard'].designatedRedelegated, 0);
+    assert.equal(metrics.byAgent['impl-standard'].designatedByDeveloper, 1);
   });
 });
 
@@ -663,20 +807,18 @@ test('--json の委譲の内訳は各定義に outcomes と指定のキーを含
     assert.deepEqual(summary.委譲の内訳['impl-light'].outcomes, outcomesOf({ denied: 1 }));
     assert.equal(summary.委譲の内訳['impl-standard'].spawnedAgents, 0);
     assert.equal(summary.委譲の内訳['impl-light'].spawnedAgents, 0);
-    assert.equal(summary.委譲の内訳['impl-standard'].designated, 1);
-    assert.equal(summary.委譲の内訳['impl-standard'].designatedNotInvoked, 0);
-    assert.equal(summary.委譲の内訳['impl-light'].designated, 0);
-    assert.equal(summary.委譲の内訳['impl-light'].designatedNotInvoked, 0);
+    assert.equal(summary.委譲の内訳['impl-standard'].designatedByDeveloper, 1);
+    assert.equal(summary.委譲の内訳['impl-light'].designatedByDeveloper, 0);
   });
 });
 
-test('テキスト出力は委譲の結果の後ろに委譲を止める指定の表を出す', () => {
-  // JSON 以外の利用者にも、指定ありと Codex 未起動の内訳を示す。
+test('テキスト出力は再委譲、逸脱、指定の理由別件数を出す', () => {
+  // テキスト出力でも JSON と同じ分類を確認できる。
   withTempDir((root) => {
     writeDelegations(
       root,
-      [['text-designated', 'impl-standard', CLAUDE_DESIGNATION]],
-      [],
+      [['text-deviation', 'impl-hard-claude', '依頼の説明']],
+      [['text-deviation', [bashEvent({ timestamp: '2026-09-10T10:01:00.000Z', id: 'text', command: 'echo 実装' })]]],
     );
 
     const result = spawnSync(
@@ -690,14 +832,13 @@ test('テキスト出力は委譲の結果の後ろに委譲を止める指定�
     );
 
     assert.equal(result.status, 0, result.stderr);
-    assert.ok(result.stdout.includes('委譲の内訳(親から見た委譲 / Codex 未呼出 / git commit を実行 / サブエージェント起動 / 紐付け不明)'));
-    assert.match(result.stdout, /impl-standard\s+1\s+0\s+0\s+0\s+1/);
-    assert.match(result.stdout, /委譲の結果\(/);
-    assert.match(result.stdout, /委譲を止める指定\(指定あり \/ うち Codex 未起動\)/);
+    assert.ok(result.stdout.includes('委譲の内訳(親から見た委譲 / Codex 未呼出 / git commit を実行 / サブエージェント起動 / 紐付け不明 / 逸脱)'));
+    assert.match(result.stdout, /impl-hard-claude\s+1\s+0\s+0\s+0\s+0\s+1/);
+    assert.match(result.stdout, /委譲の結果\(GPT で実行 \/ 再委譲/);
+    assert.match(result.stdout, /委譲を止める指定\(再委譲 \/ 開発者の指示\)/);
     assert.ok(
       result.stdout.indexOf('委譲の結果(') < result.stdout.indexOf('委譲を止める指定('),
     );
-    assert.match(result.stdout, /impl-standard\s+1\s+0/);
   });
 });
 
@@ -978,8 +1119,9 @@ test('collect は同一分の起動、結果、待機、親子の紐付けを規
         committed: 1,
         spawnedAgents: 1,
         unlinked: 0,
-        designated: 0,
-        designatedNotInvoked: 0,
+        designatedRedelegated: 0,
+        designatedByDeveloper: 0,
+        deviations: 0,
         outcomes: outcomesOf({ gptRan: 1, notInvoked: 1 }),
       },
       'impl-light': {
@@ -988,8 +1130,9 @@ test('collect は同一分の起動、結果、待機、親子の紐付けを規
         committed: 0,
         spawnedAgents: 0,
         unlinked: 1,
-        designated: 0,
-        designatedNotInvoked: 0,
+        designatedRedelegated: 0,
+        designatedByDeveloper: 0,
+        deviations: 0,
         outcomes: outcomesOf({ notInvoked: 1 }),
       },
     });
@@ -1150,9 +1293,15 @@ test('CLI は数え方の版と追加指標を JSON に出す', () => {
 
     assert.equal(result.status, 0);
     const summary = JSON.parse(result.stdout);
-    assert.equal(summary['数え方の版'], 7);
+    assert.equal(summary['数え方の版'], 8);
     assert.equal(summary['メインセッションの待つためのBash'], 0);
     assert.equal(summary['並行書き込み警告を含む起動'], 0);
+    for (const name of ['impl-hard-claude', 'impl-standard-claude', 'impl-light-claude']) {
+      assert.equal(summary.委譲の内訳[name].calls, 0);
+      assert.equal(summary.委譲の内訳[name].noCodex, 0);
+      assert.equal(summary.委譲の内訳[name].outcomes.claudeImplementation, 0);
+      assert.equal(summary.委譲の内訳[name].outcomes.notInvoked, 0);
+    }
   });
 });
 
@@ -1476,8 +1625,9 @@ test('collect は別の記録に写った同じ識別子の起動、待機、委
       committed: 0,
       spawnedAgents: 0,
       unlinked: 0,
-      designated: 0,
-      designatedNotInvoked: 0,
+      designatedRedelegated: 0,
+      designatedByDeveloper: 0,
+      deviations: 0,
       outcomes: outcomesOf({ gptRan: 1 }),
     });
   });
@@ -1724,9 +1874,12 @@ test('--json とテキスト出力は数え方の版を出す', () => {
     const text = runMetrics(root, ['--since', '2026-09-10', '--until', '2026-09-10']);
 
     assert.equal(json.status, 0, json.stderr);
-    assert.equal(JSON.parse(json.stdout).数え方の版, 7);
+    assert.equal(JSON.parse(json.stdout).数え方の版, 8);
     assert.equal(text.status, 0, text.stderr);
-    assert.match(text.stdout, /^期間: .*\n数え方の版: 7\n/);
+    assert.match(text.stdout, /^期間: .*\n数え方の版: 8\n/);
+    for (const name of ['impl-hard-claude', 'impl-standard-claude', 'impl-light-claude']) {
+      assert.ok(text.stdout.includes(`  ${name}`));
+    }
   });
 });
 
@@ -1861,6 +2014,59 @@ test('collect は起動の無い委譲を Claude 側のみ、監査行の無い�
     assert.deepEqual(byModel['紐付け不明'], {
       calls: 1, outcomes: outcomesOf({}), mainEdited: 0, mainEditJudged: 0,
     });
+  });
+});
+
+test('collect は再委譲の委譲を再委譲、impl-*-claude への委譲を Claude 側の実装用としてモデル別に分ける', () => {
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [
+        ['relayed', 'impl-hard'],
+        ['claude-impl', 'impl-hard-claude', `${CLAUDE_DESIGNATION}\n理由: 再委譲: codex-agent: result=failed exit=3`],
+        ['claude-impl-unlinked', 'impl-hard-claude', `${CLAUDE_DESIGNATION}\n理由: 開発者の指示`],
+      ],
+      [
+        // 監査行のある起動があっても、再委譲の報告があれば再委譲に分ける。
+        ['relayed', [
+          invokeEvent('2026-09-10T10:01:00.000Z', 'r1', auditText('gpt-6-luna', 'codex-agent: result=failed exit=3')),
+          handbackEvent('2026-09-10T10:02:00.000Z', '再委譲: impl-hard-claude\ncodex-agent: result=failed exit=3'),
+        ]],
+        ['claude-impl', [handbackEvent('2026-09-10T10:20:00.000Z', '委譲の指定により Claude 側で実装した')]],
+      ],
+    );
+
+    const metrics = collect(files, ...RANGE_0910);
+
+    assert.deepEqual(Object.keys(metrics.byAgent['impl-hard'].byModel), ['再委譲']);
+    assert.deepEqual(metrics.byAgent['impl-hard'].byModel['再委譲'].outcomes, outcomesOf({ redelegated: 1 }));
+    const claudeByModel = metrics.byAgent['impl-hard-claude'].byModel;
+    assert.deepEqual(Object.keys(claudeByModel), ['Claude 側の実装用']);
+    assert.equal(claudeByModel['Claude 側の実装用'].calls, 2);
+    assert.deepEqual(claudeByModel['Claude 側の実装用'].outcomes, outcomesOf({ claudeImplementation: 1 }));
+  });
+});
+
+test('collect は報告後の編集の窓を impl-*-claude への委譲の開始でも閉じ、その委譲の報告後の編集はその委譲に数える', () => {
+  withTempDir((root) => {
+    const files = writeSession(root, 'relay-then-claude', [
+      agentEvent('2026-09-10T10:00:00.000Z', 'relay', 'impl-hard', '依頼'),
+      agentEvent('2026-09-10T10:15:00.000Z', 'claude', 'impl-hard-claude', `${CLAUDE_DESIGNATION}\n理由: 再委譲: codex-agent: result=failed exit=3`),
+      // 窓口の窓は impl-hard-claude の委譲の開始で閉じるので、この編集はどちらにも数えない。
+      editEvent('2026-09-10T10:20:00.000Z', 'q1', 'D:/repo/src/a.js'),
+      editEvent('2026-09-10T10:40:00.000Z', 'q2', 'D:/repo/src/a.js'),
+    ], [
+      ['relay', [handbackEvent('2026-09-10T10:10:00.000Z', '再委譲: impl-hard-claude\ncodex-agent: result=failed exit=3')]],
+      ['claude', [handbackEvent('2026-09-10T10:30:00.000Z', '委譲の指定により Claude 側で実装した')]],
+    ]);
+
+    const metrics = collect(files, ...RANGE_0910);
+
+    assert.equal(metrics.byAgent['impl-hard'].mainEdited, 0);
+    assert.equal(metrics.byAgent['impl-hard'].mainEditJudged, 1);
+    assert.equal(metrics.byAgent['impl-hard-claude'].mainEdited, 1);
+    assert.equal(metrics.byAgent['impl-hard-claude'].mainEditJudged, 1);
+    assert.equal(metrics.byAgent['impl-hard-claude'].byModel['Claude 側の実装用'].mainEdited, 1);
   });
 });
 
