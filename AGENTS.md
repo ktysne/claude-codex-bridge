@@ -55,7 +55,7 @@ npm run test:codex-agent-hook  # ラッパー役の定義のフック(tools/code
 npm run test:metrics  # 集計スクリプト(tools/agent-log-metrics.js)のテスト。Git Bash から実行する
 ```
 
-エージェント定義(`.claude/agents/*.md`)の変更は、そのディレクトリがセッション開始時から在れば数秒で次の委譲に反映される。再起動が要る条件は [docs/setup.md](docs/setup.md) の共通手順 6 にある。
+エージェント定義(`.claude/agents/*.md`)の変更は、再起動してから委譲に使う。条件は [docs/setup.md](docs/setup.md) の共通手順 6 にある。
 
 ## 相互レビュー
 
