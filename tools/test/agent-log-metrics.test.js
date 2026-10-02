@@ -209,6 +209,26 @@ test('collect は指定直後の理由行から開発者の指示と再委譲を
   });
 });
 
+test('collect は拒否の文言を理由にした再委譲を、再委譲の目印で再委譲と数える', () => {
+  withTempDir((root) => {
+    const files = writeDelegations(
+      root,
+      [
+        ['hook-denied', 'impl-hard-claude', `${CLAUDE_DESIGNATION}\n理由: 再委譲: codex-agent-hook: 許す形ではないため拒否した。`],
+        ['permission-denied', 'impl-light-claude', `${CLAUDE_DESIGNATION}\n理由: 再委譲: Permission to use Bash has been denied.`],
+        ['denied-without-marker', 'impl-standard-claude', `${CLAUDE_DESIGNATION}\n理由: Permission to use Bash has been denied.`],
+      ],
+      [],
+    );
+
+    const metrics = collect(files, parseDay('2026-09-10', '--since'), parseDay('2026-09-10', '--until') + 24 * 3600 * 1000);
+
+    assert.equal(metrics.byAgent['impl-hard-claude'].designatedRedelegated, 1);
+    assert.equal(metrics.byAgent['impl-light-claude'].designatedRedelegated, 1);
+    assert.equal(metrics.byAgent['impl-standard-claude'].designatedByDeveloper, 1);
+  });
+});
+
 test('collect は窓口の再委譲を元の Codex 結果と二重に数えない', () => {
   withTempDir((root) => {
     const files = writeDelegations(

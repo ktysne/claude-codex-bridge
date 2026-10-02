@@ -86,8 +86,9 @@
 //   - 委譲を止める指定は、依頼文の最初の空でない行か、子の報告が示す場合に数える。
 //     SubagentHandback がある子ではその入力のどれかを、無い子では最後の assistant テキストを報告として使う。
 //     報告は先頭の Markdown 装飾を除き、「委譲の指定により Claude 側で実装した」か指定の行そのもので始まるものを認める。
-//     依頼文に指定があれば、その直後の `理由:` の行に `codex-agent:` があるかで分類する。
-//     依頼文に指定が無ければ、指定を示す報告に `理由:` で始まり `codex-agent:` を含む行がある場合を再委譲とし、ほかは開発者の指示とする。
+//     再委譲の理由の行は、`理由: 再委譲:` で始まるか、`理由:` で始まり `codex-agent:` を含む行である。
+//     依頼文に指定があれば、その直後の行が再委譲の理由の行かで分類する。
+//     依頼文に指定が無ければ、指定を示す報告に再委譲の理由の行がある場合を再委譲とし、ほかは開発者の指示とする。
 //     impl-*-claude への依頼で最初の空でない行が指定の行でなければ、逸脱として数える。
 //   - 分類には、子が codex-agent.sh を起動した Bash の呼び出しのうち、疑似でない最後のものの結果を使う。
 //     子は失敗や上限の後に起動し直すことがあり、委譲の行き先を決めたのは最後の起動だからである。
@@ -601,14 +602,17 @@ const OUTCOME_KEYS = [
 const DESIGNATION = '委譲: Claude 側で実装';
 const REPORT_DESIGNATION = '委譲の指定により Claude 側で実装した';
 
-// 指定の理由行に窓口の監査行があるかで、再委譲と開発者の指示を分ける。
+// `codex-agent:` だけで判定する形は、目印を付ける前に書かれた再委譲の記録を数えるために残す。
+function isRedelegationReasonLine(line) {
+  return /^\s*理由:\s*再委譲:/.test(line) || (/^\s*理由:/.test(line) && line.includes('codex-agent:'));
+}
+
 function designationSource(prompt) {
   if (typeof prompt !== 'string') return null;
   const lines = prompt.split(/\r\n|\n/);
   const firstIndex = lines.findIndex((line) => line.trim() !== '');
   if (firstIndex < 0 || lines[firstIndex].trim() !== DESIGNATION) return null;
-  const reasonLine = lines[firstIndex + 1] || '';
-  return /^\s*理由:/.test(reasonLine) && reasonLine.includes('codex-agent:') ? 'redelegated' : 'developer';
+  return isRedelegationReasonLine(lines[firstIndex + 1] || '') ? 'redelegated' : 'developer';
 }
 
 function hasDesignatedPrompt(prompt) {
@@ -635,9 +639,7 @@ function isDesignatedSub(sub) {
 
 function designationSourceFromReport(report) {
   if (!isDesignatedReport(report)) return null;
-  const hasRedelegationReason = report.split(/\r\n|\n/)
-    .some((line) => /^\s*理由:/.test(line) && line.includes('codex-agent:'));
-  return hasRedelegationReason ? 'redelegated' : 'developer';
+  return report.split(/\r\n|\n/).some(isRedelegationReasonLine) ? 'redelegated' : 'developer';
 }
 
 function designationSourceFromSubs(subs) {
