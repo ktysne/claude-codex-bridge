@@ -8,9 +8,12 @@ namespace CodexBridgeConsole.Tests
 {
     public sealed class ConsoleSettingsTests
     {
-        private const string ClaudeHardPath = "agents\\impl-hard.md";
-        private const string ClaudeStandardPath = "agents\\impl-standard.md";
-        private const string ClaudeLightPath = "agents\\impl-light.md";
+        private const string GatewayHardPath = "agents\\impl-hard.md";
+        private const string GatewayStandardPath = "agents\\impl-standard.md";
+        private const string GatewayLightPath = "agents\\impl-light.md";
+        private const string ClaudeHardPath = "agents\\impl-hard-claude.md";
+        private const string ClaudeStandardPath = "agents\\impl-standard-claude.md";
+        private const string ClaudeLightPath = "agents\\impl-light-claude.md";
         private const string GptHardPath = "gpt-agents\\impl-hard.md";
         private const string GptStandardPath = "gpt-agents\\impl-standard.md";
         private const string GptLightPath = "gpt-agents\\impl-light.md";
@@ -19,6 +22,9 @@ namespace CodexBridgeConsole.Tests
 
         private static readonly string[] DefinitionPaths =
         {
+            GatewayHardPath,
+            GatewayStandardPath,
+            GatewayLightPath,
             ClaudeHardPath,
             ClaudeStandardPath,
             ClaudeLightPath,
@@ -29,6 +35,9 @@ namespace CodexBridgeConsole.Tests
 
         private static readonly string[] AllDefinitionPaths =
         {
+            GatewayHardPath,
+            GatewayStandardPath,
+            GatewayLightPath,
             ClaudeHardPath,
             ClaudeStandardPath,
             ClaudeLightPath,
@@ -80,6 +89,176 @@ namespace CodexBridgeConsole.Tests
                 Assert.Single(settings.MissingFiles);
                 Assert.Equal(ClaudeHardPath, settings.MissingFiles[0]);
                 Assert.False(settings.CanSave);
+            }
+        }
+
+        [Fact]
+        public void Load_ReadsGatewayValuesFromGatewayAndClaudeValuesFromClaudeSideDefinitions()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+
+                var settings = CreateSettings(directory);
+
+                Assert.Equal("gateway-hard-model", settings.ImplHard.GatewayModel);
+                Assert.Equal("low", settings.ImplHard.GatewayEffort);
+                Assert.Equal("claude-hard-model", settings.ImplHard.ClaudeModel);
+                Assert.Equal("high", settings.ImplHard.ClaudeEffort);
+                Assert.Equal("gateway-standard-model", settings.ImplStandard.GatewayModel);
+                Assert.Equal("low", settings.ImplStandard.GatewayEffort);
+                Assert.Equal("claude-standard-model", settings.ImplStandard.ClaudeModel);
+                Assert.Equal("medium", settings.ImplStandard.ClaudeEffort);
+                Assert.Equal("gateway-light-model", settings.ImplLight.GatewayModel);
+                Assert.Equal("medium", settings.ImplLight.GatewayEffort);
+                Assert.Equal("claude-light-model", settings.ImplLight.ClaudeModel);
+                Assert.Equal("low", settings.ImplLight.ClaudeEffort);
+                Assert.False(settings.HasChanges);
+            }
+        }
+
+        [Fact]
+        public void Save_ChangingGatewayModelAndEffortOnlyChangesGatewayDefinition()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                Dictionary<string, byte[]> originals = ReadAllDefinitionBytes(directory);
+                var settings = CreateSettings(directory);
+
+                settings.ImplLight.GatewayModel = "gateway-light-model-updated";
+                settings.ImplLight.GatewayEffort = "high";
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.True(result.Succeeded);
+                Assert.Equal(new[] { GatewayLightPath }, result.ChangedFiles);
+                string saved = ReadDefinition(directory, GatewayLightPath);
+                Assert.Contains("model: \"gateway-light-model-updated\"", saved);
+                Assert.Contains("effort: \"high\"", saved);
+                Assert.Contains(
+                    "          command: \"node \\\"$HOME/.claude/tools/codex-agent-hook.js\\\" impl-light || exit 2\"\n",
+                    saved);
+                AssertUnchangedExcept(directory, originals, GatewayLightPath);
+            }
+        }
+
+        [Fact]
+        public void Save_ChangingClaudeSideEffortOnlyChangesClaudeSideDefinition()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                Dictionary<string, byte[]> originals = ReadAllDefinitionBytes(directory);
+                var settings = CreateSettings(directory);
+
+                settings.ImplStandard.ClaudeEffort = "xhigh";
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.True(result.Succeeded);
+                Assert.Equal(new[] { ClaudeStandardPath }, result.ChangedFiles);
+                Assert.Contains("effort: \"xhigh\"", ReadDefinition(directory, ClaudeStandardPath));
+                Assert.Contains("effort: low", ReadDefinition(directory, GatewayStandardPath));
+                AssertUnchangedExcept(directory, originals, ClaudeStandardPath);
+            }
+        }
+
+        [Fact]
+        public void DescribeChanges_ReportsGatewayChangeWithGatewayDefinitionName()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                var settings = CreateSettings(directory);
+
+                settings.ImplHard.GatewayModel = "gateway-hard-model-updated";
+
+                Assert.Equal(
+                    new[] { GatewayHardPath + " の model: gateway-hard-model → gateway-hard-model-updated" },
+                    settings.DescribeChanges());
+            }
+        }
+
+        [Theory]
+        [InlineData("model", "", " の model が空である")]
+        [InlineData("effort", "", " の effort が空である")]
+        [InlineData("model", "foo: bar", " の model に使えない文字がある: foo: bar")]
+        [InlineData("effort", "\"low\"", " の effort に使えない文字がある: \"low\"")]
+        public void Save_ValidatesGatewayModelAndEffortLikeClaudeSide(string key, string value, string expectedSuffix)
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                var settings = CreateSettings(directory);
+                if (key == "model")
+                {
+                    settings.ImplStandard.GatewayModel = value;
+                }
+                else
+                {
+                    settings.ImplStandard.GatewayEffort = value;
+                }
+
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.False(result.Succeeded);
+                Assert.Contains(result.ValidationErrors, e => e.StartsWith(GatewayStandardPath + expectedSuffix, StringComparison.Ordinal));
+                Assert.Empty(result.ChangedFiles);
+            }
+        }
+
+        [Fact]
+        public void Load_ReportsMissingClaudeSideDefinitionsAndDisablesSubagentTab()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                File.Delete(GetPath(directory, ClaudeHardPath));
+                File.Delete(GetPath(directory, ClaudeStandardPath));
+                File.Delete(GetPath(directory, ClaudeLightPath));
+
+                var settings = CreateSettings(directory);
+
+                Assert.Equal(new[] { ClaudeHardPath, ClaudeStandardPath, ClaudeLightPath }, settings.MissingFiles);
+                Assert.False(settings.SubagentTabAvailable);
+                Assert.False(settings.CanSave);
+
+                // 窓口は読めても、タブの対象が揃わない間は保存しない。編集が残っていれば欠けたファイル名を返す。
+                settings.ImplHard.GatewayModel = "gateway-hard-model-updated";
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.False(result.Succeeded);
+                Assert.Contains("定義ファイルが存在しない: " + ClaudeHardPath, result.ValidationErrors);
+                Assert.Contains("定義ファイルが存在しない: " + ClaudeStandardPath, result.ValidationErrors);
+                Assert.Contains("定義ファイルが存在しない: " + ClaudeLightPath, result.ValidationErrors);
+                Assert.Contains("model: gateway-hard-model\n", ReadDefinition(directory, GatewayHardPath));
+            }
+        }
+
+        [Fact]
+        public void ReloadPreservingEdits_ReportsConflictOnGatewayDefinition()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteDefinitions(directory);
+                var settings = CreateSettings(directory);
+                settings.ImplHard.GatewayModel = "gateway-hard-model-edited";
+                WriteDefinition(
+                    directory,
+                    GatewayHardPath,
+                    GatewayDefinition("impl-hard", "gateway-hard-model-external", "medium"));
+
+                IReadOnlyList<string> conflicts = settings.ReloadPreservingEdits();
+
+                Assert.Equal(
+                    new[]
+                    {
+                        GatewayHardPath
+                            + " の model: 外部で gateway-hard-model-external に変わったが、入力中の gateway-hard-model-edited を優先する"
+                    },
+                    conflicts);
+                Assert.Equal("gateway-hard-model-edited", settings.ImplHard.GatewayModel);
+                Assert.Equal("medium", settings.ImplHard.GatewayEffort);
+                Assert.Equal("claude-hard-model", settings.ImplHard.ClaudeModel);
             }
         }
 
@@ -327,7 +506,7 @@ namespace CodexBridgeConsole.Tests
                 WriteDefinition(
                     directory,
                     ClaudeLightPath,
-                    ClaudeDefinition("impl-light", "claude-light-model-external", "low"));
+                    ClaudeDefinition("impl-light-claude", "claude-light-model-external", "low"));
                 WriteDefinition(directory, GptStandardPath, GptDefinition("codex-standard-model", "xhigh", false));
                 WriteDefinition(directory, GptLightPath, GptDefinition("codex-light-model", "high", false));
 
@@ -355,7 +534,7 @@ namespace CodexBridgeConsole.Tests
                 WriteDefinition(
                     directory,
                     ClaudeHardPath,
-                    ClaudeDefinition("impl-hard", "claude-hard-model-external", "high"));
+                    ClaudeDefinition("impl-hard-claude", "claude-hard-model-external", "high"));
 
                 IReadOnlyList<string> conflicts = settings.ReloadPreservingEdits();
 
@@ -1731,16 +1910,28 @@ namespace CodexBridgeConsole.Tests
             CreateCodexHomes(directory, ".codex", ".codex-subagent");
             WriteDefinition(
                 directory,
+                GatewayHardPath,
+                GatewayDefinition("impl-hard", "gateway-hard-model", "low"));
+            WriteDefinition(
+                directory,
+                GatewayStandardPath,
+                GatewayDefinition("impl-standard", "gateway-standard-model", "low"));
+            WriteDefinition(
+                directory,
+                GatewayLightPath,
+                GatewayDefinition("impl-light", "gateway-light-model", "medium"));
+            WriteDefinition(
+                directory,
                 ClaudeHardPath,
-                ClaudeDefinition("impl-hard", "claude-hard-model", "high"));
+                ClaudeDefinition("impl-hard-claude", "claude-hard-model", "high"));
             WriteDefinition(
                 directory,
                 ClaudeStandardPath,
-                ClaudeDefinition("impl-standard", "claude-standard-model", "medium"));
+                ClaudeDefinition("impl-standard-claude", "claude-standard-model", "medium"));
             WriteDefinition(
                 directory,
                 ClaudeLightPath,
-                ClaudeDefinition("impl-light", "claude-light-model", "low"));
+                ClaudeDefinition("impl-light-claude", "claude-light-model", "low"));
             WriteDefinition(
                 directory,
                 GptHardPath,
@@ -1772,6 +1963,25 @@ namespace CodexBridgeConsole.Tests
             return codexEnabled.HasValue
                 ? "codex_enabled: " + (codexEnabled.Value ? "true" : "false") + "\n"
                 : string.Empty;
+        }
+
+        // 実際の窓口の定義と同じく、model と effort のほかに tools と hooks を持たせる。
+        private static string GatewayDefinition(string name, string model, string effort)
+        {
+            return "---\n"
+                + "name: " + name + "\n"
+                + "description: 日本語の窓口定義\n"
+                + "model: " + model + "\n"
+                + "effort: " + effort + "\n"
+                + "tools: Bash, Write\n"
+                + "hooks:\n"
+                + "  PreToolUse:\n"
+                + "    - matcher: \"Bash|Write\"\n"
+                + "      hooks:\n"
+                + "        - type: command\n"
+                + "          command: \"node \\\"$HOME/.claude/tools/codex-agent-hook.js\\\" " + name + " || exit 2\"\n"
+                + "---\n"
+                + "本文を1行置く。\n";
         }
 
         private static string ClaudeDefinition(string name, string model, string effort)

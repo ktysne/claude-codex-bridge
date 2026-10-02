@@ -79,15 +79,17 @@
 //     その出力が記録に残らない場合があるためである。
 //   - 分類は終了コードと result 行だけで行う。依頼を果たせないまま 0 で終わった実行は数えられない。
 //   - 委譲の結果は、紐付けできた委譲 1 件をちょうど 1 つの分類に数える。分類は GPT で実行、
-//     未設定(result=failed exit=3)、GPT 使用不能(rate-limited と unavailable)、GPT で失敗、
-//     拒否、結果不明、未起動である。子の起動がすべて疑似の起動なら、その委譲は未起動である。
-//   - 委譲を止める指定は、依頼文の最初の空でない行を前後の空白を除いて比較する。
-//     2 行目以降やコードブロック内の文字列は指定に数えない。定義や文書を引用した依頼を
-//     誤って指定として数えないためである。
-//     紐付いた子の報告が「委譲の指定により Claude 側で実装した」か、指定の行そのもので始まる場合も数える(先頭の Markdown の装飾は除く)。
-//     報告は SubagentHandback の入力のどれかとし、それが無い子では最後の assistant テキストとする。
-//     SubagentHandback の後にも短いテキストが続くことがあり、最後のテキストだけでは報告を拾えないためである。
-//     報告は記録に残るため、測り直しても報告による判定は変わらない。
+//     再委譲、未設定(result=failed exit=3)、GPT 使用不能(rate-limited と unavailable)、GPT で失敗、
+//     拒否、結果不明、未起動、Claude 側の実装用である。再委譲は終了結果を置き換えるため、1 件を二重に数えない。
+//     委譲の内訳にある Codex 未呼出は別の実行指標であり、再委譲と重なる場合がある。
+//     impl-*-claude は Codex を使わない定義として扱い、Claude 側の実装用に数える。
+//   - 委譲を止める指定は、依頼文の最初の空でない行か、子の報告が示す場合に数える。
+//     SubagentHandback がある子ではその入力のどれかを、無い子では最後の assistant テキストを報告として使う。
+//     報告は先頭の Markdown 装飾を除き、「委譲の指定により Claude 側で実装した」か指定の行そのもので始まるものを認める。
+//     再委譲の理由の行は、`理由: 再委譲:` で始まるか、`理由:` で始まり `codex-agent:` を含む行である。
+//     依頼文に指定があれば、その直後の行が再委譲の理由の行かで分類する。
+//     依頼文に指定が無ければ、指定を示す報告に再委譲の理由の行がある場合を再委譲とし、ほかは開発者の指示とする。
+//     impl-*-claude への依頼で最初の空でない行が指定の行でなければ、逸脱として数える。
 //   - 分類には、子が codex-agent.sh を起動した Bash の呼び出しのうち、疑似でない最後のものの結果を使う。
 //     子は失敗や上限の後に起動し直すことがあり、委譲の行き先を決めたのは最後の起動だからである。
 //     子が複数ある委譲では、すべての子の起動を時刻で並べて最後のものを使う。記録順はファイルを読んだ順で
@@ -121,17 +123,22 @@
 //     ほかの読み取りの結果は使わない。文書や差分にも監査行の例が書かれているためである。
 //     疑似でない起動が子のどこにも無い委譲は「Claude 側のみ」、起動はあるが監査行が無い委譲は「監査行なし」、
 //     紐付け不明の委譲は「紐付け不明」とする。モデルが変わった時期の前後を同じ表で比べるためである。
+//     ただし、委譲の結果が再委譲の委譲は「再委譲」、impl-*-claude への委譲は紐付けの有無によらず「Claude 側の実装用」とし、
+//     ほかの区分より先に判定する。どちらも起動や監査行が無くて当然の委譲で、Claude 側のみに混ぜると
+//     窓口が指定や上限なしに自分で実装した委譲と見分けられなくなるためである。
 //   - 子の報告の時刻は、本文が「進行中」で始まらない最初の SubagentHandback の時刻とする。
 //     「進行中」の報告は Codex の実行中にターンを終えた未完了の報告だからである。
 //     それが無い子では、メインセッションからの追加の指示(本文が `The coordinator sent a message` で始まる user の行で、
 //     指示が「codex-agent の状態確認」だけのものを除く)の直前の記録の時刻、それも無ければ記録の最後の時刻とする。
 //     子が複数ある委譲では、子ごとの報告の時刻の最も遅いものを使う。報告の時刻が取れない委譲は判定に含めない。
-//   - 「報告後にメインが編集」は、報告の時刻から、同じ親の記録で次に impl-hard、impl-standard、impl-light の
-//     いずれかへの委譲が始まる時刻まで(4 時間を上限とする)の窓に、親の Edit、Write、MultiEdit、NotebookEdit が
+//   - 「報告後にメインが編集」は、報告の時刻から、同じ親の記録で次に impl-hard、impl-standard、impl-light、
+//     impl-*-claude のいずれかへの委譲が始まる時刻まで(4 時間を上限とする)の窓に、親の Edit、Write、MultiEdit、NotebookEdit が
 //     窓の中の最初のコミットより前にある委譲である。コミットは子の git commit の判定に `-C <ディレクトリ>` を挟んだ形も
 //     認めたもので、Bash と PowerShell の呼び出しを見る。監査で担当の成果物を直した委譲の目安にするためである。
 //     1 つの編集は、同じ親の記録の委譲のうち報告の時刻がその編集より前で最も遅いもの 1 件にだけ結び付ける。
 //     並行した委譲で同じ編集を二重に数えないためである。
+//     窓を impl-*-claude への委譲でも閉じるのは、窓口の再委譲の報告の後の編集を、窓口の委譲の成果への編集と数えないためである。
+//     impl-*-claude への委譲そのものも、同じ規則で判定する。
 //     スクラッチパッド、メモリー、相互レビューの記録、計画、一時ディレクトリ、TASKS* への編集は成果物でないので数えない。
 //     窓と編集は、委譲を含む親の記録のうち最後の時刻が最も遅いものの中で判定する。会話を引き継いだセッションの記録は、
 //     前の記録を写したうえで続くためである。1 つの記録から複数のセッションが分かれた場合も、その 1 本だけで判定する。
@@ -142,9 +149,13 @@ const fs = require('fs');
 const path = require('path');
 
 const WRAPPER_AGENTS = ['impl-hard', 'impl-light', 'impl-standard', 'codex-review', 'codex-subagent'];
+const IMPL_WRAPPER_AGENTS = ['impl-hard', 'impl-light', 'impl-standard'];
+const CLAUDE_IMPLEMENTATION_AGENTS = ['impl-hard-claude', 'impl-light-claude', 'impl-standard-claude'];
+const TRACKED_AGENTS = [...WRAPPER_AGENTS, ...CLAUDE_IMPLEMENTATION_AGENTS];
+const AGENT_COLUMN_WIDTH = Math.max(...TRACKED_AGENTS.map((name) => name.length));
 
 // 数え方の約束を変えたら上げる。運用記録の値がどの規則で数えたものかを、値の脇に残すためである。
-const COUNTING_RULES_VERSION = 7;
+const COUNTING_RULES_VERSION = 8;
 
 const DAY = 24 * 3600 * 1000;
 
@@ -613,18 +624,31 @@ function classifyInvocation(c) {
   return 'unknown';
 }
 
-const OUTCOME_KEYS = ['gptRan', 'notConfigured', 'gptUnavailable', 'gptFailed', 'denied', 'unknown', 'notInvoked'];
+const OUTCOME_KEYS = [
+  'gptRan', 'redelegated', 'notConfigured', 'gptUnavailable', 'gptFailed', 'denied', 'unknown', 'notInvoked', 'claudeImplementation',
+];
 const DESIGNATION = '委譲: Claude 側で実装';
 const REPORT_DESIGNATION = '委譲の指定により Claude 側で実装した';
 
-// 依頼文の最初の空でない行だけを指定とみなす。後続行やコードブロックの引用を数えないためである。
-function isDesignatedPrompt(prompt) {
+// `codex-agent:` だけで判定する形は、目印を付ける前に書かれた再委譲の記録を数えるために残す。
+function isRedelegationReasonLine(line) {
+  return /^\s*理由:\s*再委譲:/.test(line) || (/^\s*理由:/.test(line) && line.includes('codex-agent:'));
+}
+
+function designationSource(prompt) {
+  if (typeof prompt !== 'string') return null;
+  const lines = prompt.split(/\r\n|\n/);
+  const firstIndex = lines.findIndex((line) => line.trim() !== '');
+  if (firstIndex < 0 || lines[firstIndex].trim() !== DESIGNATION) return null;
+  return isRedelegationReasonLine(lines[firstIndex + 1] || '') ? 'redelegated' : 'developer';
+}
+
+function hasDesignatedPrompt(prompt) {
   if (typeof prompt !== 'string') return false;
   const firstNonEmptyLine = prompt.split(/\r\n|\n/).find((line) => line.trim() !== '');
   return firstNonEmptyLine !== undefined && firstNonEmptyLine.trim() === DESIGNATION;
 }
 
-// 定義が求める書き出しの文のほか、指定の行そのものから書き出した報告も数える。
 function isDesignatedReport(report) {
   if (typeof report !== 'string') return false;
   const head = report.trim().replace(/^[#>*\-\s]+/, '');
@@ -633,10 +657,40 @@ function isDesignatedReport(report) {
   return firstLine === DESIGNATION;
 }
 
-// 子の報告のどれかが指定を示すかを返す。SubagentHandback が無い子だけ、最後のテキストを報告とみなす。
+function designationReports(sub) {
+  return sub.handbacks.length > 0 ? sub.handbacks : [sub.lastAssistantText];
+}
+
 function isDesignatedSub(sub) {
+  return designationReports(sub).some(isDesignatedReport);
+}
+
+function designationSourceFromReport(report) {
+  if (!isDesignatedReport(report)) return null;
+  return report.split(/\r\n|\n/).some(isRedelegationReasonLine) ? 'redelegated' : 'developer';
+}
+
+function designationSourceFromSubs(subs) {
+  const designatedSubs = subs.filter(isDesignatedSub);
+  if (designatedSubs.length === 0) return null;
+  return designatedSubs.some((sub) => designationReports(sub)
+    .some((report) => designationSourceFromReport(report) === 'redelegated'))
+    ? 'redelegated'
+    : 'developer';
+}
+
+// 窓口の報告先だけを認め、依頼文中で引用された文字列を再委譲と取り違えない。
+function isRedelegatedReport(report) {
+  if (typeof report !== 'string') return false;
+  const firstNonEmptyLine = report.split(/\r\n|\n/).find((line) => line.trim() !== '');
+  return firstNonEmptyLine !== undefined
+    && /^再委譲: impl-(?:hard|standard|light)-claude(?:\s|$)/.test(firstNonEmptyLine.trim());
+}
+
+// SubagentHandback が無い子だけ、最後のテキストを報告とみなす。
+function isRedelegatedSub(sub) {
   const reports = sub.handbacks.length > 0 ? sub.handbacks : [sub.lastAssistantText];
-  return reports.some(isDesignatedReport);
+  return reports.some(isRedelegatedReport);
 }
 
 // 委譲に属するすべての子の起動から最後のものを選び、その分類を返す。
@@ -670,6 +724,9 @@ function auditOf(t) {
 const MODEL_CLAUDE_ONLY = 'Claude 側のみ';
 const MODEL_NO_AUDIT = '監査行なし';
 const MODEL_UNLINKED = '紐付け不明';
+// 次の 2 つは委譲の結果の分類と同じ名前にし、2 つの表を突き合わせられるようにする。
+const MODEL_REDELEGATED = '再委譲';
+const MODEL_CLAUDE_IMPLEMENTATION = 'Claude 側の実装用';
 
 // 委譲の子の疑似でない起動のうち、監査行が取れた最初の起動のモデルを返す。
 function delegationModel(subs) {
@@ -684,7 +741,8 @@ function delegationModel(subs) {
   return audited.length > 0 ? audited[0].audit.model : MODEL_NO_AUDIT;
 }
 
-const IMPL_AGENTS = ['impl-hard', 'impl-standard', 'impl-light'];
+// 窓口の報告の後の編集を、続く impl-*-claude の委譲の前で切り、窓口の成果への編集と数えないためにこちらも含める。
+const IMPL_AGENTS = [...IMPL_WRAPPER_AGENTS, ...CLAUDE_IMPLEMENTATION_AGENTS];
 const EDIT_TOOLS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
 const MAIN_EDIT_WINDOW_MS = 4 * 3600 * 1000;
 const IN_PROGRESS_REPORT = '進行中';
@@ -882,7 +940,7 @@ function collect(files, start, endExclusive, options = {}) {
           if (c.name === 'Agent') {
             const st = String(input.subagent_type || '');
             if (IMPL_AGENTS.includes(st)) timeline.implStarts.push(lineTime);
-            if (WRAPPER_AGENTS.includes(st)) timeline.delegations.push({ id: c.id });
+            if (TRACKED_AGENTS.includes(st)) timeline.delegations.push({ id: c.id });
           }
         }
         if (c.type === 'tool_use' && tracking.length > 0) {
@@ -974,11 +1032,12 @@ function collect(files, start, endExclusive, options = {}) {
           if (!filesWithCall.includes(file)) filesWithCall.push(file);
           m.parentFilesByCall.set(c.id, filesWithCall);
           // 会話を引き継いだセッションの記録には、前のセッションの委譲が同じ識別子で写っている。
-          if (WRAPPER_AGENTS.includes(st) && inRange(o.timestamp, at) && once(`agent|${c.id}`)) {
+          if (TRACKED_AGENTS.includes(st) && inRange(o.timestamp, at) && once(`agent|${c.id}`)) {
             m.agentCalls.push({
               type: st,
               toolUseId: c.id,
-              designated: isDesignatedPrompt(c.input && c.input.prompt),
+              designation: designationSource(c.input && c.input.prompt),
+              hasDesignation: hasDesignatedPrompt(c.input && c.input.prompt),
               file,
             });
           }
@@ -1107,16 +1166,28 @@ function collect(files, start, endExclusive, options = {}) {
         committed: 0,
         spawnedAgents: 0,
         unlinked: 0,
-        designated: 0,
-        designatedNotInvoked: 0,
+        designatedRedelegated: 0,
+        designatedByDeveloper: 0,
+        deviations: 0,
         outcomes: Object.fromEntries(OUTCOME_KEYS.map((k) => [k, 0])),
         mainEdited: 0,
         mainEditJudged: 0,
         byModel: {},
       });
     row.calls += 1;
+    if (CLAUDE_IMPLEMENTATION_AGENTS.includes(call.type) && !call.hasDesignation) row.deviations += 1;
     const subs = m.subByToolUse.get(call.toolUseId);
-    const model = !subs || subs.length === 0 ? MODEL_UNLINKED : delegationModel(subs);
+    const designation = call.designation
+      || (subs && subs.length > 0 ? designationSourceFromSubs(subs) : null);
+    if (designation === 'redelegated') row.designatedRedelegated += 1;
+    if (designation === 'developer') row.designatedByDeveloper += 1;
+    const isClaudeImplementation = CLAUDE_IMPLEMENTATION_AGENTS.includes(call.type);
+    const isLinked = subs !== undefined && subs.length > 0;
+    const isRedelegated = isLinked && IMPL_WRAPPER_AGENTS.includes(call.type) && subs.some(isRedelegatedSub);
+    const model = isClaudeImplementation ? MODEL_CLAUDE_IMPLEMENTATION
+      : !isLinked ? MODEL_UNLINKED
+        : isRedelegated ? MODEL_REDELEGATED
+          : delegationModel(subs);
     const modelRow = (row.byModel[model] = row.byModel[model] || emptyCounts());
     modelRow.calls += 1;
     const mainEdited = mainEditedOf(call);
@@ -1128,20 +1199,18 @@ function collect(files, start, endExclusive, options = {}) {
         modelRow.mainEdited += 1;
       }
     }
-    if (!subs || subs.length === 0) {
-      if (call.designated) row.designated += 1;
+    if (!isLinked) {
       // 対応する実行を特定できない。別の実行の状態を流用せず、不明として数える。
       row.unlinked += 1;
       continue;
     }
-    const designated = call.designated || subs.some(isDesignatedSub);
-    if (designated) row.designated += 1;
     // 未起動と Codex 未呼出は、どちらも疑似を除いた起動が子のどこにも無いことで決まり、件数が一致する。
-    if (subs.every((s) => s.calledCodex === 0)) row.noCodex += 1;
+    if (WRAPPER_AGENTS.includes(call.type) && subs.every((s) => s.calledCodex === 0)) row.noCodex += 1;
     if (subs.some((s) => s.committed > 0)) row.committed += 1;
     if (subs.some((s) => s.spawnedAgents > 0)) row.spawnedAgents += 1;
-    const outcome = lastInvocationOutcome(subs);
-    if (designated && outcome === 'notInvoked') row.designatedNotInvoked += 1;
+    const outcome = isClaudeImplementation ? 'claudeImplementation'
+      : isRedelegated ? 'redelegated'
+        : lastInvocationOutcome(subs);
     row.outcomes[outcome] += 1;
     modelRow.outcomes[outcome] += 1;
   }
@@ -1194,6 +1263,23 @@ function main() {
     ファイル数: m.unparseableLines.size,
   };
   const offloaded = m.offloaded;
+  const byAgent = { ...m.byAgent };
+  for (const name of CLAUDE_IMPLEMENTATION_AGENTS) {
+    byAgent[name] ||= {
+      calls: 0,
+      noCodex: 0,
+      committed: 0,
+      spawnedAgents: 0,
+      unlinked: 0,
+      designatedRedelegated: 0,
+      designatedByDeveloper: 0,
+      deviations: 0,
+      outcomes: Object.fromEntries(OUTCOME_KEYS.map((key) => [key, 0])),
+      mainEdited: 0,
+      mainEditJudged: 0,
+      byModel: {},
+    };
+  }
   const summary = {
     期間: shown,
     数え方の版: COUNTING_RULES_VERSION,
@@ -1212,7 +1298,7 @@ function main() {
     待つためのBash: m.waitCalls,
     メインセッションの待つためのBash: m.mainWaitCalls,
     並行書き込み警告を含む起動: m.concurrentWriterRuns,
-    委譲の内訳: m.byAgent,
+    委譲の内訳: byAgent,
     解析できなかった行: unparseableLines,
     日時が読めなかった記録: m.badTimestamps,
     読めなかった場所: unreadable,
@@ -1246,22 +1332,23 @@ function main() {
   console.log(`メインセッションの待つためだけの Bash: ${m.mainWaitCalls}`);
   console.log(`並行書き込み警告を含む起動(バックグラウンドへ移された起動を含む): ${m.concurrentWriterRuns}`);
   console.log('');
-  console.log('委譲の内訳(親から見た委譲 / Codex 未呼出 / git commit を実行 / サブエージェント起動 / 紐付け不明)');
-  for (const [k, v] of Object.entries(m.byAgent).sort((a, b) => b[1].calls - a[1].calls)) {
+  console.log('委譲の内訳(親から見た委譲 / Codex 未呼出 / git commit を実行 / サブエージェント起動 / 紐付け不明 / 逸脱)');
+  for (const [k, v] of Object.entries(byAgent).sort((a, b) => b[1].calls - a[1].calls)) {
     console.log(
-      `  ${k.padEnd(16)} ${String(v.calls).padStart(4)} ${String(v.noCodex).padStart(6)}`
-        + ` ${String(v.committed).padStart(6)} ${String(v.spawnedAgents).padStart(6)} ${String(v.unlinked).padStart(6)}`,
+      `  ${k.padEnd(AGENT_COLUMN_WIDTH)} ${String(v.calls).padStart(4)} ${String(v.noCodex).padStart(6)}`
+        + ` ${String(v.committed).padStart(6)} ${String(v.spawnedAgents).padStart(6)} ${String(v.unlinked).padStart(6)}`
+        + ` ${String(v.deviations).padStart(6)}`,
     );
   }
   console.log('');
-  console.log('委譲の結果(GPT で実行 / 未設定 / GPT 使用不能 / GPT で失敗 / 拒否 / 結果不明 / 未起動)');
-  for (const [k, v] of Object.entries(m.byAgent).sort((a, b) => b[1].calls - a[1].calls)) {
-    console.log(`  ${k.padEnd(16)}${OUTCOME_KEYS.map((key) => ` ${String(v.outcomes[key]).padStart(6)}`).join('')}`);
+  console.log('委譲の結果(GPT で実行 / 再委譲 / 未設定 / GPT 使用不能 / GPT で失敗 / 拒否 / 結果不明 / 未起動 / Claude 側の実装用)');
+  for (const [k, v] of Object.entries(byAgent).sort((a, b) => b[1].calls - a[1].calls)) {
+    console.log(`  ${k.padEnd(AGENT_COLUMN_WIDTH)}${OUTCOME_KEYS.map((key) => ` ${String(v.outcomes[key]).padStart(6)}`).join('')}`);
   }
   console.log('');
-  console.log('委譲を止める指定(指定あり / うち Codex 未起動)');
-  for (const [k, v] of Object.entries(m.byAgent).sort((a, b) => b[1].calls - a[1].calls)) {
-    console.log(`  ${k.padEnd(16)} ${String(v.designated).padStart(6)} ${String(v.designatedNotInvoked).padStart(12)}`);
+  console.log('委譲を止める指定(再委譲 / 開発者の指示)');
+  for (const [k, v] of Object.entries(byAgent).sort((a, b) => b[1].calls - a[1].calls)) {
+    console.log(`  ${k.padEnd(AGENT_COLUMN_WIDTH)} ${String(v.designatedRedelegated).padStart(6)} ${String(v.designatedByDeveloper).padStart(12)}`);
   }
   console.log('');
   // モデル名には全角の区分名が入り padEnd では列がそろわないので、名前は行末に置く。

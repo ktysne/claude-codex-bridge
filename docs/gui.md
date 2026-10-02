@@ -45,17 +45,22 @@ exe が無ければ先にビルドしてから起動する。
 ## 書き換えの対象
 
 既定の対象は `%USERPROFILE%\.claude` であり、画面には環境変数を展開した絶対パスが表示される。
-設定コンソールが書き換える定義ファイルは 8 ファイルであり、対象をタブごとに分けている。
+設定コンソールが書き換える定義ファイルは 11 ファイルであり、対象をタブごとに分けている。
 
 ### サブエージェントタブ
 
-サブエージェントタブは 6 ファイル(Claude 側 3 件、GPT 側 3 件)を扱う。
+サブエージェントタブは 9 ファイル(窓口 3 件、Claude 側の実装用 3 件、GPT 側 3 件)を扱う。
+窓口は依頼文を Codex へ転送するだけの定義であり、Claude 側で実装するときは、窓口の再委譲の報告を受けて実装用の定義が起動される。
+構成と再委譲の流れは [gpt-agents.md](gpt-agents.md) の「構成」と「再委譲の流れ」を参照する。
 
 | 区分 | ファイル |
 |---|---|
-| Claude 側 hard | `%USERPROFILE%\.claude\agents\impl-hard.md` |
-| Claude 側 standard | `%USERPROFILE%\.claude\agents\impl-standard.md` |
-| Claude 側 light | `%USERPROFILE%\.claude\agents\impl-light.md` |
+| 窓口 hard | `%USERPROFILE%\.claude\agents\impl-hard.md` |
+| 窓口 standard | `%USERPROFILE%\.claude\agents\impl-standard.md` |
+| 窓口 light | `%USERPROFILE%\.claude\agents\impl-light.md` |
+| Claude 側の実装用 hard | `%USERPROFILE%\.claude\agents\impl-hard-claude.md` |
+| Claude 側の実装用 standard | `%USERPROFILE%\.claude\agents\impl-standard-claude.md` |
+| Claude 側の実装用 light | `%USERPROFILE%\.claude\agents\impl-light-claude.md` |
 | GPT 側 hard | `%USERPROFILE%\.claude\gpt-agents\impl-hard.md` |
 | GPT 側 standard | `%USERPROFILE%\.claude\gpt-agents\impl-standard.md` |
 | GPT 側 light | `%USERPROFILE%\.claude\gpt-agents\impl-light.md` |
@@ -83,7 +88,7 @@ exe が無ければ先にビルドしてから起動する。
 ### 対象と再読込
 
 「対象」には、読み書きする `%USERPROFILE%\.claude` の実パスを表示する。
-「再読込」を押すと、8 ファイルをディスクから読み直す。
+「再読込」を押すと、両タブの対象ファイルをディスクから読み直す。
 未保存の変更がある場合は確認ダイアログに変更項目を列挙する。
 「はい」を選ぶと、編集した項目は入力中の値を残し、それ以外の項目は定義ファイルの値に読み直す。
 編集した項目が定義ファイル側でも変わっていた場合は入力中の値を優先し、その項目をダイアログで示す。
@@ -96,6 +101,7 @@ exe が無ければ先にビルドしてから起動する。
 
 サブエージェントタブの「GPT 系サブエージェント経路を有効にする (impl-hard / impl-standard / impl-light)」は、GPT 側の 3 定義に書く `codex_enabled` の値を切り替える。
 チェックを外すと GPT モデルと effort の入力欄を無効にするが、入力済みの値は保持する。
+窓口と Claude 側の実装用の入力欄は、チェックの有無にかかわらず編集できる。
 チェックを変えて保存すると、`impl-hard`、`impl-standard`、`impl-light` の 3 つに同じ値を書く。
 無効にして保存すると `codex_enabled: "false"` が 3 つに反映される。
 チェックを操作していない場合は `codex_enabled` に触れない。ただし、次に述べる不正値の修復だけは例外である。
@@ -114,20 +120,26 @@ exe が無ければ先にビルドしてから起動する。
 チェックを一度反転させて戻した場合も操作として扱い、表示どおりの値を 3 つへ書き戻す。
 
 `codex_enabled: false` のとき、`tools/codex-agent.sh` は Codex を起動せず、終了コード 3 で停止する。
-`impl-hard`、`impl-standard`、`impl-light` はこの終了コードを受けると Claude 側で実装する。
+`impl-hard`、`impl-standard`、`impl-light` の窓口はこの終了コードを受けると、Claude 側の実装用の定義への再委譲を報告して止まる。
 このトグルはレビューと実装補助タブの `codex-review` と `codex-subagent` には影響しない。
 
 ### モデルと effort
 
-表の Claude 側の列は、`impl-hard`、`impl-standard`、`impl-light` の Claude 側定義に書く `model` と `effort` を編集する。
-`standard` と `light` の Claude 側のモデルと effort は、GPT 側がレートリミットで使えないときのフォールバックで使われる。
-`impl-hard` の Claude 側のモデルと effort は、GPT 側が未設定、未導入、無効化、またはレートリミットで使えないときに使われる。
+表の列は、見出しの 1 行目で「窓口」「Claude 側で実装するとき」「GPT 側」のどの定義の値かを示す。
+
+「窓口」の列は、窓口の定義(`agents\impl-*.md`)に書く `model` と `effort` を編集する。
+窓口は GPT で実行する委譲でも毎回起動されるため、この値が委譲ごとの費用を決める。
+GPT 経路のチェックを外していても窓口は起動され、再委譲を報告するため、この列はチェックの有無にかかわらず編集できる。
+
+「Claude 側で実装するとき」の列は、Claude 側の実装用の定義(`agents\impl-*-claude.md`)に書く `model` と `effort` を編集する。
+この値は、窓口が再委譲を報告した後か、依頼文で GPT への委譲を止めたときに使われる。
+窓口が再委譲を報告するのは、GPT 側が未設定、未導入、無効化、利用上限などで使えないときである。
 
 表の GPT 側の列は、`impl-hard`、`impl-standard`、`impl-light` の GPT 側定義に書く `codex_model` と `codex_reasoning_effort` を編集する。
 GPT モデルのプルダウンは、3 行すべての先頭に「(未設定)」を持つ。
 「(未設定)」を選ぶと値は空として扱い、その行の GPT effort の入力欄を無効にする。入力済みの effort の値は保持する。
 未設定から実モデルに戻すと effort の入力欄が有効になる。戻した時点のモデルが今の effort を受け付けない場合は、そのモデルの既定の effort に切り替える。
-`hard` 行を「(未設定)」のままにすると、`impl-hard` は既定どおり Claude 側だけで実装する。
+`hard` 行を「(未設定)」のままにすると、`impl-hard` は既定どおり窓口の再委譲を経て Claude 側で実装する。
 
 ### レビューと実装補助
 
@@ -195,6 +207,7 @@ GPT モデルの選択肢に「(未設定)」はない。
 定義ファイルの欠落と読み込み失敗はタブごとに判定する。
 対象ファイルが 1 つでも欠けているか読めないタブは、入力を無効にしてタブ内に赤字で「このタブは保存できない。」と理由を表示する。
 ファイルが欠けている場合は、赤字の案内に定義の配置手順が `docs/setup.md` にあることと、見つからないファイル名も表示する。
+窓口と Claude 側の実装用の定義を分けた後のリポジトリへ更新したときは、`agents\impl-*-claude.md` を配置するまでサブエージェントタブは保存できない。
 もう一方のタブは独立して操作でき、対象ファイルが揃っていれば単独で保存できる。
 定義が壊れていても画面は開く。定義を直すための道具が、定義が壊れているときに起動できないと使えないためである。
 保存した GPT 側定義は、次に `codex-agent.sh` を呼んだときから効く。
@@ -216,7 +229,7 @@ Claude 側定義は、そのディレクトリがセッション開始時から�
 保存に成功したが書き換えたファイルがないときは「保存しました。変更はありません。」と表示する。
 保存に失敗したときの表示は赤色にする。
 
-保存前に、3 つの Claude 側定義の `model` と `effort` が空でないことを検証する。
+保存前に、窓口の 3 定義と Claude 側の実装用の 3 定義の `model` と `effort` が空でないことを検証する。
 レビューと実装補助タブの `codex-review` と `codex-subagent` は、`codex_model` が空だと検証エラーになる。
 サブエージェントタブの GPT 側の `codex_model` は、空でもエラーにしない。空はその区分で GPT 側を使わない設定として扱われるため、GPT 経路が有効かどうかにかかわらず検証しない。
 GPT 側の `codex_reasoning_effort` は、GPT 経路の有効状態にかかわらず `low`、`medium`、`high`、`xhigh`、`max`、`ultra` のいずれかであることを検証する。この一覧は `tools/codex-agent.sh` が受け付ける値である。値を追加するときは、`tools/codex-agent.sh` の `validate_effort`、`ConsoleSettings` の `ValidGptEfforts`、`choices.default.json` の `gptEfforts` に加え、`gptModelEfforts` の対応値も更新する。
@@ -303,6 +316,7 @@ GPT 側のモデルと effort は、`codex debug models` から目録を取れ�
 Claude 側のモデル一覧には、`codex debug models` に相当する取得手段が無い。
 Claude Code には非対話でモデル一覧を返すコマンドが無いためである。
 そのため Claude 側は、モデルと effort の対応を `choices.json` と埋め込みの既定値で持つ。
+この節の選択肢と規則は、窓口の列と「Claude 側で実装するとき」の列の両方に当てはまる。
 
 effort に対応するモデルと、その値は次のとおりである。
 

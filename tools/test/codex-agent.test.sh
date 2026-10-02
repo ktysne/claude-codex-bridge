@@ -2215,7 +2215,7 @@ impl-standard ~/.codex-subagent workspace-write
 TABLE
 }
 
-# ラッパー役の 2 定義(.claude/agents)のフロントマターに、Bash と Write を転送の形だけに絞るフックがある。
+# ラッパー役の定義(.claude/agents)のフロントマターに、Bash と Write を転送の形だけに絞るフックがある。
 # フックの仕様は docs/gpt-agents.md の「ラッパー役の定義の道具を絞る」にある。
 shipped_hooks_block() {
   sed 's/\r$//' "$1" \
@@ -2225,7 +2225,7 @@ shipped_hooks_block() {
 
 t_shipped_wrapper_hooks() {
   local name def expected
-  for name in codex-review codex-subagent; do
+  for name in codex-review codex-subagent impl-hard impl-standard impl-light; do
     def="$repo_root/.claude/agents/$name.md"
     if [ ! -f "$def" ]; then
       fail "定義が無い: $def"
@@ -2240,6 +2240,19 @@ t_shipped_wrapper_hooks() {
       "          command: \"node \\\"\$HOME/.claude/tools/codex-agent-hook.js\\\" $name || exit 2\"")"
     expect_eq "$name の hooks" "$expected" "$(shipped_hooks_block "$def")"
     expect_eq "$name の tools" "Bash, Write" "$(shipped_fm_get "$def" tools)"
+  done
+}
+
+# 引用符の無い YAML の値に `: ` か ` #` があると、Claude Code が定義を読み込めず、定義が無いものとして扱われる。
+t_shipped_plain_scalars() {
+  local def bad
+  for def in "$repo_root"/.claude/agents/*.md; do
+    bad="$(sed 's/\r$//' "$def" \
+      | awk 'NR == 1 { if ($0 != "---") exit; next } $0 == "---" { exit } { print }' \
+      | grep -E '^[A-Za-z_]+: ' \
+      | grep -vE "^[A-Za-z_]+: *(['\"|>]|$)" \
+      | grep -E ': .*(: | #)' || true)"
+    expect_eq "$(basename "$def") の引用符の無い値" "" "$bad"
   done
 }
 
@@ -2395,7 +2408,8 @@ run_case "目印: git の管理下に無い作業ディレクトリでは目印�
 run_case "目印: 照合できない環境で出た警告の行の 429 で利用上限と判定せず、警告の行は標準出力に 1 回" t_marker_warning_not_classified
 run_case "ai-cross-review との契約: scriptPinsApprovalNever が true を返す" t_cross_review_contract
 run_case "出荷既定の定義: 5 定義の codex_home と codex_sandbox が CLAUDE.md の対応に従う" t_shipped_definitions
-run_case "出荷既定の定義: ラッパー役の 2 定義に Bash と Write を絞るフックがある" t_shipped_wrapper_hooks
+run_case "出荷既定の定義: ラッパー役の定義に Bash と Write を絞るフックがある" t_shipped_wrapper_hooks
+run_case "出荷既定の定義: フロントマターの引用符の無い値に YAML の区切りが無い" t_shipped_plain_scalars
 run_case "環境の分離: 実ホームのログ置き場にテスト用のログが無い" t_real_home_untouched
 
 printf '# 合計 %d 件: 成功 %d、失敗 %d、SKIP %d\n' "$N" "$PASSED" "$FAILED" "$SKIPPED"

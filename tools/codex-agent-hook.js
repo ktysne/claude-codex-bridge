@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 //
-// ラッパー役のサブエージェント定義(codex-review、codex-subagent)の PreToolUse フック。
+// ラッパー役のサブエージェント定義(WRAPPER_AGENTS)の PreToolUse フック。
 // Bash と Write を、Codex への転送に要る形だけに絞る。仕様の正本は docs/gpt-agents.md の「ラッパー役の定義の道具を絞る」。
 //
 // 用法: node tools/codex-agent-hook.js <定義名>   (標準入力にフックの JSON を受け取る)
@@ -10,7 +10,7 @@
 
 const fs = require('node:fs');
 
-const WRAPPER_AGENTS = ['codex-review', 'codex-subagent'];
+const WRAPPER_AGENTS = ['codex-review', 'codex-subagent', 'impl-hard', 'impl-standard', 'impl-light'];
 const WRAPPER_PREFIX = 'bash ~/\\.claude/tools/codex-agent\\.sh';
 // 二重引用符の中で bash が展開や終端に使う文字と、行を分ける文字を含めない。
 const QUOTED_PATH = '"[^"$`\\r\\n\\0]+"';
@@ -80,7 +80,7 @@ function isPromptFilePath(agent, filePath) {
 // 許すなら null、拒否するなら理由の文を返す。
 function evaluate(agent, rawInput) {
   if (!WRAPPER_AGENTS.includes(agent)) {
-    return rejection(null, `フックの定義名の引数(${agent === undefined ? 'なし' : agent})が codex-review と codex-subagent のどちらでもない`);
+    return rejection(null, `フックの定義名の引数(${agent === undefined ? 'なし' : agent})がラッパー役の定義名ではない`);
   }
   let input;
   try {

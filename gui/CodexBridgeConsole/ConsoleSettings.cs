@@ -26,11 +26,16 @@ namespace CodexBridgeConsole
             "ultra"
         };
 
+        // agents/impl-*.md は Codex へ転送する窓口、agents/impl-*-claude.md は Claude 側で実装する定義である。
+        // 構成は docs/gpt-agents.md「構成」が正本。
         private static readonly DefinitionPath[] DefinitionPaths =
         {
-            new DefinitionPath(Path.Combine("agents", "impl-hard.md"), DefinitionKind.ClaudeHard, SettingsTab.Subagent),
-            new DefinitionPath(Path.Combine("agents", "impl-standard.md"), DefinitionKind.ClaudeStandard, SettingsTab.Subagent),
-            new DefinitionPath(Path.Combine("agents", "impl-light.md"), DefinitionKind.ClaudeLight, SettingsTab.Subagent),
+            new DefinitionPath(Path.Combine("agents", "impl-hard.md"), DefinitionKind.GatewayHard, SettingsTab.Subagent),
+            new DefinitionPath(Path.Combine("agents", "impl-standard.md"), DefinitionKind.GatewayStandard, SettingsTab.Subagent),
+            new DefinitionPath(Path.Combine("agents", "impl-light.md"), DefinitionKind.GatewayLight, SettingsTab.Subagent),
+            new DefinitionPath(Path.Combine("agents", "impl-hard-claude.md"), DefinitionKind.ClaudeHard, SettingsTab.Subagent),
+            new DefinitionPath(Path.Combine("agents", "impl-standard-claude.md"), DefinitionKind.ClaudeStandard, SettingsTab.Subagent),
+            new DefinitionPath(Path.Combine("agents", "impl-light-claude.md"), DefinitionKind.ClaudeLight, SettingsTab.Subagent),
             new DefinitionPath(Path.Combine("gpt-agents", "impl-hard.md"), DefinitionKind.GptHard, SettingsTab.Subagent),
             new DefinitionPath(Path.Combine("gpt-agents", "impl-standard.md"), DefinitionKind.GptStandard, SettingsTab.Subagent),
             new DefinitionPath(Path.Combine("gpt-agents", "impl-light.md"), DefinitionKind.GptLight, SettingsTab.Subagent),
@@ -150,8 +155,8 @@ namespace CodexBridgeConsole
 
         public IReadOnlyList<string> UnreadableFiles { get; private set; }
 
-        // MissingFiles と UnreadableFiles はサブエージェントタブの 6 ファイルだけを数える。
-        // レビューと実装補助タブの 2 ファイルはこちらで数える。
+        // MissingFiles と UnreadableFiles はサブエージェントタブのファイルだけを数える。
+        // レビューと実装補助タブのファイルはこちらで数える。
         public IReadOnlyList<string> ReviewMissingFiles { get; private set; }
 
         public IReadOnlyList<string> ReviewUnreadableFiles { get; private set; }
@@ -238,6 +243,21 @@ namespace CodexBridgeConsole
         private List<string> DescribeSubagentChanges()
         {
             var changes = new List<string>();
+            AddGatewayChanges(
+                changes,
+                _loadedImplHard,
+                ImplHard,
+                GetRelativePath(DefinitionKind.GatewayHard));
+            AddGatewayChanges(
+                changes,
+                _loadedImplStandard,
+                ImplStandard,
+                GetRelativePath(DefinitionKind.GatewayStandard));
+            AddGatewayChanges(
+                changes,
+                _loadedImplLight,
+                ImplLight,
+                GetRelativePath(DefinitionKind.GatewayLight));
             AddClaudeChanges(
                 changes,
                 _loadedImplHard,
@@ -315,6 +335,16 @@ namespace CodexBridgeConsole
             }
 
             return changes;
+        }
+
+        private static void AddGatewayChanges(
+            List<string> changes,
+            AgentSettings loaded,
+            AgentSettings current,
+            string relativePath)
+        {
+            AddValueChange(changes, relativePath, "model", loaded.GatewayModel, current.GatewayModel);
+            AddValueChange(changes, relativePath, "effort", loaded.GatewayEffort, current.GatewayEffort);
         }
 
         private static void AddClaudeChanges(
@@ -441,6 +471,9 @@ namespace CodexBridgeConsole
             Reload();
 
             var conflicts = new List<string>();
+            RestoreGatewayEdits(ImplHard, editedHard, previousHard, GetRelativePath(DefinitionKind.GatewayHard), conflicts);
+            RestoreGatewayEdits(ImplStandard, editedStandard, previousStandard, GetRelativePath(DefinitionKind.GatewayStandard), conflicts);
+            RestoreGatewayEdits(ImplLight, editedLight, previousLight, GetRelativePath(DefinitionKind.GatewayLight), conflicts);
             RestoreClaudeEdits(ImplHard, editedHard, previousHard, GetRelativePath(DefinitionKind.ClaudeHard), conflicts);
             RestoreClaudeEdits(ImplStandard, editedStandard, previousStandard, GetRelativePath(DefinitionKind.ClaudeStandard), conflicts);
             RestoreClaudeEdits(ImplLight, editedLight, previousLight, GetRelativePath(DefinitionKind.ClaudeLight), conflicts);
@@ -537,6 +570,19 @@ namespace CodexBridgeConsole
                     GetRelativePath(kind) + " の codex_enabled: 外部で " + FormatCodexEnabled(reloaded.Value)
                     + " に変わったが、入力中の " + FormatCodexEnabled(edited) + " を優先する");
             }
+        }
+
+        private static void RestoreGatewayEdits(
+            AgentSettings target,
+            AgentSettings edited,
+            AgentSettings previous,
+            string relativePath,
+            List<string> conflicts)
+        {
+            target.GatewayModel = RestoreEdit(
+                target.GatewayModel, edited.GatewayModel, previous.GatewayModel, relativePath, "model", conflicts);
+            target.GatewayEffort = RestoreEdit(
+                target.GatewayEffort, edited.GatewayEffort, previous.GatewayEffort, relativePath, "effort", conflicts);
         }
 
         private static void RestoreClaudeEdits(
@@ -660,6 +706,9 @@ namespace CodexBridgeConsole
             ImplHard = ReadClaudeSettings(DefinitionKind.ClaudeHard);
             ImplStandard = ReadClaudeSettings(DefinitionKind.ClaudeStandard);
             ImplLight = ReadClaudeSettings(DefinitionKind.ClaudeLight);
+            ReadGatewaySettings(ImplHard, DefinitionKind.GatewayHard);
+            ReadGatewaySettings(ImplStandard, DefinitionKind.GatewayStandard);
+            ReadGatewaySettings(ImplLight, DefinitionKind.GatewayLight);
 
             FrontMatterFile gptLight;
             bool hasLight = _files.TryGetValue(GetRelativePath(DefinitionKind.GptLight), out gptLight);
@@ -734,9 +783,18 @@ namespace CodexBridgeConsole
 
             if (subagentTabAvailable)
             {
-                ValidateClaude(ImplHard, GetRelativePath(DefinitionKind.ClaudeHard), errors);
-                ValidateClaude(ImplStandard, GetRelativePath(DefinitionKind.ClaudeStandard), errors);
-                ValidateClaude(ImplLight, GetRelativePath(DefinitionKind.ClaudeLight), errors);
+                ValidateClaudeModelAndEffort(
+                    ImplHard.GatewayModel, ImplHard.GatewayEffort, GetRelativePath(DefinitionKind.GatewayHard), errors);
+                ValidateClaudeModelAndEffort(
+                    ImplStandard.GatewayModel, ImplStandard.GatewayEffort, GetRelativePath(DefinitionKind.GatewayStandard), errors);
+                ValidateClaudeModelAndEffort(
+                    ImplLight.GatewayModel, ImplLight.GatewayEffort, GetRelativePath(DefinitionKind.GatewayLight), errors);
+                ValidateClaudeModelAndEffort(
+                    ImplHard.ClaudeModel, ImplHard.ClaudeEffort, GetRelativePath(DefinitionKind.ClaudeHard), errors);
+                ValidateClaudeModelAndEffort(
+                    ImplStandard.ClaudeModel, ImplStandard.ClaudeEffort, GetRelativePath(DefinitionKind.ClaudeStandard), errors);
+                ValidateClaudeModelAndEffort(
+                    ImplLight.ClaudeModel, ImplLight.ClaudeEffort, GetRelativePath(DefinitionKind.ClaudeLight), errors);
 
                 ValidateGpt(
                     ImplHard,
@@ -809,9 +867,12 @@ namespace CodexBridgeConsole
             bool reviewTabAvailable = ReviewTabAvailable;
             if (subagentTabAvailable)
             {
-                ApplyClaude(ImplHard, DefinitionKind.ClaudeHard);
-                ApplyClaude(ImplStandard, DefinitionKind.ClaudeStandard);
-                ApplyClaude(ImplLight, DefinitionKind.ClaudeLight);
+                ApplyClaudeModelAndEffort(ImplHard.GatewayModel, ImplHard.GatewayEffort, DefinitionKind.GatewayHard);
+                ApplyClaudeModelAndEffort(ImplStandard.GatewayModel, ImplStandard.GatewayEffort, DefinitionKind.GatewayStandard);
+                ApplyClaudeModelAndEffort(ImplLight.GatewayModel, ImplLight.GatewayEffort, DefinitionKind.GatewayLight);
+                ApplyClaudeModelAndEffort(ImplHard.ClaudeModel, ImplHard.ClaudeEffort, DefinitionKind.ClaudeHard);
+                ApplyClaudeModelAndEffort(ImplStandard.ClaudeModel, ImplStandard.ClaudeEffort, DefinitionKind.ClaudeStandard);
+                ApplyClaudeModelAndEffort(ImplLight.ClaudeModel, ImplLight.ClaudeEffort, DefinitionKind.ClaudeLight);
                 ApplyGpt(ImplHard, DefinitionKind.GptHard);
                 ApplyGpt(ImplStandard, DefinitionKind.GptStandard);
                 ApplyGpt(ImplLight, DefinitionKind.GptLight);
@@ -883,6 +944,18 @@ namespace CodexBridgeConsole
             };
         }
 
+        private void ReadGatewaySettings(AgentSettings settings, DefinitionKind kind)
+        {
+            FrontMatterFile file;
+            if (!_files.TryGetValue(GetRelativePath(kind), out file))
+            {
+                return;
+            }
+
+            settings.GatewayModel = file.GetValue("model");
+            settings.GatewayEffort = file.GetValue("effort");
+        }
+
         private void ReadGptSettings(AgentSettings settings, DefinitionKind kind)
         {
             FrontMatterFile file;
@@ -922,27 +995,28 @@ namespace CodexBridgeConsole
                 : effort;
         }
 
-        private void ValidateClaude(
-            AgentSettings settings,
+        private static void ValidateClaudeModelAndEffort(
+            string model,
+            string effort,
             string relativePath,
             List<string> errors)
         {
-            if (string.IsNullOrWhiteSpace(settings.ClaudeModel))
+            if (string.IsNullOrWhiteSpace(model))
             {
                 errors.Add(relativePath + " の model が空である");
             }
-            else if (!IsSafeScalar(settings.ClaudeModel))
+            else if (!IsSafeScalar(model))
             {
-                errors.Add(relativePath + " の model に使えない文字がある: " + settings.ClaudeModel + ScalarRuleText);
+                errors.Add(relativePath + " の model に使えない文字がある: " + model + ScalarRuleText);
             }
 
-            if (string.IsNullOrWhiteSpace(settings.ClaudeEffort))
+            if (string.IsNullOrWhiteSpace(effort))
             {
                 errors.Add(relativePath + " の effort が空である");
             }
-            else if (!IsSafeScalar(settings.ClaudeEffort))
+            else if (!IsSafeScalar(effort))
             {
-                errors.Add(relativePath + " の effort に使えない文字がある: " + settings.ClaudeEffort + ScalarRuleText);
+                errors.Add(relativePath + " の effort に使えない文字がある: " + effort + ScalarRuleText);
             }
         }
 
@@ -981,7 +1055,7 @@ namespace CodexBridgeConsole
             List<string> errors)
         {
             // 空の codex_model は「GPT 側を使わない」という正常な設定である。
-            // tools/codex-agent.sh は未設定の定義を終了コード 3 で止め、Claude 側定義のモデルが実装する。
+            // tools/codex-agent.sh は未設定の定義を終了コード 3 で止め、窓口が Claude 側の実装用定義への再委譲を報告する。
             if (!string.IsNullOrWhiteSpace(settings.CodexModel))
             {
                 ValidateCodexModelCharacters(settings.CodexModel, relativePath, errors);
@@ -1028,11 +1102,11 @@ namespace CodexBridgeConsole
             }
         }
 
-        private void ApplyClaude(AgentSettings settings, DefinitionKind kind)
+        private void ApplyClaudeModelAndEffort(string model, string effort, DefinitionKind kind)
         {
             FrontMatterFile file = GetFile(kind);
-            file.SetValue("model", settings.ClaudeModel);
-            file.SetValue("effort", settings.ClaudeEffort);
+            file.SetValue("model", model);
+            file.SetValue("effort", effort);
         }
 
         private void ApplyGpt(AgentSettings settings, DefinitionKind kind)
@@ -1347,6 +1421,15 @@ namespace CodexBridgeConsole
         {
             switch (kind)
             {
+                case DefinitionKind.GatewayHard:
+                    CopyGatewayValues(ImplHard, _loadedImplHard);
+                    break;
+                case DefinitionKind.GatewayStandard:
+                    CopyGatewayValues(ImplStandard, _loadedImplStandard);
+                    break;
+                case DefinitionKind.GatewayLight:
+                    CopyGatewayValues(ImplLight, _loadedImplLight);
+                    break;
                 case DefinitionKind.ClaudeHard:
                     CopyClaudeValues(ImplHard, _loadedImplHard);
                     break;
@@ -1376,6 +1459,12 @@ namespace CodexBridgeConsole
         {
             target.CodexModel = source.CodexModel;
             target.CodexReasoningEffort = source.CodexReasoningEffort;
+        }
+
+        private static void CopyGatewayValues(AgentSettings source, AgentSettings target)
+        {
+            target.GatewayModel = source.GatewayModel;
+            target.GatewayEffort = source.GatewayEffort;
         }
 
         private static void CopyClaudeValues(AgentSettings source, AgentSettings target)
@@ -1542,6 +1631,9 @@ namespace CodexBridgeConsole
 
         private enum DefinitionKind
         {
+            GatewayHard,
+            GatewayStandard,
+            GatewayLight,
             ClaudeHard,
             ClaudeStandard,
             ClaudeLight,
@@ -1600,8 +1692,14 @@ namespace CodexBridgeConsole
         }
     }
 
+    // 1 つの区分の値。Gateway* は窓口(agents/impl-*.md)、Claude* は Claude 側の実装用(agents/impl-*-claude.md)、
+    // Codex* は GPT 側(gpt-agents/impl-*.md)の定義に書く。
     public sealed class AgentSettings
     {
+        public string GatewayModel { get; set; }
+
+        public string GatewayEffort { get; set; }
+
         public string ClaudeModel { get; set; }
 
         public string ClaudeEffort { get; set; }
@@ -1614,6 +1712,8 @@ namespace CodexBridgeConsole
         {
             return new AgentSettings
             {
+                GatewayModel = GatewayModel,
+                GatewayEffort = GatewayEffort,
                 ClaudeModel = ClaudeModel,
                 ClaudeEffort = ClaudeEffort,
                 CodexModel = CodexModel,
