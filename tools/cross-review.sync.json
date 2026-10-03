@@ -33,7 +33,7 @@
       "to": ".claude/skills/cross-review/SKILL.md"
     }
   ],
-  "lastSyncedCommit": "0ecb20be562488b3cc61c7bebcfe14610a87424f",
+  "lastSyncedCommit": "22be9b8387974c209074f0082c0ec11c4beb2522",
   "lastSyncedRef": "main",
   "shownMigrations": [
     "2026-09-phase1-review-rules.md",
