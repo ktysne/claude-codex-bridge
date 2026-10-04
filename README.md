@@ -45,10 +45,10 @@ AI には、次のように依頼する。
 | パターン | 確かめること |
 |---|---|
 | 共通 | `codex --version` が通る。`codex login status` がログイン済みを示す。`~/.claude/tools/` に `codex-agent.sh` と `codex-agent-hook.js` がある。 |
-| パターン 1 | `bash ~/.claude/tools/codex-agent.sh impl-light --effort low` が `codex-agent: result=ok` で終わる。Claude Code の `Agent` ツールで `impl-light` を指定すると、1 行目に「GPT 側(Codex)で実行した」と書いた報告が返る。 |
+| パターン 1 | `bash ~/.claude/tools/codex-agent.sh impl-light --effort low <<< "Reply with exactly: PONG-LUNA"` が `codex-agent: result=ok` で終わる。Claude Code の `Agent` ツールで `impl-light` を指定すると、1 行目に「GPT 側(Codex)で実行した」と書いた報告が返る。 |
 | パターン 2 | パターン 1 に加えて、`codex-review` の監査行に `sandbox=read-only`、`codex-subagent` の監査行に `sandbox=workspace-write` が出る。 |
 | パターン 3 | パターン 2 に加えて、`codex-review` の監査行に `codex_home=.../.codex`、ほかの 4 定義の監査行に `codex_home=.../.codex-subagent` が出る。 |
-| + ai-cross-review | ai-cross-review を入れたリポジトリで `npm run review:codex` を実行すると、stderr に「codex-agent.sh 経由 (定義: codex-review)」と出る。 |
+| + ai-cross-review | ai-cross-review を入れたリポジトリで `npm run review:codex` を実行すると、出力に「codex-agent.sh 経由 (定義: codex-review)」と出る。 |
 | + agent-cockpit | ダッシュボードの「経路の設定」にサブエージェントの段が出る。経路を選んでから起動したサブエージェントの行に、動いている間は経路の札と Codex のモデルが出る。 |
 
 ## 開発者向けドキュメント

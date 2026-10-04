@@ -6,7 +6,7 @@ claude-codex-bridge 自体を開発するときの入口である。利用者向
 
 | 文書 | 内容 |
 |---|---|
-| [CLAUDE.md](../CLAUDE.md) / [AGENTS.md](../AGENTS.md) | 守るべき設計原則(用途固定、認証の分離、権限の固定、委譲の検証、実装担当の操作範囲、作業ツリーの分離)。2 つは同じ内容に保つ |
+| [CLAUDE.md](../CLAUDE.md) / [AGENTS.md](../AGENTS.md) | 守るべき設計原則(用途固定、認証ホームの配置、認証の分離、権限の固定、認証情報の非コミット、委譲の検証、実装担当の操作範囲、作業ツリーの分離)。2 つは同じ内容に保つ |
 | [docs/gpt-agents.md](gpt-agents.md) | GPT 系サブエージェントの構成、フック、終了コード、再委譲の流れ、既知の制約 |
 | [docs/gpt-agent-log-review-2026-09-16.md](gpt-agent-log-review-2026-09-16.md) | セッション記録から測った運用の状態と、そこから直した内容。次に測るときの基準値と測り直しの規則 |
 | [docs/gui-console-design.md](gui-console-design.md) | 設定コンソールの設計 |
@@ -34,7 +34,7 @@ claude-codex-bridge 自体を開発するときの入口である。利用者向
 | `tools/codex-agent-hook.js` | ラッパー役の定義(窓口と `codex-review`、`codex-subagent`)の Bash と Write を、転送の形だけに絞るフック |
 | `tools/agent-log-metrics.js` | Claude Code のセッション記録から、GPT 系サブエージェントの運用の指標を数えるスクリプト |
 | `tools/test/` | ラッパー、フック、集計スクリプトのテスト |
-| `tools/cross-review*.js`、`.claude/skills/cross-review/`、`docs/cross-review.md` | ai-cross-review から同期で取り込んだもの。直接編集しない |
+| `tools/cross-review*.js`、`tools/cross-review.sync.example.json`、`.claude/skills/cross-review/`、`docs/cross-review.md`、`.cross-review.example.md` | ai-cross-review から同期で取り込んだもの。直接編集しない |
 | `gui/` | 定義ファイルを GUI から書き換え、`codex-review` と `codex-subagent` の GPT 側モデルと effort も変更できる設定コンソール(Windows、.NET Framework 4.8)の一式 |
 | `gui/build.bat` | 設定コンソールをビルドし、`gui/dist/CodexBridgeConsole.exe` を作る。ダブルクリックで実行できる |
 | `gui/start.bat` | 設定コンソールを起動する。exe が無ければ先にビルドする |
