@@ -7,6 +7,7 @@
 Claude Code から Codex CLI を、用途別のサブエージェントとして呼び出す仕組みを整備する。
 通常利用とレビュー用、サブエージェント用で ChatGPT アカウントを分け、`CODEX_HOME` を分離して認証を切り替える。
 全体像は [README.md](README.md)、サブエージェントの構成と設計上の制約は [docs/gpt-agents.md](docs/gpt-agents.md) を参照。
+導入の手順は [docs/setup.md](docs/setup.md)、使い方は [docs/usage.md](docs/usage.md)、開発の入口は [docs/development.md](docs/development.md) にある。
 運用の測定結果と、そこから直した内容の記録は [docs/gpt-agent-log-review-2026-09-16.md](docs/gpt-agent-log-review-2026-09-16.md) にある。測り直しの規則も同じ文書にある。
 定義ファイルを GUI から書き換える設定コンソール(`gui/`、Windows Forms、.NET Framework 4.8)も含む。使い方は [docs/gui.md](docs/gui.md)、設計は [docs/gui-console-design.md](docs/gui-console-design.md) を参照。
 
