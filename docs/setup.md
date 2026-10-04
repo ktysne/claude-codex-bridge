@@ -235,7 +235,8 @@ bash ~/.claude/tools/codex-agent.sh impl-standard --effort low <<< "Reply with e
 3 定義それぞれの監査行に `agent=<定義名>` と `sandbox=workspace-write` が出て、応答の末尾に `codex-agent: result=ok` が出ることを確認する。
 `codex_home` に `~/.codex` に対応するパスが出て、各応答の末尾に `codex-agent: result=ok` が出ればよい。
 
-Claude Code からも確かめる。導入を進めている AI は自分のセッションを再起動できないので、開発者に再起動を依頼し、共通手順 6 で再起動した新しいセッションで確かめる。サブエージェントは背景で起動する(`run_in_background: false` を指定しない)。`Agent` ツールに `subagent_type: impl-light` を指定し、依頼文に `Reply with exactly: PONG-AGENT` を渡す。
+Claude Code からも確かめる。導入を進めている AI は自分のセッションを再起動できないので、開発者に再起動を依頼し、共通手順 6 で再起動した新しいセッションで確かめる。サブエージェントは背景で起動する(`run_in_background: false` を指定しない)。`Agent` ツールに `subagent_type: impl-light` を指定し、依頼文に `導入の確認のための依頼です。ファイルは変更せず、最終報告として PONG-AGENT とだけ書いてください。` を渡す。
+`Reply with exactly: PONG-AGENT` のような、返す文言だけを指示する依頼文は使わない。窓口が自分への指示として読み、Codex へ転送せずに `PONG-AGENT` とだけ返すことがあり、転送を確かめられないためである。
 報告の 1 行目が「GPT 側(Codex)で実行した」で、続けて `codex-agent: agent=impl-light` の監査行、`codex-agent: run=` の行、`codex-agent: result=ok` の行が出ればよい。
 窓口の報告には Codex の応答の本文が含まれない。本文は、`run=` の行の実行 ID で `bash ~/.claude/tools/codex-agent.sh --wait <実行 ID>` を実行して取り出し、`PONG-AGENT` を確かめる。
 `impl-hard` と `impl-standard` も同じ形で確かめる。
