@@ -62,7 +62,7 @@ Claude Code から Codex を呼ぶ入口は、このリポジトリのほかに 
 
 用途は次のように割り当てる。
 
-- **差分のレビュー**:ai-cross-review を使う。指摘、対応、妥当性確認の往復が PR に残る。Codex 側は bridge 経由で起動できたときに限り、認証ホームとサンドボックスが定義ファイルで固定される。経由できる条件は [cross-review.md](cross-review.md) の「codex の起動は bridge を経由する」にあり、実際にどちらで動いたかは実行時の通知と `.cross-review/` に残るメタ情報の `via` でわかる。
+- **差分のレビュー**:ai-cross-review を使う。指摘、対応、妥当性確認の往復が PR に残る。Codex 側は bridge 経由で起動できたときに限り、認証ホームとサンドボックスが定義ファイルで固定される。経由できる条件は [cross-review.md](cross-review.md) の「codex の起動は bridge（codex-agent.sh）を経由する」にあり、実際にどちらで動いたかは実行時の通知と `.cross-review/` に残るメタ情報の `via` でわかる。
 - **実装の委譲**:bridge の `impl-hard`、`impl-light`、`impl-standard` を使う。難易度で選ぶ規則は [setup.md](setup.md) の共通手順 5 にある。`impl-*-claude` は、窓口が再委譲を報告したときだけ使う。
 - **単発のレビュー依頼と調査**:bridge の `codex-review` と `codex-subagent` を使う。ai-cross-review が Codex を起動するときも同じ 2 定義を使い、`--fix` 無しなら `codex-review`、`--fix` 付きなら `codex-subagent` を選ぶ。
 - **救援**:公式プラグインを使う。行き詰まった実装の引き取りや、別実装での診断は bridge に無い。

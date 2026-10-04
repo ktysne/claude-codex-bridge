@@ -27,7 +27,7 @@
 | 連携 | 対象 | 導入済みかの確かめ方 |
 |---|---|---|
 | + ai-cross-review | 差分のレビューを bridge の定義で回す | レビューを回すリポジトリのルートに `tools/cross-review.js` がある(リポジトリごとに導入するツールである) |
-| + agent-cockpit | サブエージェントの表示と経路の切り替え | `http://127.0.0.1:47821/health` が `"app":"agent-cockpit"` を返す |
+| + agent-cockpit | サブエージェントの表示と経路の切り替え | `http://127.0.0.1:47821/health` が `"app":"agent-cockpit"` を返す(`AGENT_COCKPIT_PORT` でポートを変えていればその値) |
 
 ai-cross-review と連携するなら、`codex-review` と `codex-subagent` を配置するパターン 2 か 3 を選ぶ。パターン 1 では 2 定義が無いので、ai-cross-review は bridge を経由せずに `codex` を直接起動する。
 
@@ -53,9 +53,19 @@ claude-codex-bridge、[ai-cross-review](https://github.com/ktysne/ai-cross-revie
 ### 前提
 
 - Claude Code(`claude --version`)
+- git(`git --version`)。このリポジトリを取得し、更新するときに使う。
 - Node.js(`node --version`)。ラッパー役の定義のフック `codex-agent-hook.js` を node で起動する。
 - bash。Windows では Git Bash を使う。Claude Code の Bash ツールが Git Bash で動き、`codex-agent.sh` も bash で実行する。
 - Codex CLI は手順 1 で導入する。
+
+### 0. リポジトリを置く
+
+```bash
+git clone https://github.com/ktysne/claude-codex-bridge.git
+```
+
+置いた場所を、以降の手順の「このリポジトリ」として使う。定義とスクリプトはここから `~/.claude/` へ配置する。
+この文書を raw の URL で読んでいるときは、文中の相対リンク(`gpt-agents.md` など)は、置いたリポジトリの `docs/` の下のファイルを読む。
 
 ### 1. Codex CLI を導入する
 
@@ -224,7 +234,7 @@ bash ~/.claude/tools/codex-agent.sh impl-standard --effort low <<< "Reply with e
 3 定義それぞれの監査行に `agent=<定義名>` と `sandbox=workspace-write` が出て、応答の末尾に `codex-agent: result=ok` が出ることを確認する。
 `codex_home` に `~/.codex` に対応するパスが出て、各応答の末尾に `codex-agent: result=ok` が出ればよい。
 
-Claude Code からも確かめる。共通手順 6 で再起動したセッションで、`Agent` ツールに `subagent_type: impl-light` を指定し、依頼文に `Reply with exactly: PONG-AGENT` を渡す。
+Claude Code からも確かめる。導入を進めている AI は自分のセッションを再起動できないので、開発者に再起動を依頼し、共通手順 6 で再起動した新しいセッションで確かめる。サブエージェントは背景で起動する(`run_in_background: false` を指定しない)。`Agent` ツールに `subagent_type: impl-light` を指定し、依頼文に `Reply with exactly: PONG-AGENT` を渡す。
 報告の 1 行目が「GPT 側(Codex)で実行した」で、続けて `codex-agent: agent=impl-light` の監査行、`codex-agent: run=` の行、`codex-agent: result=ok` の行が出ればよい。
 窓口の報告には Codex の応答の本文が含まれない。本文は、`run=` の行の実行 ID で `bash ~/.claude/tools/codex-agent.sh --wait <実行 ID>` を実行して取り出し、`PONG-AGENT` を確かめる。
 `impl-hard` と `impl-standard` も同じ形で確かめる。
@@ -432,8 +442,11 @@ bridge 側で追加する設定は無い。ai-cross-review は `codex` を起動
    npm run review:codex -- --uncommitted --no-state
    ```
 
-2. stderr に「Codex でレビューを実行します: codex-agent.sh 経由 (定義: codex-review)」と出て、`codex-agent: agent=codex-review` の監査行に `sandbox=read-only` が出ればよい。パターン 3 では、監査行の `codex_home=` が `.../.codex` であることも確かめる。
-3. 「bridge が未導入のため直接起動へ切り替えます。」と出るときは、`~/.claude/gpt-agents/codex-review.md` の配置と、`codex` が PATH にあるかを確かめる。
+   未コミットの変更が無いと「レビュー対象の差分がありません。」と出て、Codex を起動しない。そのときは、確認用の小さな変更を作ってから流し、終わったら戻す。
+   agent-cockpit の経路設定でレビュアーを Claude にしていると、この実行は拒否される(終了コード 2)。先に `node tools/cross-review.js route` で `default` か `codex` であることを確かめる。
+
+2. 出力(stdout)に「Codex でレビューを実行します: codex-agent.sh 経由 (定義: codex-review)」と出て、`codex-agent: agent=codex-review` の監査行に `sandbox=read-only` が出ればよい。パターン 3 では、監査行の `codex_home=` が `.../.codex` であることも確かめる。
+3. 「bridge が未導入のため直接起動へ切り替えます。」と出るときは、`~/.claude/gpt-agents/codex-review.md` の配置、その `codex_enabled` と `codex_model`、`codex` が PATH にあるかを確かめる。
 4. 「approval_policy=never を明示していないため直接起動へ切り替えます」と出るときは、リポジトリを更新し、共通手順 3 で `codex-agent.sh` を配置し直す。
 
 ## 連携: + agent-cockpit
@@ -460,13 +473,13 @@ bridge 側で追加する設定は無い。agent-cockpit とは次の形でつ�
 
 経路を Claude にしたときの再委譲は、窓口の定義の「権限判定やフックに拒否された場合」の扱いによる。agent-cockpit の拒否の文言は `開発者の指定(agent-cockpit の経路設定):` で始まり、`codex-agent-hook:` では始まらない。
 メインセッションは、この拒否の文言を `理由: 再委譲:` の後ろに置いて委譲し直す(「委譲の検証」の手順)。
-この表は、定義の一般の規則から期待される動きである。agent-cockpit の指定を定義で名指しして扱うことと、実機での確認は [#129](https://github.com/ktysne/claude-codex-bridge/issues/129) で進める。
+この表は、定義の一般の規則から期待される動きである。経路が Claude のときは起動時にも「codex-agent.sh を呼ばない」指定が伝わるので、窓口が呼び出しを試みずに再委譲を報告することもある。経路が Codex のときは、再委譲で起動した `impl-*-claude` にも「Codex で行う」指定が伝わり、`codex-agent.sh` を実行しない定義と食い違う。agent-cockpit の指定を定義で名指しして扱うことと、実機での確認は [#129](https://github.com/ktysne/claude-codex-bridge/issues/129) で進める。
 
 ### 確認
 
 1. 新しいセッションを開き、ダッシュボードを再読み込みする。上部の「経路の設定」に、サブエージェントの段(既定、Codex、Claude)が出ればよい。出ないときは、`~/.claude/tools/codex-agent.sh` の配置と、`CLAUDE_CONFIG_DIR` の設定を確かめる。
 2. 経路を「既定」のまま、パターンごとの確認と同じ依頼で `impl-light` を起動する。サブエージェントの行に、Codex のモデルの札が出ればよい。
-3. 経路を「Claude」にしてから、同じ依頼で `impl-light` を起動する。窓口が `再委譲: impl-light-claude` と、`開発者の指定(agent-cockpit の経路設定):` で始まる拒否の文言を報告すればよい。確かめ終わったら、経路を元の値に戻す。
+3. 経路を「Claude」にしてから、同じ依頼で `impl-light` を起動する。窓口が `再委譲: impl-light-claude` と、`開発者の指定(agent-cockpit の経路設定):` を含む拒否の文言を報告すればよい。違う報告になったときは #129 を見る。確かめ終わったら、経路を元の値に戻す。
 
 ## 更新するとき
 
@@ -482,10 +495,12 @@ bridge 側で追加する設定は無い。agent-cockpit とは次の形でつ�
 ## うまくいかないとき
 
 - `Agent type '<定義名>' not found` と出る:共通手順 3 の配置と、共通手順 6 の再起動を確かめる。
-- 窓口やラッパー役の定義の Bash と Write がすべて拒否される:`~/.claude/tools/codex-agent-hook.js` が無い、古い、または node が見つからない。共通手順 3 で、スクリプトを定義より先に配置し直す。プロジェクト側に置いた定義では、そのフォルダのワークスペース信頼が無いとフックが効かない。
+- 窓口やラッパー役の定義の Bash と Write がすべて拒否される:`~/.claude/tools/codex-agent-hook.js` が無い、古い、または node が見つからない。共通手順 3 で、スクリプトを定義より先に配置し直す。
+- プロジェクト側に置いた定義で、フックの制限が効かず、窓口が転送以外の操作をする:そのフォルダ(worktree なら元のリポジトリのフォルダ)のワークスペースの信頼を受け入れる。信頼が無いと、フックだけが黙って飛ばされる。
 - `codex-agent.sh` が `$'\r': command not found` などで失敗する:行末が CRLF に変わっている。LF に戻す。
 - auto mode でサブエージェントが Codex を呼べない:共通手順 4 の `permissions.allow` を確かめる。
-- 終了コード 3 で止まる:`codex` が PATH に無い、GPT 側定義が無い、または `codex_enabled: false` になっている。窓口は `impl-*-claude` への再委譲を報告する。
+- 終了コード 3 で止まる:`codex` が PATH に無い、GPT 側定義が無い、`codex_enabled: false` になっている、または `codex_model` が空である。窓口は `impl-*-claude` への再委譲を報告し、`codex-review` と `codex-subagent` は再委譲せずに止まる。
+- `codex_home が存在しない` と出て終了コード 2 で止まる:定義の `codex_home` のディレクトリが無い。パターン 1 と 2 では、「使う定義」の手順で `codex_home` を `~/.codex` に書き換えたかを確かめる。パターン 3 では、`~/.codex-subagent` へのログインを確かめる。
 - 終了コード 75 で止まる:利用上限など GPT 側の事情で実行できなかった。窓口は再委譲を報告し、`codex-review` と `codex-subagent` は終了コードと出力の末尾を返して止まる。
-- 書き込みを行う定義の監査行や Codex の見出しに `sandbox: read-only` と出る(Windows):そのホームの `config.toml` に `[windows]` の `sandbox` の設定が無い。「設定に関する注意」の手順で足す。
+- 書き込みを行う定義で、監査行は `sandbox=workspace-write` なのに、Codex の起動時の見出しに `sandbox: read-only` と出る(Windows):そのホームの `config.toml` に `[windows]` の `sandbox` の設定が無い。「設定に関する注意」の手順で足す。
 - 「進行中」と書いた報告が返る:Codex の実行中にサブエージェントがターンを終えた。委譲をやり直さずに、そのサブエージェントへ「codex-agent の状態確認」とだけ書いたメッセージを送る。詳しくは [gpt-agents.md](gpt-agents.md) の「既知の制約」にある。
