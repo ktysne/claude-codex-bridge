@@ -5,12 +5,12 @@
 
 ## 進め方の決まり
 
-- `~/.claude/settings.json`、`~/.claude/CLAUDE.md`、`~/.claude/agents/`、`~/.claude/gpt-agents/`、`~/.claude/tools/` は、リポジトリの外にあり、開発者のすべてのセッションに効く。変更する前に、追加する内容(差分)を開発者に示し、確認を得てから書き込む。
+- Claude のホーム(後述)の `settings.json`、`CLAUDE.md`、`agents/` と、`~/.claude/gpt-agents/`、`~/.claude/tools/` は、リポジトリの外にあり、開発者のすべてのセッションに効く。変更する前に、追加する内容(差分)を開発者に示し、確認を得てから書き込む。
 - 既存の設定は消さずに統合する。`permissions.allow` の配列や `CLAUDE.md` の節は、既存の内容へ足す。同じ名前の定義が既にあるときは、上書きする前に差分を示す。
 - `codex login` はブラウザでアカウントを選ぶ操作を伴う。AI はコマンドを示し、ログインは開発者に行ってもらう。2 アカウントで使うときは、どのホームにどのアカウントでログインするかを開発者に確かめる。
 - 連携ツール(ai-cross-review、agent-cockpit)そのものの導入手順は、この文書では扱わない。導入されていなければ、各ツールのドキュメントへ案内する。この文書は、連携ツールが導入済みのときに必要な設定と確認だけを書いている。
 - 定義とスクリプトは `~/.claude`(`%USERPROFILE%\.claude`)に置く。`tools/` と `gpt-agents/` は、定義が起動スクリプトを `bash ~/.claude/tools/codex-agent.sh` の固定のパスで呼び、そのスクリプトが `~/.claude/gpt-agents/` を読むため、`CLAUDE_CONFIG_DIR` を設定していても置き場は変わらない。
-- Claude Code は Claude 側定義(`agents/`)、`settings.json`、`CLAUDE.md` を `CLAUDE_CONFIG_DIR` から読む。`CLAUDE_CONFIG_DIR` を `~/.claude` 以外に設定しているときは、この 3 つだけをそのディレクトリに置く。導入の前に `CLAUDE_CONFIG_DIR` が設定されているかを確かめる。
+- Claude Code は Claude 側定義(`agents/`)、`settings.json`、`CLAUDE.md` を **Claude のホーム**から読む。Claude のホームは、`CLAUDE_CONFIG_DIR` が設定されていればその値、無ければ `~/.claude` である。以下の手順で Claude のホームと書いた置き場は、この値に読み替える。導入の前に `CLAUDE_CONFIG_DIR` が設定されているかを確かめる。
 - 動作確認の一部は実モデルを起動し、利用枠を消費する。該当する手順にはその旨を書いてある。
 - 定義を追加または変更した後は、Claude Code を再起動してから委譲に使う(共通手順 6)。
 
@@ -92,7 +92,7 @@ codex login status
 
 ### 3. 定義とスクリプトを配置する
 
-このリポジトリの `.claude/agents/` にある必要な Claude 側定義を、`~/.claude/agents/` (`%USERPROFILE%\.claude\agents\`) にコピーする。
+このリポジトリの `.claude/agents/` にある必要な Claude 側定義を、Claude のホームの `agents/`(既定は `%USERPROFILE%\.claude\agents\`)にコピーする。
 必要な GPT 側定義を、`~/.claude/gpt-agents/` (`%USERPROFILE%\.claude\gpt-agents\`) にコピーする。
 `tools/codex-agent.sh` と `tools/codex-agent-hook.js` を `%USERPROFILE%\.claude\tools\` にコピーする。
 ラッパー役の定義(窓口の `impl-hard`、`impl-light`、`impl-standard` と、`codex-review`、`codex-subagent`)は、フロントマターのフックで `codex-agent-hook.js` を node で起動する。
@@ -120,7 +120,7 @@ CRLF に変換されると、bash が行末の CR を引数として読み、実
 
 ### 4. Claude Code の権限規則を設定する
 
-`%USERPROFILE%\.claude\settings.json` の `permissions.allow` に、次の 2 規則を追加する。
+Claude のホームの `settings.json`(既定は `%USERPROFILE%\.claude\settings.json`)の `permissions.allow` に、次の 2 規則を追加する。
 
 ```json
 {
@@ -143,7 +143,7 @@ auto mode でない場合も、同じ規則を入れておけば確認プロン�
 
 定義を配置しただけでは、メインセッションはどの依頼をどの定義に切り出すかを知らない。
 Claude Code はサブエージェント定義を呼び出せるものとして読み込むだけで、難易度に応じて選ぶ規則は持たないためである。
-そこで、利用先の `%USERPROFILE%\.claude\CLAUDE.md` に次の節を追加する。
+そこで、Claude のホームの `CLAUDE.md`(既定は `%USERPROFILE%\.claude\CLAUDE.md`)に次の節を追加する。
 特定のプロジェクトだけで使う場合は、そのプロジェクトの `CLAUDE.md` に追加する。
 
 ```markdown
@@ -488,8 +488,8 @@ bridge 側で追加する設定は無い。agent-cockpit とは次の形でつ�
 
 1. `git pull` でリポジトリを更新する。
 2. `tools/codex-agent.sh` と `tools/codex-agent-hook.js` を `~/.claude/tools/` に配置し直す。スクリプトは定義より先に置く。
-3. 選んだパターンの定義を `~/.claude/agents/` と `~/.claude/gpt-agents/` に配置し直す。GPT 側定義の `codex_home`、`codex_enabled`、モデル、effort を変えて使っているときは、上書きの前に差分を示し、変えた値を引き継ぐ。設定コンソールで変えた値も同じである。
-4. 共通手順 5 の役割分担の節が変わっていれば、`CLAUDE.md` の節を書き換える。
+3. 選んだパターンの定義を、Claude のホームの `agents/` と `~/.claude/gpt-agents/` に配置し直す。GPT 側定義の `codex_home`、`codex_enabled`、モデル、effort を変えて使っているときは、上書きの前に差分を示し、変えた値を引き継ぐ。設定コンソールで変えた値も同じである。
+4. 共通手順 5 の役割分担の節が変わっていれば、Claude のホームの `CLAUDE.md` の節を書き換える。
 5. エージェント定義(`.claude/agents/`)を変えたときは、Claude Code を再起動する。
 6. 選んだパターンの「確認」の `codex-agent.sh` のコマンドを流す。
 
