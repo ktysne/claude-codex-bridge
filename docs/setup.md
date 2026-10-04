@@ -1,13 +1,36 @@
-# セットアップ手順
+# claude-codex-bridge の導入手順
 
-Codex CLI を Claude Code のサブエージェントとして呼び出すための導入手順である。
+この文書は、claude-codex-bridge を導入する AI(Claude Code など)が読む手順書である。人が読んで手で進めることもできる。
 以下では Windows の PowerShell または Git Bash を使う。
 
-## どのパターンを選ぶか
+## 進め方の決まり
 
-- **パターン 1**：実装のサブエージェント委譲だけを使い、1 アカウントで足りる場合に選ぶ。
-- **パターン 2**：実装の委譲に加えてレビューや調査も Codex に依頼し、1 アカウントで運用する場合に選ぶ。
-- **パターン 3**：サブエージェントへの委譲を通常利用やレビューから分けたい場合に、認証を分けて役割ごとにアカウントを固定する。通常利用とレビューに使うアカウントを既定ホーム `~/.codex` に置き、サブエージェント専用のアカウントに `~/.codex-subagent` を与える。
+- Claude のホーム(後述)の `settings.json`、`CLAUDE.md`、`agents/` と、`~/.claude/gpt-agents/`、`~/.claude/tools/` は、リポジトリの外にあり、開発者のすべてのセッションに効く。変更する前に、追加する内容(差分)を開発者に示し、確認を得てから書き込む。
+- 既存の設定は消さずに統合する。`permissions.allow` の配列や `CLAUDE.md` の節は、既存の内容へ足す。同じ名前の定義が既にあるときは、上書きする前に差分を示す。
+- `codex login` はブラウザでアカウントを選ぶ操作を伴う。AI はコマンドを示し、ログインは開発者に行ってもらう。2 アカウントで使うときは、どのホームにどのアカウントでログインするかを開発者に確かめる。
+- 連携ツール(ai-cross-review、agent-cockpit)そのものの導入手順は、この文書では扱わない。導入されていなければ、各ツールのドキュメントへ案内する。この文書は、連携ツールが導入済みのときに必要な設定と確認だけを書いている。
+- 定義とスクリプトは `~/.claude`(`%USERPROFILE%\.claude`)に置く。`tools/` と `gpt-agents/` は、定義が起動スクリプトを `bash ~/.claude/tools/codex-agent.sh` の固定のパスで呼び、そのスクリプトが `~/.claude/gpt-agents/` を読むため、`CLAUDE_CONFIG_DIR` を設定していても置き場は変わらない。
+- Claude Code は Claude 側定義(`agents/`)、`settings.json`、`CLAUDE.md` を **Claude のホーム**から読む。Claude のホームは、`CLAUDE_CONFIG_DIR` が設定されていればその値、無ければ `~/.claude` である。以下の手順で Claude のホームと書いた置き場は、この値に読み替える。導入の前に `CLAUDE_CONFIG_DIR` が設定されているかを確かめる。
+- 動作確認の一部は実モデルを起動し、利用枠を消費する。該当する手順にはその旨を書いてある。
+- 定義を追加または変更した後は、Claude Code を再起動してから委譲に使う(共通手順 6)。
+
+## パターンの選び方
+
+アカウントの使い方で、パターン 1〜3 から 1 つを選ぶ。まず共通手順 0〜6 を行い、続けて選んだパターンの手順を行う。
+そのうえで、導入済みの連携ツールに合わせて「連携: + ai-cross-review」「連携: + agent-cockpit」を足す。2 つの連携は互いに独立していて、どちらか一方だけでも両方でもよい。
+
+| パターン | 使い方 | 配置する Codex 側の定義 |
+|---|---|---|
+| 1 | 1 アカウントで、実装のサブエージェント委譲だけを使う | `impl-hard`、`impl-light`、`impl-standard` |
+| 2 | 1 アカウントで、実装の委譲に加えてレビューや調査も Codex に依頼する | パターン 1 に加えて `codex-review`、`codex-subagent` |
+| 3 | 2 アカウントで、通常利用とレビューのアカウントを既定ホーム `~/.codex` に、サブエージェント専用のアカウントを `~/.codex-subagent` に置く | パターン 2 と同じ 5 定義 |
+
+| 連携 | 対象 | 導入済みかの確かめ方 |
+|---|---|---|
+| + ai-cross-review | 差分のレビューを bridge の定義で回す | レビューを回すリポジトリのルートに `tools/cross-review.js` がある(リポジトリごとに導入するツールである) |
+| + agent-cockpit | サブエージェントの表示と経路の切り替え | `http://127.0.0.1:47821/health` が `"app":"agent-cockpit"` を返す(`AGENT_COCKPIT_PORT` でポートを変えていればその値) |
+
+ai-cross-review と連携するなら、`codex-review` と `codex-subagent` を配置するパターン 2 か 3 を選ぶ。パターン 1 では 2 定義が無いので、ai-cross-review は bridge を経由せずに `codex` を直接起動する。
 
 ここでいう**通常利用**は Codex CLI の対話、VS Code や Chrome の Codex 拡張、Claude Code の Codex プラグインを指し、**サブエージェント**は GPT 側へ実装を委譲する `impl-hard`、`impl-light`、`impl-standard`、`codex-subagent` の 4 定義を指す。
 `codex-review` も Claude Code からはサブエージェントとして起動されるが、役割はレビューなので既定ホーム側のアカウントを使う。
@@ -16,7 +39,34 @@ Codex CLI を Claude Code のサブエージェントとして呼び出すため
 アカウント A が上限に達したらアカウント B へ回す、というローテーションは OpenAI の利用規約に抵触する恐れがあるためである。
 パターン 3 では、レビューとサブエージェントへの委譲を役割として分け、利用上限に応じて処理を別アカウントへ回さない。
 
+### 3 つのツールをまとめて導入するとき
+
+claude-codex-bridge、[ai-cross-review](https://github.com/ktysne/ai-cross-review)、[agent-cockpit](https://github.com/ktysne/agent-cockpit) をまとめて入れるときは、次の順に進める。
+どのツールも、ほかのツールの有無を実行時に調べるので、順番を変えても動く。この順にすると、各ツールの連携の確認を、導入した時点でそのまま行える。
+
+1. この文書の共通手順と、パターン 2 か 3 を行う。
+2. agent-cockpit を、そのドキュメントに従って導入する(パターン A、B、C)。続けて、この文書の「連携: + agent-cockpit」を確かめる。
+3. レビューを回すリポジトリごとに、ai-cross-review をそのドキュメントに従って導入する。続けて、この文書の「連携: + ai-cross-review」を確かめる。
+4. agent-cockpit の導入手順のパターン D を行う。
+
 ## 共通手順
+
+### 前提
+
+- Claude Code(`claude --version`)
+- git(`git --version`)。このリポジトリを取得し、更新するときに使う。
+- Node.js(`node --version`)。ラッパー役の定義のフック `codex-agent-hook.js` を node で起動する。
+- bash。Windows では Git Bash を使う。Claude Code の Bash ツールが Git Bash で動き、`codex-agent.sh` も bash で実行する。
+- Codex CLI は手順 1 で導入する。
+
+### 0. リポジトリを置く
+
+```bash
+git clone https://github.com/ktysne/claude-codex-bridge.git
+```
+
+置いた場所を、以降の手順の「このリポジトリ」として使う。定義とスクリプトはここから `~/.claude/` へ配置する。
+この文書を raw の URL で読んでいるときは、文中の相対リンク(`gpt-agents.md` など)は、置いたリポジトリの `docs/` の下のファイルを読む。
 
 ### 1. Codex CLI を導入する
 
@@ -42,7 +92,7 @@ codex login status
 
 ### 3. 定義とスクリプトを配置する
 
-このリポジトリの `.claude/agents/` にある必要な Claude 側定義を、`~/.claude/agents/` (`%USERPROFILE%\.claude\agents\`) にコピーする。
+このリポジトリの `.claude/agents/` にある必要な Claude 側定義を、Claude のホームの `agents/`(既定は `%USERPROFILE%\.claude\agents\`)にコピーする。
 必要な GPT 側定義を、`~/.claude/gpt-agents/` (`%USERPROFILE%\.claude\gpt-agents\`) にコピーする。
 `tools/codex-agent.sh` と `tools/codex-agent-hook.js` を `%USERPROFILE%\.claude\tools\` にコピーする。
 ラッパー役の定義(窓口の `impl-hard`、`impl-light`、`impl-standard` と、`codex-review`、`codex-subagent`)は、フロントマターのフックで `codex-agent-hook.js` を node で起動する。
@@ -70,7 +120,7 @@ CRLF に変換されると、bash が行末の CR を引数として読み、実
 
 ### 4. Claude Code の権限規則を設定する
 
-`%USERPROFILE%\.claude\settings.json` の `permissions.allow` に、次の 2 規則を追加する。
+Claude のホームの `settings.json`(既定は `%USERPROFILE%\.claude\settings.json`)の `permissions.allow` に、次の 2 規則を追加する。
 
 ```json
 {
@@ -93,7 +143,7 @@ auto mode でない場合も、同じ規則を入れておけば確認プロン�
 
 定義を配置しただけでは、メインセッションはどの依頼をどの定義に切り出すかを知らない。
 Claude Code はサブエージェント定義を呼び出せるものとして読み込むだけで、難易度に応じて選ぶ規則は持たないためである。
-そこで、利用先の `%USERPROFILE%\.claude\CLAUDE.md` に次の節を追加する。
+そこで、Claude のホームの `CLAUDE.md`(既定は `%USERPROFILE%\.claude\CLAUDE.md`)に次の節を追加する。
 特定のプロジェクトだけで使う場合は、そのプロジェクトの `CLAUDE.md` に追加する。
 
 ```markdown
@@ -172,7 +222,7 @@ GPT 側定義(`.claude/gpt-agents/`)と `tools/codex-agent.sh` は、`codex-agen
 
 共通手順で `tools/codex-agent.sh` と `tools/codex-agent-hook.js` も配置する。
 
-### 動作確認
+### 確認
 
 利用先プロジェクトのルートで、配置した定義を直接確認する。
 
@@ -184,7 +234,12 @@ bash ~/.claude/tools/codex-agent.sh impl-standard --effort low <<< "Reply with e
 
 3 定義それぞれの監査行に `agent=<定義名>` と `sandbox=workspace-write` が出て、応答の末尾に `codex-agent: result=ok` が出ることを確認する。
 `codex_home` に `~/.codex` に対応するパスが出て、各応答の末尾に `codex-agent: result=ok` が出ればよい。
-Claude Code の `Agent` ツールからも `subagent_type: impl-hard`、`subagent_type: impl-light`、`subagent_type: impl-standard` をそれぞれ指定して同じ応答を確認する。
+
+Claude Code からも確かめる。導入を進めている AI は自分のセッションを再起動できないので、開発者に再起動を依頼し、共通手順 6 で再起動した新しいセッションで確かめる。サブエージェントは背景で起動する(`run_in_background: false` を指定しない)。`Agent` ツールに `subagent_type: impl-light` を指定し、依頼文に `導入の確認のための依頼です。ファイルは変更せず、最終報告として PONG-AGENT とだけ書いてください。` を渡す。
+`Reply with exactly: PONG-AGENT` のような、返す文言だけを指示する依頼文は使わない。窓口が自分への指示として読み、Codex へ転送せずに `PONG-AGENT` とだけ返すことがあり、転送を確かめられないためである。
+報告の 1 行目が「GPT 側(Codex)で実行した」で、続けて `codex-agent: agent=impl-light` の監査行、`codex-agent: run=` の行、`codex-agent: result=ok` の行が出ればよい。
+窓口の報告には Codex の応答の本文が含まれない。本文は、`run=` の行の実行 ID で `bash ~/.claude/tools/codex-agent.sh --wait <実行 ID>` を実行して取り出し、`PONG-AGENT` を確かめる。
+`impl-hard` と `impl-standard` も同じ形で確かめる。
 `Agent type '<定義名>' not found` のように定義が見つからないときは、手順 3 の配置と、共通手順 6 の反映条件を確認する。
 
 ## パターン 2
@@ -210,7 +265,7 @@ Claude Code の `Agent` ツールからも `subagent_type: impl-hard`、`subagen
 
 共通手順で `tools/codex-agent.sh` と `tools/codex-agent-hook.js` も配置する。
 
-### 動作確認
+### 確認
 
 利用先プロジェクトのルートで、配置した定義を直接確認する。
 
@@ -227,6 +282,7 @@ bash ~/.claude/tools/codex-agent.sh codex-subagent --effort low <<< "Reply with 
 実装補助用の `codex-subagent` では `sandbox=workspace-write` が出ることを確認する。
 5 定義すべての応答の末尾に `codex-agent: result=ok` が出ればよい。
 Claude Code の `Agent` ツールからも、窓口の 3 定義と `codex-review`、`codex-subagent` の 5 つの `subagent_type` をそれぞれ指定して確認する。
+窓口の 3 定義の報告は、パターン 1 の確認と同じ形になる。`codex-review` と `codex-subagent` の報告には、Codex の応答の本文と `codex-agent: result=ok` の行がそのまま含まれる。
 `Agent type '<定義名>' not found` のように定義が見つからないときは、手順 3 の配置と、共通手順 6 の反映条件を確認する。
 
 ## パターン 3
@@ -316,7 +372,7 @@ GPT 側定義の `codex_home` は次の表のとおりに書く。リポジト�
 モデル、effort、サンドボックスの値は変更しない。
 `codex_home` 以外のフロントマターは、リポジトリの定義をそのまま使う。
 
-### 動作確認
+### 確認
 
 利用先プロジェクトのルートで、配置した定義を直接確認する。
 
@@ -332,6 +388,7 @@ bash ~/.claude/tools/codex-agent.sh codex-subagent --effort low <<< "Reply with 
 `codex-review` では `sandbox=read-only`、`codex-subagent` では `sandbox=workspace-write` が出ることを確認する。
 5 定義すべての応答の末尾に `codex-agent: result=ok` が出ればよい。
 Claude Code の `Agent` ツールからも、窓口の 3 定義と `codex-review`、`codex-subagent` の 5 つの `subagent_type` をそれぞれ指定して確認する。
+窓口の 3 定義の報告は、パターン 1 の確認と同じ形になる。`codex-review` と `codex-subagent` の報告には、Codex の応答の本文と `codex-agent: result=ok` の行がそのまま含まれる。
 `Agent type '<定義名>' not found` のように定義が見つからないときは、手順 3 の配置と、共通手順 6 の反映条件を確認する。
 
 ## 設定に関する注意
@@ -362,3 +419,90 @@ Claude Code の Codex プラグイン(`codex:codex-rescue` など)は、この�
 
 定義ファイルのモデル、effort、GPT 系サブエージェント経路の有効状態、サブエージェントの認証ホームを GUI から変える場合は、共通手順 7 の設定コンソールを使う。
 設定コンソールでは、`codex-review` と `codex-subagent` の GPT 側モデルと effort も変更できる。
+
+## 連携: + ai-cross-review
+
+### 前提
+
+[ai-cross-review](https://github.com/ktysne/ai-cross-review) を、そのドキュメントに従って、レビューを回すリポジトリへ導入しておく。ai-cross-review はリポジトリごとに入れるツールである。
+bridge はパターン 2 か 3 で導入し、`codex-review` と `codex-subagent` を配置しておく。
+
+### bridge 側の設定
+
+bridge 側で追加する設定は無い。ai-cross-review は `codex` を起動するときに、環境変数 `CROSS_REVIEW_CODEX_AGENT`、`~/.claude/tools/codex-agent.sh` の順に起動スクリプトを探し、見つかれば bridge 経由で起動する。
+
+- レビューだけのときは定義 `codex-review`、`--fix` を付けたときは定義 `codex-subagent` を使う。
+- ai-cross-review は起動の前に、定義ファイルの `codex_sandbox` がレビューなら `read-only`、`--fix` なら `workspace-write` かを確かめ、食い違えば起動しない。`codex-review` の `codex_sandbox` は `read-only` のまま変えない。
+- ai-cross-review は、`codex-agent.sh` の `codex exec` に `approval_policy=never` の指定があるときだけ bridge を経由する。古い `codex-agent.sh` を配置したままだと、bridge を経由せずに `codex` を直接起動する。
+- 定義が無い、`codex` が無いなどで `codex-agent.sh` が終了コード 3 を返したときは、ai-cross-review は `codex` を直接起動する。このときの認証ホームは、実行した環境の `CODEX_HOME`(未設定なら既定ホーム)になる。
+
+### 確認
+
+1. ai-cross-review を入れたリポジトリのルートで、次を実行する。実モデルを起動するため、利用枠を消費する。
+
+   ```bash
+   npm run review:codex -- --uncommitted --no-state
+   ```
+
+   未コミットの変更が無いと「レビュー対象の差分がありません。」と出て、Codex を起動しない。そのときは、確認用の小さな変更を作ってから流し、終わったら戻す。
+   agent-cockpit の経路設定でレビュアーを Claude にしていると、この実行は拒否される(終了コード 2)。先に `node tools/cross-review.js route` で `default` か `codex` であることを確かめる。
+
+2. 出力(stdout)に「Codex でレビューを実行します: codex-agent.sh 経由 (定義: codex-review)」と出て、`codex-agent: agent=codex-review` の監査行に `sandbox=read-only` が出ればよい。パターン 3 では、監査行の `codex_home=` が `.../.codex` であることも確かめる。
+3. 「bridge が未導入のため直接起動へ切り替えます。」と出るときは、`~/.claude/gpt-agents/codex-review.md` の配置、その `codex_enabled` と `codex_model`、`codex` が PATH にあるかを確かめる。
+4. 「approval_policy=never を明示していないため直接起動へ切り替えます」と出るときは、リポジトリを更新し、共通手順 3 で `codex-agent.sh` を配置し直す。
+
+## 連携: + agent-cockpit
+
+### 前提
+
+[agent-cockpit](https://github.com/ktysne/agent-cockpit) を、そのドキュメントに従って導入しておく。経路の切り替えを使うには、agent-cockpit の導入手順のパターン C(経路のフック `route.js` の登録)も行う。
+
+### bridge 側の設定
+
+bridge 側で追加する設定は無い。agent-cockpit とは次の形でつながる。
+
+- agent-cockpit は、Claude のホームの `tools/codex-agent.sh` があることで、bridge が導入済みだと判断する。agent-cockpit は `CLAUDE_CONFIG_DIR` が設定されていればそのディレクトリを Claude のホームとして見るが、bridge は `~/.claude` に固定で置く。`CLAUDE_CONFIG_DIR` を `~/.claude` 以外に設定しているときは、agent-cockpit が bridge を検出できない。([ktysne/agent-cockpit#115](https://github.com/ktysne/agent-cockpit/issues/115))
+- agent-cockpit は、サブエージェントの Bash に出る `codex-agent.sh <定義名>` と、ラッパーが出す `codex-agent: agent=` の監査行から、Codex のモデル、effort、認証ホームを読んで表示する。
+- ダッシュボードの「経路の設定」は、次に起動するサブエージェントに効く。稼働中のサブエージェントは切り替わらない。
+
+経路ごとの動きは次のとおりである。
+
+| 経路 | 窓口(`impl-hard`、`impl-light`、`impl-standard`) | `codex-review`、`codex-subagent` |
+|---|---|---|
+| 既定 | 通常どおり Codex へ転送する | 通常どおり Codex を起動する |
+| Codex | Codex へ転送する。起動時に「Codex で行う」指定が伝えられる | 通常どおり Codex を起動する |
+| Claude | `codex-agent.sh` の実行が agent-cockpit のフックに拒否される。窓口は拒否の文言を添えて `再委譲: impl-*-claude` を報告し、メインセッションが `impl-*-claude` へ委譲し直す | `codex-agent.sh` の実行が拒否され、拒否の文言を報告して止まる |
+
+経路を Claude にしたときの再委譲は、窓口の定義の「権限判定やフックに拒否された場合」の扱いによる。agent-cockpit の拒否の文言は `開発者の指定(agent-cockpit の経路設定):` で始まり、`codex-agent-hook:` では始まらない。
+メインセッションは、この拒否の文言を `理由: 再委譲:` の後ろに置いて委譲し直す(「委譲の検証」の手順)。
+この表は、定義の一般の規則から期待される動きである。経路が Claude のときは起動時にも「codex-agent.sh を呼ばない」指定が伝わるので、窓口が呼び出しを試みずに再委譲を報告することもある。経路が Codex のときは、再委譲で起動した `impl-*-claude` にも「Codex で行う」指定が伝わり、`codex-agent.sh` を実行しない定義と食い違う。agent-cockpit の指定を定義で名指しして扱うことと、実機での確認は [#129](https://github.com/ktysne/claude-codex-bridge/issues/129) で進める。
+
+### 確認
+
+1. 新しいセッションを開き、ダッシュボードを再読み込みする。上部の「経路の設定」に、サブエージェントの段(既定、Codex、Claude)が出ればよい。出ないときは、`~/.claude/tools/codex-agent.sh` の配置と、`CLAUDE_CONFIG_DIR` の設定を確かめる。
+2. 経路を「既定」のまま、パターンごとの確認と同じ依頼で `impl-light` を起動する。サブエージェントの行に、Codex のモデルの札が出ればよい。
+3. 経路を「Claude」にしてから、同じ依頼で `impl-light` を起動する。窓口が `再委譲: impl-light-claude` と、`開発者の指定(agent-cockpit の経路設定):` を含む拒否の文言を報告すればよい。違う報告になったときは #129 を見る。確かめ終わったら、経路を元の値に戻す。
+
+## 更新するとき
+
+リポジトリを更新して定義やスクリプトの変更を取り込んだときは、共通手順 3 と同じ手順で配置し直す。配置済みの控えは自動では更新されない。
+
+1. `git pull` でリポジトリを更新する。
+2. `tools/codex-agent.sh` と `tools/codex-agent-hook.js` を `~/.claude/tools/` に配置し直す。スクリプトは定義より先に置く。
+3. 選んだパターンの定義を、共通手順 3 で置いた場所(Claude のホームの `agents/` と `~/.claude/gpt-agents/`、またはプロジェクトの `.claude/agents/` と `.claude/gpt-agents/`)に配置し直す。GPT 側定義の `codex_home`、`codex_enabled`、モデル、effort を変えて使っているときは、上書きの前に差分を示し、変えた値を引き継ぐ。設定コンソールで変えた値も同じである。
+4. 共通手順 5 の役割分担の節が変わっていれば、共通手順 5 で節を足した `CLAUDE.md`(Claude のホームか、プロジェクトのもの)の節を書き換える。
+5. エージェント定義(`.claude/agents/`)を変えたときは、Claude Code を再起動する。
+6. 選んだパターンの「確認」の `codex-agent.sh` のコマンドを流す。
+
+## うまくいかないとき
+
+- `Agent type '<定義名>' not found` と出る:共通手順 3 の配置と、共通手順 6 の再起動を確かめる。
+- 窓口やラッパー役の定義の Bash と Write がすべて拒否される:`~/.claude/tools/codex-agent-hook.js` が無い、古い、または node が見つからない。共通手順 3 で、スクリプトを定義より先に配置し直す。
+- プロジェクト側に置いた定義で、フックの制限が効かず、窓口が転送以外の操作をする:そのフォルダ(worktree なら元のリポジトリのフォルダ)のワークスペースの信頼を受け入れる。信頼が無いと、フックだけが黙って飛ばされる。
+- `codex-agent.sh` が `$'\r': command not found` などで失敗する:行末が CRLF に変わっている。LF に戻す。
+- auto mode でサブエージェントが Codex を呼べない:共通手順 4 の `permissions.allow` を確かめる。
+- 終了コード 3 で止まる:`codex` が PATH に無い、GPT 側定義が無い、`codex_enabled: false` になっている、または `codex_model` が空である。窓口は `impl-*-claude` への再委譲を報告し、`codex-review` と `codex-subagent` は再委譲せずに止まる。
+- `codex_home が存在しない` と出て終了コード 2 で止まる:定義の `codex_home` のディレクトリが無い。パターン 1 と 2 では、「使う定義」の手順で `codex_home` を `~/.codex` に書き換えたかを確かめる。パターン 3 では、`~/.codex-subagent` へのログインを確かめる。
+- 終了コード 75 で止まる:利用上限など GPT 側の事情で実行できなかった。窓口は再委譲を報告し、`codex-review` と `codex-subagent` は終了コードと出力の末尾を返して止まる。
+- 書き込みを行う定義で、監査行は `sandbox=workspace-write` なのに、Codex の起動時の見出しに `sandbox: read-only` と出る(Windows):そのホームの `config.toml` に `[windows]` の `sandbox` の設定が無い。「設定に関する注意」の手順で足す。
+- 「進行中」と書いた報告が返る:Codex の実行中にサブエージェントがターンを終えた。委譲をやり直さずに、そのサブエージェントへ「codex-agent の状態確認」とだけ書いたメッセージを送る。詳しくは [gpt-agents.md](gpt-agents.md) の「既知の制約」にある。
