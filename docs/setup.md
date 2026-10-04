@@ -488,8 +488,8 @@ bridge 側で追加する設定は無い。agent-cockpit とは次の形でつ�
 
 1. `git pull` でリポジトリを更新する。
 2. `tools/codex-agent.sh` と `tools/codex-agent-hook.js` を `~/.claude/tools/` に配置し直す。スクリプトは定義より先に置く。
-3. 選んだパターンの定義を、Claude のホームの `agents/` と `~/.claude/gpt-agents/` に配置し直す。GPT 側定義の `codex_home`、`codex_enabled`、モデル、effort を変えて使っているときは、上書きの前に差分を示し、変えた値を引き継ぐ。設定コンソールで変えた値も同じである。
-4. 共通手順 5 の役割分担の節が変わっていれば、Claude のホームの `CLAUDE.md` の節を書き換える。
+3. 選んだパターンの定義を、共通手順 3 で置いた場所(Claude のホームの `agents/` と `~/.claude/gpt-agents/`、またはプロジェクトの `.claude/agents/` と `.claude/gpt-agents/`)に配置し直す。GPT 側定義の `codex_home`、`codex_enabled`、モデル、effort を変えて使っているときは、上書きの前に差分を示し、変えた値を引き継ぐ。設定コンソールで変えた値も同じである。
+4. 共通手順 5 の役割分担の節が変わっていれば、共通手順 5 で節を足した `CLAUDE.md`(Claude のホームか、プロジェクトのもの)の節を書き換える。
 5. エージェント定義(`.claude/agents/`)を変えたときは、Claude Code を再起動する。
 6. 選んだパターンの「確認」の `codex-agent.sh` のコマンドを流す。
 
