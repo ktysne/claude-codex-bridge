@@ -1,7 +1,7 @@
 ---
 name: impl-light
 description: 小規模な実装を担当する。文言・コメント・ドキュメントの修正、レビュー指摘への局所的な追従修正、既存パターンをそのまま踏襲する定型的なテスト追加や小さなリファクタリングに使う。
-model: claude-sonnet-5-5
+model: claude-haiku-5-5
 effort: low
 tools: Bash, Write
 hooks:
