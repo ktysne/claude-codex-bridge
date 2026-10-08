@@ -23,7 +23,7 @@ const PROMPTS_DIR_SUFFIX = '/.claude/codex-agent/prompts';
 function allowedFormsText(agent) {
   const name = agent || '<定義名>';
   return [
-    `Bash の bash ~/.claude/tools/codex-agent.sh ${name} [-C <パス>] < "<依頼文のファイル>"(-C は ${name} の前でもよい)`,
+    `Bash の bash ~/.claude/tools/codex-agent.sh ${name} [-C <パス>] < "<依頼文のファイル>"(-C は ${name} の前や < "<依頼文のファイル>" の後ろでもよい)`,
     `Bash の bash ~/.claude/tools/codex-agent.sh --new-prompt ${name} ["<親ディレクトリ>"]`,
     'bash ~/.claude/tools/codex-agent.sh --wait <実行 ID>',
     'bash ~/.claude/tools/codex-agent.sh --header-of "<出力ファイル>"',
@@ -42,10 +42,14 @@ function rejection(agent, reason) {
 function bashPatterns(agent) {
   const start = `^${WRAPPER_PREFIX}${SEP}`;
   const workdir = `-C${SEP}(?:${QUOTED_PATH}|${BARE_PATH})`;
-  // codex-agent.sh は -C を定義名の前後どちらでも受け付けるので、どちらの順序も許す。
-  const target = `(?:${agent}(?:${SEP}${workdir})?|${workdir}${SEP}${agent})`;
+  const input = `<[ \\t]*"([^"]+)"`;
+  // bash はリダイレクトの後ろの語も引数に渡し、codex-agent.sh は引数の順序を問わないので、-C はどの位置でも 1 回だけ許す。
   return {
-    forward: new RegExp(`${start}${target}${SEP}<[ \\t]*"([^"]+)"$`, 'u'),
+    forward: [
+      new RegExp(`${start}${agent}(?:${SEP}${workdir})?${SEP}${input}$`, 'u'),
+      new RegExp(`${start}${workdir}${SEP}${agent}${SEP}${input}$`, 'u'),
+      new RegExp(`${start}${agent}${SEP}${input}${SEP}${workdir}$`, 'u'),
+    ],
     others: [
       new RegExp(`${start}--new-prompt${SEP}${agent}(?:${SEP}${QUOTED_PATH})?$`, 'u'),
       new RegExp(`${start}--wait${SEP}${RUN_ID}$`, 'u'),
@@ -59,7 +63,7 @@ function isAllowedBash(agent, command) {
   if (typeof command !== 'string') return false;
   const trimmed = command.replace(/^\s+|\s+$/g, '');
   const patterns = bashPatterns(agent);
-  const forward = patterns.forward.exec(trimmed);
+  const forward = patterns.forward.map((re) => re.exec(trimmed)).find(Boolean);
   if (forward) return new RegExp(`^${QUOTED_PATH}$`, 'u').test(`"${forward[1]}"`) && isPromptFilePath(agent, forward[1]);
   return patterns.others.some((re) => re.test(trimmed));
 }
