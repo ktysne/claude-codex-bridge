@@ -396,8 +396,8 @@ namespace CodexBridgeConsole
                 _settings.ImplLight.CodexReasoningEffort);
 
             table.Controls.Add(CreateHeaderLabel("区分"), 0, 0);
-            table.Controls.Add(CreateGatewayHeaderLabel("窓口\nClaude モデル"), 1, 0);
-            table.Controls.Add(CreateGatewayHeaderLabel("窓口\neffort"), 2, 0);
+            table.Controls.Add(CreateGatewayHeaderLabel("窓口 (?)\nClaude モデル"), 1, 0);
+            table.Controls.Add(CreateGatewayHeaderLabel("窓口 (?)\neffort"), 2, 0);
             table.Controls.Add(CreateHeaderLabel("Claude 側モデル"), 3, 0);
             table.Controls.Add(CreateHeaderLabel("Claude 側 effort"), 4, 0);
             table.Controls.Add(CreateHeaderLabel("GPT モデル"), 5, 0);
@@ -802,6 +802,7 @@ namespace CodexBridgeConsole
         private Label CreateGatewayHeaderLabel(string text)
         {
             Label label = CreateHeaderLabel(text);
+            label.Cursor = Cursors.Help;
             _headerToolTip.SetToolTip(label, GatewayHeaderToolTipText);
             return label;
         }
