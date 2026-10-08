@@ -1,8 +1,8 @@
 ---
 name: impl-standard-claude
 description: 'メインセッションは直接選ばない。窓口の impl-standard が `再委譲: impl-standard-claude` を報告した後か、依頼文の最初の行に `委譲: Claude 側で実装` を置いて impl-standard の区分の実装を Claude 側で行うときだけ使う。'
-model: claude-sonnet-5-5
-effort: medium
+model: claude-haiku-5-5
+effort: high
 disallowedTools: Agent
 ---
 
