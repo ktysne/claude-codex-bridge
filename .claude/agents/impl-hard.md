@@ -39,6 +39,7 @@ Claude 側で実装する必要があるときは、実装用の定義 `impl-har
 
 ```bash
 bash ~/.claude/tools/codex-agent.sh impl-hard < "<払い出されたファイルのパス>"
+bash ~/.claude/tools/codex-agent.sh impl-hard -C "<作業ディレクトリ>" < "<払い出されたファイルのパス>"
 ```
 
 ヒアドキュメント(`<<'EOF'`)は使わない。コマンド文字列に依頼文を埋め込むと、8,191 文字を超える依頼文で起動が構文エラーになり、`\\` が `\` に変わるためである。

@@ -23,7 +23,7 @@ const PROMPTS_DIR_SUFFIX = '/.claude/codex-agent/prompts';
 function allowedFormsText(agent) {
   const name = agent || '<定義名>';
   return [
-    `Bash の bash ~/.claude/tools/codex-agent.sh ${name} [-C <パス>] < "<依頼文のファイル>"`,
+    `Bash の bash ~/.claude/tools/codex-agent.sh ${name} [-C <パス>] < "<依頼文のファイル>"(-C は ${name} の前でもよい)`,
     `Bash の bash ~/.claude/tools/codex-agent.sh --new-prompt ${name} ["<親ディレクトリ>"]`,
     'bash ~/.claude/tools/codex-agent.sh --wait <実行 ID>',
     'bash ~/.claude/tools/codex-agent.sh --header-of "<出力ファイル>"',
@@ -41,8 +41,11 @@ function rejection(agent, reason) {
 
 function bashPatterns(agent) {
   const start = `^${WRAPPER_PREFIX}${SEP}`;
+  const workdir = `-C${SEP}(?:${QUOTED_PATH}|${BARE_PATH})`;
+  // codex-agent.sh は -C を定義名の前後どちらでも受け付けるので、どちらの順序も許す。
+  const target = `(?:${agent}(?:${SEP}${workdir})?|${workdir}${SEP}${agent})`;
   return {
-    forward: new RegExp(`${start}${agent}(?:${SEP}-C${SEP}(?:${QUOTED_PATH}|${BARE_PATH}))?${SEP}<[ \\t]*"([^"]+)"$`, 'u'),
+    forward: new RegExp(`${start}${target}${SEP}<[ \\t]*"([^"]+)"$`, 'u'),
     others: [
       new RegExp(`${start}--new-prompt${SEP}${agent}(?:${SEP}${QUOTED_PATH})?$`, 'u'),
       new RegExp(`${start}--wait${SEP}${RUN_ID}$`, 'u'),
