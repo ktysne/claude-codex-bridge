@@ -396,8 +396,8 @@ namespace CodexBridgeConsole
                 _settings.ImplLight.CodexReasoningEffort);
 
             table.Controls.Add(CreateHeaderLabel("区分"), 0, 0);
-            table.Controls.Add(CreateGatewayHeaderLabel("窓口 (?)\nClaude モデル"), 1, 0);
-            table.Controls.Add(CreateGatewayHeaderLabel("窓口 (?)\neffort"), 2, 0);
+            table.Controls.Add(CreateGatewayHeaderLabel("窓口\nClaude モデル"), 1, 0);
+            table.Controls.Add(CreateGatewayHeaderLabel("窓口\neffort"), 2, 0);
             table.Controls.Add(CreateHeaderLabel("Claude 側モデル"), 3, 0);
             table.Controls.Add(CreateHeaderLabel("Claude 側 effort"), 4, 0);
             table.Controls.Add(CreateHeaderLabel("GPT モデル"), 5, 0);
@@ -802,9 +802,23 @@ namespace CodexBridgeConsole
         private Label CreateGatewayHeaderLabel(string text)
         {
             Label label = CreateHeaderLabel(text);
+            int iconSize = label.Font.Height;
+
+            // セルいっぱいに広げ、右下のアイコンをセルの角に置く。左右の余白をアイコン幅で揃えて文字を中央に保つ。
+            label.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            label.Margin = Padding.Empty;
+            label.Padding = new Padding(8 + iconSize, 6, 8 + iconSize, 6);
             label.Cursor = Cursors.Help;
+            label.Paint += (sender, e) => DrawHelpIcon(e.Graphics, label.ClientRectangle, iconSize);
             _headerToolTip.SetToolTip(label, GatewayHeaderToolTipText);
             return label;
+        }
+
+        private static void DrawHelpIcon(Graphics graphics, Rectangle bounds, int size)
+        {
+            const int inset = 3;
+            var iconBounds = new Rectangle(bounds.Right - size - inset, bounds.Bottom - size - inset, size, size);
+            graphics.DrawIcon(SystemIcons.Information, iconBounds);
         }
 
         private static Label CreateRowLabel(string text)
