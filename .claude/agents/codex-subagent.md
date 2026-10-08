@@ -1,7 +1,7 @@
 ---
 name: codex-subagent
 description: Codex CLI を実装補助専用の定義で呼び出す。認証ホームは `.claude/gpt-agents/<name>.md` の `codex_home` で決まる。技術調査、実装案の作成、テスト作成、リファクタリング案など、Claude Code から委譲された独立タスクに使う。作業ツリーへの書き込みを許可する。
-model: claude-sonnet-5-5
+model: claude-haiku-5-5
 effort: low
 tools: Bash, Write
 hooks:
