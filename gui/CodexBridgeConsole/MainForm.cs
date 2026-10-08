@@ -52,8 +52,17 @@ namespace CodexBridgeConsole
 
         private static readonly IReadOnlyList<string> EmptyList = new string[0];
 
+        private const string GatewayHeaderToolTipText =
+            "窓口(agents\\impl-*.md)は、依頼文を Codex へ転送して結果を返すだけの定義です。\n"
+            + "GPT 側で実装する委譲でも毎回起動されるため、この値が委譲ごとの費用を決めます。\n"
+            + "GPT 側が使えないときは、Claude 側の実装用の定義への再委譲を報告して止まります。";
+
+        // 窓口の見出しの説明は 3 行あり、既定の表示時間(5 秒)では読み切れない。
+        private const int HeaderToolTipAutoPopDelayMs = 20000;
+
         private readonly ConsoleSettings _settings;
         private readonly Choices _choices;
+        private readonly ToolTip _headerToolTip = new ToolTip { AutoPopDelay = HeaderToolTipAutoPopDelayMs };
         private ComboBox _codexHomeComboBox;
         private Label _codexSandboxLabel;
         private Label _codexVersionLabel;
@@ -386,13 +395,12 @@ namespace CodexBridgeConsole
                 _settings.ImplStandard.CodexReasoningEffort,
                 _settings.ImplLight.CodexReasoningEffort);
 
-            // 見出しは 2 行にして列幅を中身の幅に近づける。1 行にすると見出しの長さで画面が横に広がる。
             table.Controls.Add(CreateHeaderLabel("区分"), 0, 0);
-            table.Controls.Add(CreateHeaderLabel("窓口\nClaude モデル"), 1, 0);
-            table.Controls.Add(CreateHeaderLabel("窓口\neffort"), 2, 0);
-            table.Controls.Add(CreateHeaderLabel("Claude 側で実装するとき\nClaude モデル"), 3, 0);
-            table.Controls.Add(CreateHeaderLabel("Claude 側で実装するとき\neffort"), 4, 0);
-            table.Controls.Add(CreateHeaderLabel("GPT 側\nGPT モデル"), 5, 0);
+            table.Controls.Add(CreateGatewayHeaderLabel("窓口\nClaude モデル"), 1, 0);
+            table.Controls.Add(CreateGatewayHeaderLabel("窓口\neffort"), 2, 0);
+            table.Controls.Add(CreateHeaderLabel("Claude 側モデル"), 3, 0);
+            table.Controls.Add(CreateHeaderLabel("Claude 側 effort"), 4, 0);
+            table.Controls.Add(CreateHeaderLabel("GPT モデル"), 5, 0);
             table.Controls.Add(CreateHeaderLabel("GPT 側\neffort"), 6, 0);
 
             AddSubagentRow(table, 1, "hard", claudeModelWidth, claudeEffortWidth, gptModelWidth, gptEffortWidth,
@@ -779,6 +787,23 @@ namespace CodexBridgeConsole
                 Margin = new Padding(8, 6, 8, 6),
                 Font = CreateBaseFont(FontStyle.Bold)
             };
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _headerToolTip.Dispose();
+            }
+
+            base.Dispose(disposing);
+        }
+
+        private Label CreateGatewayHeaderLabel(string text)
+        {
+            Label label = CreateHeaderLabel(text);
+            _headerToolTip.SetToolTip(label, GatewayHeaderToolTipText);
+            return label;
         }
 
         private static Label CreateRowLabel(string text)
