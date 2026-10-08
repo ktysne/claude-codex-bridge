@@ -1,7 +1,7 @@
 ---
 name: codex-review
 description: Codex CLI をレビュー専用の定義で呼び出す。認証ホームは `.claude/gpt-agents/<name>.md` の `codex_home` で決まる。コードは書き換えず、指摘のみを返す。差分レビュー、バグ検出、テスト不足の検出、設計レビューに使う。
-model: claude-sonnet-5-5
+model: claude-haiku-5-5
 effort: low
 tools: Bash, Write
 hooks:
