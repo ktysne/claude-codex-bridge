@@ -106,6 +106,21 @@ test('Bash は -C のパスを引用符で囲んでも囲まなくても許す',
   assertAllowed(bash('codex-subagent', `${WRAPPER} codex-subagent -C D:/Desktop/Develop/repo < ${file}`));
 });
 
+test('Bash は -C を定義名の前に置いた転送も許す', () => {
+  for (const agent of ['impl-standard', 'codex-subagent']) {
+    const file = `"${SCRATCHPAD}/codex-agent-${agent}-20261009-013311-3eARdk/prompt.md"`;
+    assertAllowed(bash(agent, `${WRAPPER} -C "${WORKTREE}" ${agent} < ${file}`));
+    assertAllowed(bash(agent, `${WRAPPER} -C D:/Desktop/Develop/repo ${agent} < ${file}`));
+  }
+});
+
+test('Bash は -C を 2 回置いた転送、パスの無い -C、別の定義名への転送を拒否する', () => {
+  const file = `"${SCRATCHPAD}/codex-agent-impl-standard-20261009-013311-3eARdk/prompt.md"`;
+  assertRejected(bash('impl-standard', `${WRAPPER} -C "${WORKTREE}" impl-standard -C "${WORKTREE}" < ${file}`));
+  assertRejected(bash('impl-standard', `${WRAPPER} -C impl-standard < ${file}`));
+  assertRejected(bash('impl-standard', `${WRAPPER} -C "${WORKTREE}" impl-hard < ${file}`));
+});
+
 test('Bash は --wait と --header-of の形を許す', () => {
   assertAllowed(bash('codex-review', WAIT));
   assertAllowed(bash('codex-review', RUN_ID_OF));

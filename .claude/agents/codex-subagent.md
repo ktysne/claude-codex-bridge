@@ -29,6 +29,7 @@ hooks:
 
 ```bash
 bash ~/.claude/tools/codex-agent.sh codex-subagent < "<払い出されたファイルのパス>"
+bash ~/.claude/tools/codex-agent.sh codex-subagent -C "<作業ディレクトリ>" < "<払い出されたファイルのパス>"
 ```
 
 ヒアドキュメント(`<<'EOF'`)は使わない。コマンド文字列に依頼文を埋め込むと、8,191 文字を超える依頼文で起動が構文エラーになり、`\\` が `\` に変わるためである。
