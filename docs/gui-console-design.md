@@ -188,7 +188,7 @@ exe と同じフォルダに `choices.json` があれば、それで既定値を
 
 | 項目 | 選択肢 |
 |---|---|
-| Claude モデル | `claude-fable-5-1`、`claude-fable-5`、`claude-opus-5-5`、`claude-opus-5`、`claude-sonnet-5-5`、`claude-sonnet-5`、`claude-opus-4-8`、`claude-opus-4-7`、`claude-opus-4-6`、`claude-sonnet-4-6`、`claude-haiku-4-5` |
+| Claude モデル | `claude-fable-5-1`、`claude-fable-5`、`claude-opus-5-5`、`claude-opus-5`、`claude-sonnet-5-5`、`claude-sonnet-5`、`claude-haiku-5-5`、`claude-opus-4-8`、`claude-opus-4-7`、`claude-opus-4-6`、`claude-sonnet-4-6`、`claude-haiku-4-5` |
 | Claude effort | 選ばれているモデルが受け付ける値。対応表に無いモデルでは `low`、`medium`、`high`、`xhigh`、`max` |
 | GPT モデル | `codex debug models` から取得。取れなければ `gpt-6.1-sol`、`gpt-6-astra`、`gpt-6-sol`、`gpt-6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5` |
 | GPT effort | 選ばれているモデルが受け付ける値。目録が取れないか、目録にそのモデルが無ければ `gptModelEfforts` の対応値、対応表に無ければ `low`、`medium`、`high`、`xhigh`、`max`、`ultra` |
