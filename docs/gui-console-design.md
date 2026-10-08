@@ -82,7 +82,7 @@ GPT で実行する委譲でも毎回起動されるため、窓口のモデル�
 Claude 側の実装用(`agents/impl-*-claude.md`)の値は、窓口が再委譲を報告した後か、メインセッションが依頼文で GPT への委譲を止めたときに使われる。
 窓口が再委譲を報告するのは、GPT 側が未設定、未導入、無効化、利用上限などで使えないときである。
 出荷時は 3 区分とも GPT 経路が有効であり、Claude 側の実装用の値は GPT 側が使えないときの再委譲か、メインセッションが GPT への委譲を止めたときに使われる。
-窓口の列と取り違えないよう、この列の見出しには「Claude 側」を添える。
+この列の見出しは「Claude モデル」「Claude effort」とし、窓口の列とは見出しの「窓口」の有無で見分ける。
 
 ### GPT 経路の有効と無効
 
@@ -138,8 +138,8 @@ GPT 側定義を別名に退避すれば疑似的に無効化できるが、設�
 │ │                                                                        │ │
 │ │ [x] GPT 系サブエージェント経路を有効にする (impl-hard / impl-standard / impl-light) │
 │ │                                                                        │ │
-│ │           窓口                                                         GPT 側    │ │
-│ │ 区分      Claude モデル  effort Claude 側モデル  Claude 側 effort  GPT モデル  effort │ │
+│ │           窓口                                                                   │ │
+│ │ 区分      Claude モデル  effort Claude モデル  Claude effort  GPT モデル  GPT effort │ │
 │ │ hard      [sonnet-5-5 v] [low v] [opus-5-5    v] [high v] [(未設定)  v]           │ │
 │ │ standard  [sonnet-5-5 v] [low v] [opus-5-5    v] [med  v] [gpt-6-luna v] [max  v] │ │
 │ │ light     [sonnet-5-5 v] [low v] [sonnet-5    v] [med  v] [gpt-6-luna v] [xhigh v]│ │

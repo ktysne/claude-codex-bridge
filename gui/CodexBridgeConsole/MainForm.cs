@@ -398,10 +398,10 @@ namespace CodexBridgeConsole
             table.Controls.Add(CreateHeaderLabel("区分"), 0, 0);
             table.Controls.Add(CreateGatewayHeaderLabel("窓口\nClaude モデル"), 1, 0);
             table.Controls.Add(CreateGatewayHeaderLabel("窓口\neffort"), 2, 0);
-            table.Controls.Add(CreateHeaderLabel("Claude 側モデル"), 3, 0);
-            table.Controls.Add(CreateHeaderLabel("Claude 側 effort"), 4, 0);
+            table.Controls.Add(CreateHeaderLabel("Claude モデル"), 3, 0);
+            table.Controls.Add(CreateHeaderLabel("Claude effort"), 4, 0);
             table.Controls.Add(CreateHeaderLabel("GPT モデル"), 5, 0);
-            table.Controls.Add(CreateHeaderLabel("GPT 側\neffort"), 6, 0);
+            table.Controls.Add(CreateHeaderLabel("GPT effort"), 6, 0);
 
             AddSubagentRow(table, 1, "hard", claudeModelWidth, claudeEffortWidth, gptModelWidth, gptEffortWidth,
                 out _hardGatewayRow, out _hardClaudeRow, out _hardGptRow);
