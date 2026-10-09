@@ -114,6 +114,7 @@ GPT 側定義は利用者側の `~/.claude/gpt-agents/` への配置が必須で
 プロジェクト側で変えられるのは `codex_model`、`codex_reasoning_effort`、フロントマター後の役割文だけである。
 役割文が空なら利用者側の役割文を使う。
 それ以外のキーが利用者側の実効値と異なる場合は、終了コード 2 で止まる。
+例外として、`codex_enabled` はどちらかが `false` なら GPT 側の無効化として扱う(詳細は [gpt-agents.md](gpt-agents.md) の「定義ファイルの二層」)。
 
 `tools/codex-agent.sh` は行末が LF のまま配置する。
 CRLF に変換されると、bash が行末の CR を引数として読み、実行に失敗する。

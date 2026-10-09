@@ -514,6 +514,9 @@ codex_model="$(fm_get "$front_matter" codex_model)"
 codex_effort="$(fm_get "$front_matter" codex_reasoning_effort)"
 codex_sandbox="$(fm_get "$front_matter" codex_sandbox)"
 codex_enabled="$(fm_get "$front_matter" codex_enabled)"
+# キーが無いときだけ true を補う。値を書きかけた指定は不正として止める。
+# 他のキーと違い、既定が Codex を起動する側に倒れるためである。
+grep -q '^codex_enabled:' <<<"$front_matter" || codex_enabled="true"
 role_body="$(read_role_body "$def_file")"
 
 # codex_home は認証とサンドボックス外の設定(MCP など)、codex_sandbox は書き込みの可否を決める。
@@ -527,12 +530,17 @@ if [ -f "$repo_def_file" ] && ! [ "$repo_def_file" -ef "$def_file" ]; then
     case "$key" in codex_model|codex_reasoning_effort) continue ;; esac
     repo_value="$(fm_get "$line" "$key")"
     user_value="$(fm_get "$front_matter" "$key")"
+    # GPT 側を止める向きは安全側なので、どちらかが false なら無効化として扱う。
+    if [ "$key" = codex_enabled ] && { [ "$repo_value" = false ] || [ "$codex_enabled" = false ]; }; then
+      codex_enabled="false"
+      continue
+    fi
     case "$key" in
       codex_home)
         repo_value="$(normalize_codex_home "$repo_value")"
         user_value="$(normalize_codex_home "$user_value")" ;;
       codex_sandbox) [ -n "$user_value" ] || user_value="read-only" ;;
-      codex_enabled) grep -q '^codex_enabled:' <<<"$front_matter" || user_value="true" ;;
+      codex_enabled) user_value="$codex_enabled" ;;
     esac
     [ "$repo_value" = "$user_value" ] || die "キー $key が利用者側の実効値と一致しない: $repo_def_file (リポジトリ側の定義で変えられるのは codex_model と codex_reasoning_effort だけ)"
   done <<<"$repo_front_matter"
@@ -546,9 +554,6 @@ if [ -f "$repo_def_file" ] && ! [ "$repo_def_file" -ef "$def_file" ]; then
   case "$repo_role_body" in *[![:space:]]*) role_body="$repo_role_body" ;; esac
 fi
 
-# キーが無いときだけ true を補う。値を書きかけた指定は不正として止める。
-# 他のキーと違い、既定が Codex を起動する側に倒れるためである。
-grep -q '^codex_enabled:' <<<"$front_matter" || codex_enabled="true"
 case "$codex_enabled" in
   true) ;;
   false) die_missing "GPT 側が無効化されている (codex_enabled: false): $def_file" ;;

@@ -1060,10 +1060,22 @@ codex_model: model-test' "$DEFAULT_BODY"
   t_repo_forbidden_key codex_sandbox workspace-write
 }
 
-t_repo_enabled_rejected() {
+t_repo_enabled_keeps_user_disabled() {
   write_def "$(home_def)" "$DEFAULT_FM
 codex_enabled: false" "$DEFAULT_BODY"
-  t_repo_forbidden_key codex_enabled true
+  write_def "$(work_def)" 'codex_enabled: true'
+  run_wrapper "$AGENT"
+  expect_exit3
+}
+
+t_repo_enabled_can_disable() {
+  write_def "$(work_def)" 'codex_enabled: false'
+  run_wrapper "$AGENT"
+  expect_exit3
+}
+
+t_repo_enabled_invalid_rejected() {
+  t_repo_forbidden_key codex_enabled yes
 }
 
 t_repo_unknown_rejected() {
@@ -2501,7 +2513,9 @@ run_case "定義の探索: リポジトリ側のモデル、effort、役割文�
 run_case "定義の探索: カレントに無ければホームの定義を使う" t_lookup_home_fallback
 run_case "リポジトリ側定義: 異なる認証ホームを拒否する" t_repo_home_rejected
 run_case "リポジトリ側定義: 書き込み権限の変更を拒否する" t_repo_sandbox_rejected
-run_case "リポジトリ側定義: 利用者が無効化した GPT 側の再開を拒否する" t_repo_enabled_rejected
+run_case "リポジトリ側定義: 利用者が無効化した GPT 側は codex_enabled: true でも再開せず終了コード 3" t_repo_enabled_keeps_user_disabled
+run_case "リポジトリ側定義: codex_enabled: false で無効化でき終了コード 3" t_repo_enabled_can_disable
+run_case "リポジトリ側定義: 利用者側と異なる codex_enabled の不正値を拒否する" t_repo_enabled_invalid_rejected
 run_case "リポジトリ側定義: 未知のキーの変更を拒否する" t_repo_unknown_rejected
 run_case "リポジトリ側定義: 未知のキーの追加を拒否する" t_repo_unknown_added_rejected
 run_case "リポジトリ側定義: 認証ホームの環境変数表記と末尾スラッシュを許す" t_repo_same_home
