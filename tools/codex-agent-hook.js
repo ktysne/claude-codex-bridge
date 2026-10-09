@@ -9,26 +9,31 @@
 'use strict';
 
 const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const WRAPPER_AGENTS = ['codex-review', 'codex-subagent', 'impl-hard', 'impl-standard', 'impl-light'];
 const WRAPPER_PREFIX = 'bash ~/\\.claude/tools/codex-agent\\.sh';
-// 二重引用符の中で bash が展開や終端に使う文字と、行を分ける文字を含めない。
-const QUOTED_PATH = '"[^"$`\\r\\n\\0]+"';
+// 二重引用符内のバックスラッシュは、bash が特別扱いする文字の直前には置けない。
+const QUOTED_PATH = '"(?:[^"\\\\$\x60\\r\\n\\0]|\\\\[^"\\\\$\x60\\r\\n\\0])+"';
 // 引用符なしのパスは、シェルが特別に扱わない文字だけにする。
 const BARE_PATH = "[\\p{L}\\p{N}._~/:+@,=-]+";
+const PROMPT_PATH_CHARACTERS = '[\\p{L}\\p{N}._~/:@+,= -]';
+const PROMPT_PATH_SEGMENT = new RegExp('^' + PROMPT_PATH_CHARACTERS + '+$', 'u');
 const SEP = '[ \\t]+';
 const RUN_ID = '[A-Za-z0-9._-]+';
-const PROMPTS_DIR_SUFFIX = '/.claude/codex-agent/prompts';
 
 function allowedFormsText(agent) {
   const name = agent || '<定義名>';
   return [
-    `Bash の bash ~/.claude/tools/codex-agent.sh ${name} [-C <パス>] < "<依頼文のファイル>"(-C は ${name} の前や < "<依頼文のファイル>" の後ろでもよい)`,
+    'Bash の bash ~/.claude/tools/codex-agent.sh ' + name
+      + ' [-C "<作業ディレクトリ>" または -C <引用符なしパス>] < "<依頼文のファイル>"(-C は '
+      + name + ' の前や < "<依頼文のファイル>" の後ろでもよい)',
     `Bash の bash ~/.claude/tools/codex-agent.sh --new-prompt ${name} ["<親ディレクトリ>"]`,
     'bash ~/.claude/tools/codex-agent.sh --wait <実行 ID>',
     'bash ~/.claude/tools/codex-agent.sh --header-of "<出力ファイル>"',
     `Write の <スクラッチパッド>/codex-agent-${name}-<YYYYMMDD>-<HHMMSS>-<英数字 6 文字>/prompt.md`
-      + '(スクラッチパッドが無いときは %USERPROFILE%/.claude/codex-agent/prompts/ の下)',
+      + '(スクラッチパッドが無いときはホームディレクトリ/.claude/codex-agent/prompts/ の下)',
   ].join('、');
 }
 
@@ -42,7 +47,7 @@ function rejection(agent, reason) {
 function bashPatterns(agent) {
   const start = `^${WRAPPER_PREFIX}${SEP}`;
   const workdir = `-C${SEP}(?:${QUOTED_PATH}|${BARE_PATH})`;
-  const input = `<[ \\t]*"([^"]+)"`;
+  const input = '<[ \\t]*"(' + PROMPT_PATH_CHARACTERS + '+)"';
   // bash はリダイレクトの後ろの語も引数に渡し、codex-agent.sh は引数の順序を問わないので、-C はどの位置でも 1 回だけ許す。
   return {
     forward: [
@@ -74,14 +79,25 @@ function isAllowedWrite(agent, filePath) {
 
 function isPromptFilePath(agent, filePath) {
   if (typeof filePath !== 'string' || filePath.includes('\0')) return false;
-  const segments = filePath.replace(/\\/g, '/').split('/');
+  const normalizedPath = filePath.replace(/\\/g, '/');
+  const windowsAbsolute = /^[A-Za-z]:/.test(normalizedPath) && normalizedPath[2] === '/';
+  const posixAbsolute = normalizedPath.startsWith('/');
+  if (!windowsAbsolute && !posixAbsolute) return false;
+  const segments = normalizedPath.split('/');
+  const checkedSegments = posixAbsolute ? segments.slice(1) : segments;
+  if (checkedSegments.some((segment) => segment === '' || segment === '.' || segment === '..'
+      || !PROMPT_PATH_SEGMENT.test(segment))) return false;
   const fileName = segments[segments.length - 1];
   const parentName = segments.length >= 2 ? segments[segments.length - 2] : '';
   const grandparentPath = segments.slice(0, -2).join('/');
   const grandparentName = segments.length >= 3 ? segments[segments.length - 3] : '';
   const directoryPattern = new RegExp(`^codex-agent-${agent}-\\d{8}-\\d{6}-[A-Za-z0-9]{6}$`);
   if (fileName !== 'prompt.md' || !directoryPattern.test(parentName)) return false;
-  return grandparentName === 'scratchpad' || grandparentPath.endsWith(PROMPTS_DIR_SUFFIX);
+  const homedirPromptsPath = path.join(os.homedir(), '.claude', 'codex-agent', 'prompts')
+    .replace(/\\/g, '/');
+  const normalizePathForComparison = (value) => process.platform === 'win32' ? value.toLowerCase() : value;
+  return normalizePathForComparison(grandparentName) === 'scratchpad'
+    || normalizePathForComparison(grandparentPath) === normalizePathForComparison(homedirPromptsPath);
 }
 
 // 許すなら null、拒否するなら理由の文を返す。
