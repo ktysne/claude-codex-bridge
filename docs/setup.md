@@ -106,10 +106,14 @@ codex login status
 GPT 経路の有効状態やモデル、effort は定義ファイルを正とし、設定コンソールからも変更できる。
 次の手順で書く役割分担の表が `impl-hard` を参照するので、配置を省くと表の hard 区分を呼び出せなくなる。
 
-特定の利用先プロジェクトだけで使う場合は、Claude 側定義を `<利用先プロジェクト>/.claude/agents/` に、GPT 側定義を `<利用先プロジェクト>/.claude/gpt-agents/` に置いてもよい。
+特定の利用先プロジェクトだけで使う場合は、Claude 側定義を `<利用先プロジェクト>/.claude/agents/` に置いてもよい。
+GPT 側定義は利用者側の `~/.claude/gpt-agents/` への配置が必須であり、プロジェクト側だけに置いても起動しない。
+プロジェクト側の `<利用先プロジェクト>/.claude/gpt-agents/` には、利用者側の定義に重ねる差分を置ける。
 この場合も、Claude 側定義が呼び出すスクリプトを `%USERPROFILE%\.claude\tools\codex-agent.sh` に置く。
 ラッパー役の定義のフックは、プロジェクト側に置いた定義では、そのフォルダのワークスペース信頼が無いと効かない。worktree では元のリポジトリのフォルダの信頼で判定される(詳細は [gpt-agents.md](gpt-agents.md) の「ラッパー役の定義の道具を絞る」)。
-プロジェクト側の GPT 側定義は、ユーザー定義側より優先して使われる。
+プロジェクト側で変えられるのは `codex_model`、`codex_reasoning_effort`、フロントマター後の役割文だけである。
+役割文が空なら利用者側の役割文を使う。
+それ以外のキーが利用者側の実効値と異なる場合は、終了コード 2 で止まる。
 
 `tools/codex-agent.sh` は行末が LF のまま配置する。
 CRLF に変換されると、bash が行末の CR を引数として読み、実行に失敗する。
@@ -494,7 +498,11 @@ bridge 側で追加する設定は無い。agent-cockpit とは次の形でつ�
 
 1. `git pull` でリポジトリを更新する。
 2. `tools/codex-agent.sh` と `tools/codex-agent-hook.js` を `~/.claude/tools/` に配置し直す。スクリプトは定義より先に置く。
-3. 選んだパターンの定義を、共通手順 3 で置いた場所(Claude のホームの `agents/` と `~/.claude/gpt-agents/`、またはプロジェクトの `.claude/agents/` と `.claude/gpt-agents/`)に配置し直す。GPT 側定義の `codex_home`、`codex_enabled`、モデル、effort を変えて使っているときは、上書きの前に差分を示し、変えた値を引き継ぐ。設定コンソールで変えた値も同じである。
+3. 選んだパターンの定義を、共通手順 3 で置いた場所に配置し直す。
+   Claude 側は Claude のホームの `agents/` またはプロジェクトの `.claude/agents/`、GPT 側は利用者側の `~/.claude/gpt-agents/` が対象である。
+   プロジェクト側の GPT 側定義を使う場合は、`.claude/gpt-agents/` の差分も更新する。
+   利用者側の GPT 側定義の `codex_home`、`codex_enabled`、モデル、effort を変えて使っているときは、上書きの前に差分を示し、変えた値を引き継ぐ。
+   設定コンソールで変えた値も同じである。
 4. 共通手順 5 の役割分担の節が変わっていれば、共通手順 5 で節を足した `CLAUDE.md`(Claude のホームか、プロジェクトのもの)の節を書き換える。
 5. エージェント定義(`.claude/agents/`)を変えたときは、Claude Code を再起動する。
 6. 選んだパターンの「確認」の `codex-agent.sh` のコマンドを流す。

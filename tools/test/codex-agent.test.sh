@@ -285,7 +285,7 @@ new_case_root() {
   root="$(mktemp -d "$TEST_TMP/case.XXXXXX")"
   mkdir -p "$root/home/.codex-test" "$root/work/.claude/gpt-agents" "$root/bin" "$root/fake" "$root/tmp"
   write_fake_codex
-  write_def "$(work_def)" "$DEFAULT_FM" "$DEFAULT_BODY"
+  write_def "$(home_def)" "$DEFAULT_FM" "$DEFAULT_BODY"
   REQ='依頼の本文である。
 2 行目の依頼。'
   EXTRA_ENV=()
@@ -470,7 +470,7 @@ t_args_effort_override() {
 }
 
 t_args_defaults() {
-  write_def "$(work_def)" 'codex_home: ~/.codex-test
+  write_def "$(home_def)" 'codex_home: ~/.codex-test
 codex_model: model-test' "$DEFAULT_BODY"
   run_wrapper "$AGENT"
   expect_rc 0
@@ -496,7 +496,7 @@ t_prompt_with_role() {
 }
 
 t_prompt_without_role() {
-  write_def "$(work_def)" "$DEFAULT_FM"
+  write_def "$(home_def)" "$DEFAULT_FM"
   run_wrapper "$AGENT"
   expect_rc 0
   printf '%s\n' "$REQ" >"$root/expected_stdin"
@@ -927,7 +927,7 @@ t_exit2_bad_effort_option() {
 }
 
 t_exit2_bad_effort_def() {
-  write_def "$(work_def)" 'codex_home: ~/.codex-test
+  write_def "$(home_def)" 'codex_home: ~/.codex-test
 codex_model: model-test
 codex_reasoning_effort: extreme' "$DEFAULT_BODY"
   run_wrapper "$AGENT"
@@ -935,7 +935,7 @@ codex_reasoning_effort: extreme' "$DEFAULT_BODY"
 }
 
 t_exit2_bad_sandbox() {
-  write_def "$(work_def)" 'codex_home: ~/.codex-test
+  write_def "$(home_def)" 'codex_home: ~/.codex-test
 codex_model: model-test
 codex_sandbox: danger-full-access' "$DEFAULT_BODY"
   run_wrapper "$AGENT"
@@ -943,20 +943,20 @@ codex_sandbox: danger-full-access' "$DEFAULT_BODY"
 }
 
 t_exit2_bad_enabled() {
-  write_def "$(work_def)" "$DEFAULT_FM
+  write_def "$(home_def)" "$DEFAULT_FM
 codex_enabled: yes" "$DEFAULT_BODY"
   run_wrapper "$AGENT"
   expect_exit2
 }
 
 t_exit2_no_codex_home_key() {
-  write_def "$(work_def)" 'codex_model: model-test' "$DEFAULT_BODY"
+  write_def "$(home_def)" 'codex_model: model-test' "$DEFAULT_BODY"
   run_wrapper "$AGENT"
   expect_exit2
 }
 
 t_exit2_codex_home_missing() {
-  write_def "$(work_def)" 'codex_home: ~/.codex-missing
+  write_def "$(home_def)" 'codex_home: ~/.codex-missing
 codex_model: model-test' "$DEFAULT_BODY"
   run_wrapper "$AGENT"
   expect_exit2
@@ -982,7 +982,7 @@ expect_exit3() {
 }
 
 t_exit3_no_def() {
-  rm -f "$(work_def)"
+  rm -f "$(home_def)"
   run_wrapper "$AGENT"
   expect_exit3
 }
@@ -998,38 +998,38 @@ t_exit3_no_codex() {
 }
 
 t_exit3_disabled() {
-  write_def "$(work_def)" "$DEFAULT_FM
+  write_def "$(home_def)" "$DEFAULT_FM
 codex_enabled: false" "$DEFAULT_BODY"
   run_wrapper "$AGENT"
   expect_exit3
 }
 
 t_exit3_no_model_key() {
-  write_def "$(work_def)" 'codex_home: ~/.codex-test' "$DEFAULT_BODY"
+  write_def "$(home_def)" 'codex_home: ~/.codex-test' "$DEFAULT_BODY"
   run_wrapper "$AGENT"
   expect_exit3
 }
 
 t_exit3_empty_model() {
-  write_def "$(work_def)" 'codex_home: ~/.codex-test
+  write_def "$(home_def)" 'codex_home: ~/.codex-test
 codex_model: ""' "$DEFAULT_BODY"
   run_wrapper "$AGENT"
   expect_exit3
 }
 
 t_lookup_work_first() {
-  write_def "$(work_def)" 'codex_home: ~/.codex-test
-codex_model: model-work' "$DEFAULT_BODY"
-  write_def "$(home_def)" 'codex_home: ~/.codex-test
-codex_model: model-home' "$DEFAULT_BODY"
+  write_def "$(work_def)" 'codex_model: model-work
+codex_reasoning_effort: high' 'リポジトリの役割文'
   run_wrapper "$AGENT"
   expect_rc 0
   expect_arg_pair -m model-work
-  grep -q "^codex-agent: agent=$AGENT model=model-work " "$root/out" || fail "監査行の model が model-work でない"
+  expect_arg_pair -c 'model_reasoning_effort="high"'
+  expect_out_line "codex-agent: agent=$AGENT model=model-work effort=high sandbox=workspace-write codex_home=$(norm_path "$root/home/.codex-test") workdir=$(norm_path "$root/work")"
+  printf '%s\n\n---\n\n## 依頼\n\n%s\n' 'リポジトリの役割文' "$REQ" >"$root/expected_stdin"
+  cmp -s "$root/expected_stdin" "$root/fake/exec.stdin" || fail "リポジトリ側の役割文が渡らない"
 }
 
 t_lookup_home_fallback() {
-  rm -f "$(work_def)"
   write_def "$(home_def)" 'codex_home: ~/.codex-test
 codex_model: model-home' "$DEFAULT_BODY"
   run_wrapper "$AGENT"
@@ -1037,8 +1037,152 @@ codex_model: model-home' "$DEFAULT_BODY"
   expect_arg_pair -m model-home
 }
 
+t_repo_forbidden_key() {
+  local key="$1" value="$2"
+  write_def "$(work_def)" "$key: $value"
+  run_wrapper "$AGENT"
+  expect_rc 2
+  expect_no_codex_call
+  expect_err_reason
+  grep -Fq "$key" "$root/err" || fail "エラーにキー名が無い"
+  grep -Fq "$(work_def)" "$root/err" || fail "エラーにリポジトリ側のパスが無い"
+  grep -Fq 'リポジトリ側の定義で変えられるのは codex_model と codex_reasoning_effort だけ' "$root/err" || fail "エラーに上書き制限の説明が無い"
+}
+
+t_repo_home_rejected() {
+  mkdir -p "$root/home/.codex-other"
+  t_repo_forbidden_key codex_home '~/.codex-other'
+}
+
+t_repo_sandbox_rejected() {
+  write_def "$(home_def)" 'codex_home: ~/.codex-test
+codex_model: model-test' "$DEFAULT_BODY"
+  t_repo_forbidden_key codex_sandbox workspace-write
+}
+
+t_repo_enabled_rejected() {
+  write_def "$(home_def)" "$DEFAULT_FM
+codex_enabled: false" "$DEFAULT_BODY"
+  t_repo_forbidden_key codex_enabled true
+}
+
+t_repo_unknown_rejected() {
+  write_def "$(home_def)" "$DEFAULT_FM
+custom_key: user-value" "$DEFAULT_BODY"
+  t_repo_forbidden_key custom_key repo-value
+}
+
+t_repo_unknown_added_rejected() {
+  t_repo_forbidden_key custom_key repo-value
+}
+
+t_repo_same_home() {
+  write_def "$(work_def)" 'codex_home: "%USERPROFILE%/.codex-test/" # 認証ホーム'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_eq "exec の CODEX_HOME" "$(norm_path "$root/home/.codex-test")" "$(call_field 2 home)"
+}
+
+t_repo_home_case_and_slashes() {
+  local path
+  path="$(norm_path "$root/home/.codex-test")"
+  path="${path^^}"
+  path="${path//\//\\}"
+  write_def "$(work_def)" "codex_home: '$path\\'"
+  run_wrapper "$AGENT"
+  expect_rc 0
+}
+
+t_repo_same_values() {
+  write_def "$(home_def)" 'codex_home: ~/.codex-test
+codex_model: model-test
+custom_key: "same" # 利用者側の値' "$DEFAULT_BODY"
+  write_def "$(work_def)" "codex_sandbox: read-only
+codex_enabled: true
+custom_key: 'same' # リポジトリ側の値"
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_arg_pair --sandbox read-only
+}
+
+t_repo_effort_only() {
+  write_def "$(work_def)" 'codex_reasoning_effort: high'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_arg_pair -m model-test
+  expect_arg_pair -c 'model_reasoning_effort="high"'
+}
+
+t_repo_empty_model() {
+  write_def "$(work_def)" 'codex_model: ""'
+  run_wrapper "$AGENT"
+  expect_exit3
+}
+
+t_repo_empty_front_matter() {
+  printf '%s\n' '---' '---' >"$(work_def)"
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_arg_pair -m model-test
+  expect_arg_pair -c 'model_reasoning_effort="low"'
+}
+
+t_repo_dollar_home() {
+  write_def "$(work_def)" 'codex_home: $USERPROFILE/.codex-test'
+  run_wrapper "$AGENT"
+  expect_rc 0
+}
+
+t_repo_empty_role() {
+  write_def "$(work_def)" 'codex_model: model-work' '   '
+  run_wrapper "$AGENT"
+  expect_rc 0
+  printf '%s\n\n---\n\n## 依頼\n\n%s\n' "$DEFAULT_BODY" "$REQ" >"$root/expected_stdin"
+  cmp -s "$root/expected_stdin" "$root/fake/exec.stdin" || fail "利用者側の役割文に戻らない"
+}
+
+t_repo_only() {
+  mv "$(home_def)" "$(work_def)"
+  run_wrapper "$AGENT"
+  expect_exit3
+}
+
+t_lookup_home_is_work() {
+  (
+    cd "$root/home" || exit 99
+    export USERPROFILE="$root/home" HOME="$root/home" PATH="$root/bin:/usr/bin:/bin" TMPDIR="$root/tmp"
+    printf '%s' "$REQ" | "$BASH_BIN" "$WRAPPER" "$AGENT" >"$root/out" 2>"$root/err"
+  )
+  RC=$?
+  expect_rc 0
+  expect_arg_pair -m model-test
+  expect_arg_pair --sandbox workspace-write
+}
+
+t_repo_bad_front_matter() {
+  printf '%s\n' 'codex_model: model-work' >"$(work_def)"
+  run_wrapper "$AGENT"
+  expect_rc 2
+  expect_no_codex_call
+}
+
+t_repo_unclosed_front_matter() {
+  printf '%s\n' '---' 'codex_model: model-work' >"$(work_def)"
+  run_wrapper "$AGENT"
+  expect_rc 2
+  expect_no_codex_call
+}
+
+t_repo_duplicate_forbidden_key() {
+  write_def "$(work_def)" 'codex_home: ~/.codex-test
+codex_home: ~/.codex-other'
+  run_wrapper "$AGENT"
+  expect_rc 2
+  expect_no_codex_call
+}
+
 t_fm_trailing_comment() {
-  write_def "$(work_def)" 'codex_home: ~/.codex-test  # 認証ホーム
+  write_def "$(home_def)" 'codex_home: ~/.codex-test  # 認証ホーム
 codex_model: model-x  # comment' "$DEFAULT_BODY"
   run_wrapper "$AGENT"
   expect_rc 0
@@ -1046,7 +1190,7 @@ codex_model: model-x  # comment' "$DEFAULT_BODY"
 }
 
 t_fm_double_quotes() {
-  write_def "$(work_def)" 'codex_home: "~/.codex-test"
+  write_def "$(home_def)" 'codex_home: "~/.codex-test"
 codex_model: "model-dq"' "$DEFAULT_BODY"
   run_wrapper "$AGENT"
   expect_rc 0
@@ -1054,7 +1198,7 @@ codex_model: "model-dq"' "$DEFAULT_BODY"
 }
 
 t_fm_single_quotes() {
-  write_def "$(work_def)" "codex_home: '~/.codex-test'
+  write_def "$(home_def)" "codex_home: '~/.codex-test'
 codex_model: 'model-sq'" "$DEFAULT_BODY"
   run_wrapper "$AGENT"
   expect_rc 0
@@ -2122,7 +2266,7 @@ t_marker_read_only() {
   setup_git_work || return
   local runs stale_log="$root/stale.log"
   runs="$(runs_dir_of "$root/work")"
-  write_def "$(work_def)" 'codex_home: ~/.codex-test
+  write_def "$(home_def)" 'codex_home: ~/.codex-test
 codex_model: model-test
 codex_reasoning_effort: low
 codex_sandbox: read-only' "$DEFAULT_BODY"
@@ -2353,8 +2497,26 @@ run_case "終了コード 3: codex が PATH に無い" t_exit3_no_codex
 run_case "終了コード 3: codex_enabled: false" t_exit3_disabled
 run_case "終了コード 3: codex_model キーなし" t_exit3_no_model_key
 run_case "終了コード 3: codex_model が空" t_exit3_empty_model
-run_case "定義の探索: カレントの定義がホームより優先する" t_lookup_work_first
+run_case "定義の探索: リポジトリ側のモデル、effort、役割文を重ねる" t_lookup_work_first
 run_case "定義の探索: カレントに無ければホームの定義を使う" t_lookup_home_fallback
+run_case "リポジトリ側定義: 異なる認証ホームを拒否する" t_repo_home_rejected
+run_case "リポジトリ側定義: 書き込み権限の変更を拒否する" t_repo_sandbox_rejected
+run_case "リポジトリ側定義: 利用者が無効化した GPT 側の再開を拒否する" t_repo_enabled_rejected
+run_case "リポジトリ側定義: 未知のキーの変更を拒否する" t_repo_unknown_rejected
+run_case "リポジトリ側定義: 未知のキーの追加を拒否する" t_repo_unknown_added_rejected
+run_case "リポジトリ側定義: 認証ホームの環境変数表記と末尾スラッシュを許す" t_repo_same_home
+run_case "リポジトリ側定義: 認証ホームの大小文字と区切り文字の違いを許す" t_repo_home_case_and_slashes
+run_case "リポジトリ側定義: 既定値とコメントや引用符を除いた同じ値を許す" t_repo_same_values
+run_case "リポジトリ側定義: 空白だけの役割文なら利用者側を使う" t_repo_empty_role
+run_case "リポジトリ側定義: 利用者側が無ければ終了コード 3" t_repo_only
+run_case "リポジトリ側定義: 先頭区切りが無ければ終了コード 2" t_repo_bad_front_matter
+run_case "リポジトリ側定義: 閉じる区切りが無ければ終了コード 2" t_repo_unclosed_front_matter
+run_case "リポジトリ側定義: 同じキーの二つ目の変更も拒否する" t_repo_duplicate_forbidden_key
+run_case "定義の探索: 作業ディレクトリがホームなら同じ定義で起動する" t_lookup_home_is_work
+run_case "リポジトリ側定義: effort だけ指定してモデルを引き継ぐ" t_repo_effort_only
+run_case "リポジトリ側定義: 空のモデルで GPT 側を使わない" t_repo_empty_model
+run_case "リポジトリ側定義: 空のフロントマターなら利用者側を引き継ぐ" t_repo_empty_front_matter
+run_case "リポジトリ側定義: 環境変数のドル記法による表記の同じ認証ホームを許す" t_repo_dollar_home
 run_case "フロントマター: 行末コメントを除く" t_fm_trailing_comment
 run_case "フロントマター: ダブルクォートを除く" t_fm_double_quotes
 run_case "フロントマター: シングルクォートを除く" t_fm_single_quotes
