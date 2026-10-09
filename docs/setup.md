@@ -120,24 +120,29 @@ CRLF に変換されると、bash が行末の CR を引数として読み、実
 
 ### 4. Claude Code の権限規則を設定する
 
-Claude のホームの `settings.json`(既定は `%USERPROFILE%\.claude\settings.json`)の `permissions.allow` に、次の 2 規則を追加する。
+Claude のホームの `settings.json`(既定は `%USERPROFILE%\.claude\settings.json`)の `permissions.allow` に、次の規則を追加する。
 
 ```json
 {
   "permissions": {
     "allow": [
-      "Bash(bash ~/.claude/tools/codex-agent.sh *)",
-      "Bash(bash tools/codex-agent.sh *)"
+      "Bash(bash ~/.claude/tools/codex-agent.sh *)"
     ]
   }
 }
 ```
 
-既存の `permissions.allow` がある場合は、配列に 2 規則を追加する。
+既存の `permissions.allow` がある場合は、配列にこの規則を追加する。
 許可規則はコマンド文字列の先頭一致で判定される。
 そのため、定義からスクリプトを呼ぶ形は `bash ~/.claude/tools/codex-agent.sh` で始まる 1 行にする。
 変数への代入や `[ -f ... ] ||` の分岐を前に付けると許可されず、auto mode でサブエージェントが Codex を呼べない。
 auto mode でない場合も、同じ規則を入れておけば確認プロンプトを省略できる。
+
+`Bash(bash tools/codex-agent.sh *)` のような相対パスの規則は、Claude のホームの `settings.json` に入れない。
+相対パスはカレントディレクトリから解決されるため、開いたリポジトリにある `tools/codex-agent.sh` が、どのリポジトリでも確認なしで実行される。
+入れてある場合は消す。
+リポジトリの中のスクリプトを確認なしで動かす必要がある場合は、そのリポジトリの `.claude/settings.json` に限って許可する。
+このリポジトリは、開発時の動作確認のために `.claude/settings.json` で相対パスの規則を許可している。
 
 ### 5. メインセッションに役割分担を指示する
 
