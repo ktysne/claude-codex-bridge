@@ -2,13 +2,15 @@
 
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
+const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
 const HOOK_SCRIPT = path.resolve(__dirname, '..', 'codex-agent-hook.js');
 const WRAPPER = 'bash ~/.claude/tools/codex-agent.sh';
-const SCRATCHPAD = 'E:\\Temp\\claude\\proj\\f997603b\\scratchpad';
-const PROMPTS_DIR = 'C:/Users/someone/.claude/codex-agent/prompts';
+const SCRATCHPAD = 'E:/Temp/claude/proj/f997603b/scratchpad';
+const WINDOWS_SCRATCHPAD = 'E:\\Temp\\claude\\proj\\f997603b\\scratchpad';
+const PROMPTS_DIR = path.join(os.homedir(), '.claude', 'codex-agent', 'prompts').replace(/\\/g, '/');
 const WORKTREE = 'D:/Desktop/Develop/claude-codex-bridge';
 
 function runHook(args, stdin) {
@@ -54,6 +56,7 @@ const FORWARD = `${WRAPPER} codex-review < "${PROMPT_FILE}"`;
 const NEW_PROMPT = `${WRAPPER} --new-prompt codex-review "${SCRATCHPAD}"`;
 const WAIT = `${WRAPPER} --wait codex-review-20260928-120000-12345`;
 const RUN_ID_OF = `${WRAPPER} --header-of "C:/Users/someone/AppData/Local/Temp/claude/tasks/b1x2.output"`;
+const WINDOWS_RUN_ID_OF = `${WRAPPER} --header-of "E:\\Temp\\claude\\proj\\sess\\tasks\\abc.output"`;
 
 test('Bash は依頼文のファイルを渡す転送の形を許す', () => {
   assertAllowed(bash('codex-review', FORWARD));
@@ -65,6 +68,8 @@ test('窓口の impl-hard、impl-standard、impl-light に転送の形と依頼�
     const promptFile = `${SCRATCHPAD}/codex-agent-${agent}-20261003-120000-abc123/prompt.md`;
     assertAllowed(bash(agent, `${WRAPPER} --new-prompt ${agent} "${SCRATCHPAD}"`));
     assertAllowed(write(agent, promptFile));
+    assertAllowed(write(agent, `${WINDOWS_SCRATCHPAD}\\codex-agent-${agent}-20261003-120000-abc123\\prompt.md`));
+    assertRejected(bash(agent, `${WRAPPER} ${agent} < "${WINDOWS_SCRATCHPAD}\\codex-agent-${agent}-20261003-120000-abc123\\prompt.md"`));
     assertAllowed(bash(agent, `${WRAPPER} ${agent} -C "${WORKTREE}" < "${promptFile}"`));
     assertAllowed(bash(agent, WAIT));
     assertAllowed(bash(agent, RUN_ID_OF));
@@ -106,6 +111,42 @@ test('Bash は -C のパスを引用符で囲んでも囲まなくても許す',
   assertAllowed(bash('codex-subagent', `${WRAPPER} codex-subagent -C D:/Desktop/Develop/repo < ${file}`));
 });
 
+test('Bash と Write は相対パス、親移動、置き場の違う依頼文パスを拒否する', () => {
+  const directory = 'codex-agent-codex-review-20260928-120000-k7q2m9';
+  const invalidPaths = [
+    `relative/${directory}/prompt.md`,
+    `${SCRATCHPAD}/../scratchpad/${directory}/prompt.md`,
+    `E:/Temp/claude/proj/other/${directory}/prompt.md`,
+  ];
+  for (const filePath of invalidPaths) {
+    assertRejected(write('codex-review', filePath));
+    assertRejected(bash('codex-review', `${WRAPPER} codex-review < "${filePath}"`));
+  }
+});
+
+test('依頼文と Write のパスは許可した文字だけを使える', () => {
+  for (const character of [';', '#', '&', '|', '(', ')', '\\']) {
+    const filePath = `E:/Temp/claude/proj${character}/scratchpad/codex-agent-codex-review-20260928-120000-k7q2m9/prompt.md`;
+    assertRejected(write('codex-review', filePath));
+    assertRejected(bash('codex-review', `${WRAPPER} codex-review < "${filePath}"`));
+  }
+});
+
+test('Bash は -C のバックスラッシュ区切りとスラッシュ区切りの絶対パスを許す', () => {
+  assertAllowed(bash('codex-review', `${WRAPPER} codex-review -C "D:\\Desktop\\Develop\\x" < "${PROMPT_FILE}"`));
+  assertAllowed(bash('codex-review', `${WRAPPER} codex-review -C "D:/Desktop/Develop/x" < "${PROMPT_FILE}"`));
+});
+
+test('Bash は二重引用符の対応がずれる -C のパスを拒否する', () => {
+  assertRejected(bash('codex-review', `${WRAPPER} codex-review -C "C:\\dir\\" < "${PROMPT_FILE}"`));
+});
+
+test('Bash は引用符の中でバックスラッシュが引用符を逃がす転送を拒否する', () => {
+  const prompt = '/scratchpad/codex-agent-impl-light-20260101-000000-abcdef/prompt.md';
+  assertRejected(bash('impl-light', `${WRAPPER} -C "Q\\" impl-light < "; echo INJECTED #${prompt}"`));
+  assertRejected(bash('impl-light', `${WRAPPER} impl-light -C "Q\\" < "; echo INJECTED2 #${prompt}"`));
+});
+
 test('Bash は -C を定義名の前やリダイレクトの後ろに置いた転送も許す', () => {
   for (const agent of ['impl-standard', 'codex-subagent']) {
     const file = `"${SCRATCHPAD}/codex-agent-${agent}-20261009-013311-3eARdk/prompt.md"`;
@@ -129,6 +170,7 @@ test('Bash は -C を 2 回置いた転送、パスの無い -C、別の定義�
 test('Bash は --wait と --header-of の形を許す', () => {
   assertAllowed(bash('codex-review', WAIT));
   assertAllowed(bash('codex-review', RUN_ID_OF));
+  assertAllowed(bash('codex-review', WINDOWS_RUN_ID_OF));
 });
 
 test('Bash は前後の空白と CR を除いて照合する', () => {
@@ -192,6 +234,10 @@ test('Write はスクラッチパッドと prompts の置き場の、定義名�
   assertAllowed(write('codex-review', PROMPT_FILE));
   assertAllowed(write('codex-review', `${PROMPTS_DIR}/codex-agent-codex-review-20260928-120000-K7Q2M9/prompt.md`));
   assertAllowed(write('codex-subagent', `${SCRATCHPAD}/codex-agent-codex-subagent-20260928-120000-abc123/prompt.md`));
+  if (process.platform === 'win32') {
+    const caseVariant = `${os.homedir().replace(/\\/g, '/').toUpperCase()}/.CLAUDE/CODEX-AGENT/PROMPTS/codex-agent-codex-review-20260928-120000-k7q2m9/prompt.md`;
+    assertAllowed(write('codex-review', caseVariant));
+  }
 });
 
 test('Write は作業ツリーのソースのパスを拒否する', () => {
