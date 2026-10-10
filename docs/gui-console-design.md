@@ -1,22 +1,23 @@
 # 設定コンソール(Windows GUI)の設計
 
-bridge が扱う定義(`impl-hard`、`impl-standard`、`impl-light` の窓口と Claude 側の実装用、`codex-review`、`codex-subagent`)の定義ファイルを Windows の GUI から書き換えるための設定コンソールの設計である。
+bridge が扱う定義(`impl-hard`、`impl-standard`、`impl-light` の窓口と Claude 側の実装用、`codex-review`、`codex-subagent`、`review-claude`)の定義ファイルを Windows の GUI から書き換えるための設定コンソールの設計である。
 サブエージェントタブとレビューと実装補助タブは実装済みである。
 この文書は両タブを合わせた仕様と制約を記載し、使い方は [gui.md](gui.md) に従う。
 末尾の「実装の段階」には、実装時の変更範囲と検証方法を記載している。
 
 ## 目的と範囲
 
-設定コンソールは、次の 5 つを GUI から行えるようにする。
+設定コンソールは、次の設定を GUI から行えるようにする。
 
 - GPT 系サブエージェント経路(`impl-hard`、`impl-standard`、`impl-light` が Codex へ委譲する経路)の有効と無効を切り替える。
 - hard、standard、light の各区分の窓口(Codex へ転送するだけの定義)のモデルと effort をプルダウンで選ぶ。
 - hard、standard、light の各区分で Claude 側で実装するときのモデルと effort をプルダウンで選ぶ。
 - hard、standard、light の各区分で使う GPT 側のモデルと effort をプルダウンで選ぶ。GPT モデルの選択肢には「(未設定)」を含み、選ぶとその区分は GPT 側を使わない。
 - `codex-review` と `codex-subagent` が Codex を起動するときのモデルと effort をプルダウンで選ぶ。
+- `review-claude` が Claude 側でレビューするときのモデルと effort をプルダウンで選ぶ。
 
 画面は 2 つのタブに分かれる。
-**サブエージェントタブ**は前者 3 つ(`impl-hard`、`impl-standard`、`impl-light`)を、**レビューと実装補助タブ**は後者 1 つ(`codex-review`、`codex-subagent`)を扱う。
+**サブエージェントタブ**は `impl-hard`、`impl-standard`、`impl-light` を、**レビューと実装補助タブ**は `codex-review`、`codex-subagent`、`review-claude` を扱う。
 タブを分けるのは、2 群の定義で「GPT 側を使わない」状態の意味が違うためである。
 前者 3 区分は GPT 側が使えなければ窓口が Claude 側の実装用の定義への再委譲を報告するが、後者 2 定義は明示的に Codex へ依頼する定義であり、Claude 側へ回らずに失敗する。
 同じ表に並べると、前者向けの「(未設定)」や有効無効の切替が後者にも効くように見える。
@@ -52,6 +53,7 @@ Windows 10 1903 以降と Windows 11 には 4.8 が同梱されているため�
 | サブエージェント | light(`impl-light`) | 同上 | 同上 | 同上 |
 | レビューと実装補助 | レビュー(`codex-review`) | 書き換えない | 定義が無い | `codex_model`、`codex_reasoning_effort` |
 | レビューと実装補助 | 実装補助(`codex-subagent`) | 書き換えない | 定義が無い | 同上 |
+| レビューと実装補助 | Claude レビュー(`review-claude`) | `model`、`effort` | 同左 | 定義が無い |
 
 レビューと実装補助タブの「窓口」の列は、`agents/codex-review.md` と `agents/codex-subagent.md` を指す。
 
@@ -59,6 +61,16 @@ Windows 10 1903 以降と Windows 11 には 4.8 が同梱されているため�
 サンドボックスを GUI から緩められると、[CLAUDE.md](../CLAUDE.md) の「権限の固定」の原則に反するためである。
 
 ### レビューと実装補助タブで書き換えない項目
+
+`review-claude` は `agents/review-claude.md` の `model` と `effort` だけを書き換える。
+`tools`、`description`、本文は保ち、Codex の設定項目を追加しない。
+Claude モデルと effort の選択欄は、既存の Claude 側と同じ `SelectionPreservingComboBox`、`claudeModels`、`claudeModelEfforts` を使う。
+モデル変更時の effort の補正も共通の処理を使い、保存時には対応表に合わない組み合わせを拒否する。
+一覧に無いモデルには `claudeEfforts` を使う。
+読み込み時の値との差分、外部変更の検出、入力を保持する再読込は既存の Claude 側と同じ方式で扱う。
+定義が無いか読めない場合は、専用の選択欄だけを無効にして理由をその近くに表示する。
+任意の定義なのでタブ単位の欠落や読み込み失敗の集計から外し、保存時も対象から外す。
+GPT 側 2 定義のタブ単位の保存可否は既存の規則を使う。
 
 `codex-review` と `codex-subagent` では、GPT 側の `codex_model` と `codex_reasoning_effort` だけを書き換える。
 他の項目を対象から外す理由は次のとおりである。
@@ -160,6 +172,9 @@ GPT 側定義を別名に退避すれば疑似的に無効化できるが、設�
 │ │ 定義            GPT モデル        effort     codex_home         codex_sandbox │
 │ │ codex-review    [gpt-6.1-sol   v] [medium v] ~/.codex           read-only     │
 │ │ codex-subagent  [gpt-6.1-sol   v] [medium v] ~/.codex-subagent  workspace-write │
+│ │                                                                        │ │
+│ │ 定義            Claude モデル           Claude effort                   │ │
+│ │ review-claude   [claude-opus-5-5 v]      [medium v]                        │ │
 │ │                                                                        │ │
 │ │ codex --version: ~/.codex 0.xx.x / ~/.codex-subagent 0.xx.x            │ │
 │ │ GPT モデル一覧: ~/.codex は codex debug models から取得 / ~/.codex-subagent は既定値 │

@@ -78,6 +78,8 @@ namespace CodexBridgeConsole
         private ClaudeRow _lightClaudeRow;
         private GptRow _lightGptRow;
         private ClaudeRow[] _claudeRows;
+        private ClaudeRow _claudeReviewRow;
+        private Label _claudeReviewUnavailableLabel;
         private GptRow[] _subagentGptRows;
         private CodexAgentRow[] _codexAgentRows;
         private GptRow[] _reviewGptRows;
@@ -269,6 +271,21 @@ namespace CodexBridgeConsole
         {
             FlowLayoutPanel content = CreateTabContent();
             content.Controls.Add(_reviewTable);
+
+            TableLayoutPanel claudeTable = CreateDefinitionTable(3, 2);
+            claudeTable.Controls.Add(CreateHeaderLabel("定義"), 0, 0);
+            claudeTable.Controls.Add(CreateHeaderLabel("Claude モデル"), 1, 0);
+            claudeTable.Controls.Add(CreateHeaderLabel("Claude effort"), 2, 0);
+            _claudeReviewRow = CreateClaudeRow(
+                ComboBoxWidth(_choices.ClaudeModels, _settings.ClaudeReview.ClaudeModel),
+                ComboBoxWidth(_choices.ClaudeEfforts, _settings.ClaudeReview.ClaudeEffort));
+            claudeTable.Controls.Add(CreateHeaderLabel("review-claude"), 0, 1);
+            claudeTable.Controls.Add(_claudeReviewRow.ModelComboBox, 1, 1);
+            claudeTable.Controls.Add(_claudeReviewRow.EffortComboBox, 2, 1);
+            content.Controls.Add(claudeTable);
+            _claudeReviewUnavailableLabel = CreateWrappingStatusLabel(width);
+            _claudeReviewUnavailableLabel.ForeColor = WarningForeColor;
+            content.Controls.Add(_claudeReviewUnavailableLabel);
 
             _reviewVersionLabel = CreateWrappingStatusLabel(width);
             _reviewCatalogLabel = CreateWrappingStatusLabel(width);
@@ -909,6 +926,7 @@ namespace CodexBridgeConsole
                 LoadClaudeRow(_lightClaudeRow, _settings.ImplLight.ClaudeModel, _settings.ImplLight.ClaudeEffort);
                 LoadGptRow(_lightGptRow, _settings.ImplLight.CodexModel, _settings.ImplLight.CodexReasoningEffort);
                 _codexEnabledCheckBox.Checked = _settings.CodexEnabled;
+                LoadClaudeRow(_claudeReviewRow, _settings.ClaudeReview.ClaudeModel, _settings.ClaudeReview.ClaudeEffort);
                 LoadCodexHomeItems();
 
                 for (int i = 0; i < _codexAgentRows.Length; i++)
@@ -1269,6 +1287,10 @@ namespace CodexBridgeConsole
         private void UpdateReviewControlState()
         {
             bool available = _settings.ReviewTabAvailable;
+            _claudeReviewRow.ModelComboBox.Enabled = available && _settings.ClaudeReviewAvailable;
+            _claudeReviewRow.EffortComboBox.Enabled = available && _settings.ClaudeReviewAvailable;
+            _claudeReviewUnavailableLabel.Text = _settings.ClaudeReviewUnavailableReason ?? string.Empty;
+            _claudeReviewUnavailableLabel.Visible = !_settings.ClaudeReviewAvailable;
             for (int i = 0; i < _codexAgentRows.Length; i++)
             {
                 CodexAgentRow row = _codexAgentRows[i];
@@ -1294,6 +1316,11 @@ namespace CodexBridgeConsole
 
             if (_settings.ReviewTabAvailable)
             {
+                if (_settings.ClaudeReviewAvailable)
+                {
+                    _settings.ClaudeReview.ClaudeModel = _claudeReviewRow.ModelComboBox.Text;
+                    _settings.ClaudeReview.ClaudeEffort = _claudeReviewRow.EffortComboBox.Text;
+                }
                 for (int i = 0; i < _codexAgentRows.Length; i++)
                 {
                     CodexAgentRow row = _codexAgentRows[i];
@@ -1808,6 +1835,10 @@ namespace CodexBridgeConsole
 
         private ComboBox ClaudeEffortComboBoxFor(ComboBox modelComboBox)
         {
+            if (_claudeReviewRow.ModelComboBox == modelComboBox)
+            {
+                return _claudeReviewRow.EffortComboBox;
+            }
             for (int i = 0; i < _claudeRows.Length; i++)
             {
                 if (_claudeRows[i].ModelComboBox == modelComboBox)
@@ -1840,6 +1871,12 @@ namespace CodexBridgeConsole
                 SetComboBoxWidth(_claudeRows[i].ModelComboBox, modelWidth);
                 SetComboBoxWidth(_claudeRows[i].EffortComboBox, effortWidth);
             }
+            SetComboBoxWidth(_claudeReviewRow.ModelComboBox,
+                ComboBoxWidth(_choices.ClaudeModels, _claudeReviewRow.ModelComboBox.Text));
+            var reviewEfforts = new List<string>();
+            CollectItems(reviewEfforts, _claudeReviewRow.EffortComboBox);
+            SetComboBoxWidth(_claudeReviewRow.EffortComboBox,
+                ComboBoxWidth(reviewEfforts, _claudeReviewRow.EffortComboBox.Text));
         }
 
         private void GptModelTextChanged(object sender, EventArgs e)

@@ -19,6 +19,135 @@ namespace CodexBridgeConsole.Tests
         private const string GptLightPath = "gpt-agents\\impl-light.md";
         private const string CodexReviewPath = "gpt-agents\\codex-review.md";
         private const string CodexSubagentPath = "gpt-agents\\codex-subagent.md";
+        private const string ClaudeReviewPath = "agents\\review-claude.md";
+
+        [Fact]
+        public void ClaudeReview_LoadsAndSavesOnlyModelAndEffort()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteAllDefinitions(directory);
+                string original = ClaudeDefinition("review-claude", "claude-opus-5-5", "medium")
+                    .Replace("effort: medium\n", "effort: medium\ntools: Read, Grep, Glob\n");
+                WriteDefinition(directory, ClaudeReviewPath, original);
+                var settings = CreateSettings(directory);
+
+                Assert.True(settings.ClaudeReviewAvailable);
+                Assert.Equal("claude-opus-5-5", settings.ClaudeReview.ClaudeModel);
+                Assert.Equal("medium", settings.ClaudeReview.ClaudeEffort);
+                settings.ClaudeReview.ClaudeModel = "claude-sonnet-4-6";
+                settings.ClaudeReview.ClaudeEffort = "high";
+                Assert.True(settings.CanSave);
+                Assert.Equal(2, settings.DescribeChanges().Count);
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.True(result.Succeeded);
+                Assert.Equal(new[] { ClaudeReviewPath }, result.ChangedFiles);
+                Assert.Equal(original.Replace("model: claude-opus-5-5", "model: \"claude-sonnet-4-6\"")
+                    .Replace("effort: medium", "effort: \"high\""), ReadDefinition(directory, ClaudeReviewPath));
+                settings.Reload();
+                Assert.Equal("claude-sonnet-4-6", settings.ClaudeReview.ClaudeModel);
+                Assert.Equal("high", settings.ClaudeReview.ClaudeEffort);
+                Assert.False(settings.HasChanges);
+            }
+        }
+
+        [Theory]
+        [InlineData("claude-opus-4-6", "xhigh")]
+        [InlineData("claude-opus-5-5", "ultra")]
+        public void ClaudeReview_RejectsUnsupportedEffort(string model, string effort)
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteAllDefinitions(directory);
+                string original = ClaudeDefinition("review-claude", "claude-opus-5-5", "medium");
+                WriteDefinition(directory, ClaudeReviewPath, original);
+                var settings = CreateSettings(directory);
+                settings.ClaudeReview.ClaudeModel = model;
+                settings.ClaudeReview.ClaudeEffort = effort;
+
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.False(result.Succeeded);
+                Assert.Contains(result.ValidationErrors, error => error.Contains("組み合わせに対応していない"));
+                Assert.Equal(original, ReadDefinition(directory, ClaudeReviewPath));
+            }
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void ClaudeReview_UnavailableDoesNotPreventSavingCodexDefinitions(bool unreadable)
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteAllDefinitions(directory);
+                if (unreadable)
+                {
+                    WriteDefinition(directory, ClaudeReviewPath, "フロントマターの無い定義\n");
+                }
+                var settings = CreateSettings(directory);
+                Assert.False(settings.ClaudeReviewAvailable);
+                Assert.Contains(ClaudeReviewPath, settings.ClaudeReviewUnavailableReason);
+                Assert.True(settings.ReviewTabAvailable);
+                Assert.Empty(settings.ReviewMissingFiles);
+                Assert.Empty(settings.ReviewUnreadableFiles);
+                settings.CodexReview.CodexModel = "gpt-review-edited";
+                settings.CodexSubagent.CodexReasoningEffort = "medium";
+
+                ConsoleSettingsSaveResult result = settings.Save();
+
+                Assert.True(result.Succeeded);
+                Assert.Contains(CodexReviewPath, result.ChangedFiles);
+                Assert.Contains(CodexSubagentPath, result.ChangedFiles);
+                Assert.DoesNotContain(ClaudeReviewPath, result.ChangedFiles);
+                Assert.Equal(unreadable, File.Exists(GetPath(directory, ClaudeReviewPath)));
+            }
+        }
+
+        [Fact]
+        public void ClaudeReview_ExternalChangeRejectsSaveAndReloadPreservesEdits()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteAllDefinitions(directory);
+                WriteDefinition(directory, ClaudeReviewPath, ClaudeDefinition("review-claude", "claude-opus-5-5", "medium"));
+                var settings = CreateSettings(directory);
+                settings.ClaudeReview.ClaudeModel = "claude-sonnet-5-5";
+                settings.ClaudeReview.ClaudeEffort = "high";
+                WriteDefinition(directory, ClaudeReviewPath, ClaudeDefinition("review-claude", "claude-opus-4-6", "medium"));
+
+                Assert.Throws<FrontMatterFileChangedException>(() => settings.Save());
+                IReadOnlyList<string> conflicts = settings.ReloadPreservingEdits();
+                Assert.Contains(conflicts, conflict => conflict.StartsWith(ClaudeReviewPath + " の model:"));
+                Assert.Equal("claude-sonnet-5-5", settings.ClaudeReview.ClaudeModel);
+                Assert.Equal("high", settings.ClaudeReview.ClaudeEffort);
+                Assert.True(settings.Save().Succeeded);
+                Assert.False(settings.HasChanges);
+            }
+        }
+
+        [Fact]
+        public void ClaudeReview_ReloadPreservesEditsWhenFileWasDeleted()
+        {
+            using (var directory = new TemporaryDirectory())
+            {
+                WriteAllDefinitions(directory);
+                WriteDefinition(directory, ClaudeReviewPath, ClaudeDefinition("review-claude", "claude-opus-5-5", "medium"));
+                var settings = CreateSettings(directory);
+                settings.ClaudeReview.ClaudeEffort = "high";
+                File.Delete(GetPath(directory, ClaudeReviewPath));
+
+                settings.ReloadPreservingEdits();
+
+                Assert.False(settings.ClaudeReviewAvailable);
+                Assert.Equal("high", settings.ClaudeReview.ClaudeEffort);
+                Assert.True(settings.HasChanges);
+                ConsoleSettingsSaveResult result = settings.Save();
+                Assert.False(result.Succeeded);
+                Assert.Contains(result.ValidationErrors, error => error.Contains(ClaudeReviewPath));
+            }
+        }
 
         private static readonly string[] DefinitionPaths =
         {

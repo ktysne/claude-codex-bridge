@@ -45,7 +45,7 @@ exe が無ければ先にビルドしてから起動する。
 ## 書き換えの対象
 
 既定の対象は `%USERPROFILE%\.claude` であり、画面には環境変数を展開した絶対パスが表示される。
-設定コンソールが書き換える定義ファイルは 11 ファイルであり、対象をタブごとに分けている。
+設定コンソールが書き換える定義ファイルは任意の `review-claude` を含めて 12 ファイルであり、対象をタブごとに分けている。
 
 ### サブエージェントタブ
 
@@ -67,14 +67,15 @@ exe が無ければ先にビルドしてから起動する。
 
 ### レビューと実装補助タブ
 
-レビューと実装補助タブは GPT 側の定義を 2 件扱う。
+レビューと実装補助タブは GPT 側の定義を 2 件と、Claude 側のレビュー用定義を 1 件扱う。
 
 | 定義 | ファイル |
 |---|---|
 | `codex-review` | `%USERPROFILE%\.claude\gpt-agents\codex-review.md` |
 | `codex-subagent` | `%USERPROFILE%\.claude\gpt-agents\codex-subagent.md` |
+| `review-claude`(任意) | `%USERPROFILE%\.claude\agents\review-claude.md` |
 
-このタブでは、2 定義の `codex_model` と `codex_reasoning_effort` だけを書き換える。
+このタブでは、GPT 側 2 定義の `codex_model` と `codex_reasoning_effort`、`review-claude` の `model` と `effort` だけを書き換える。
 
 Claude 側定義は、利用先プロジェクトの `.claude/agents/` に同名の定義があると、プロジェクト側が優先される。
 GPT 側の設定値は、プロジェクト側の `.claude/gpt-agents/` に `codex_model` または `codex_reasoning_effort` がある場合に、そのキーだけプロジェクト側が優先される。
@@ -147,6 +148,14 @@ GPT モデルのプルダウンは、3 行すべての先頭に「(未設定)」
 ### レビューと実装補助
 
 このタブは `codex-review` と `codex-subagent` の GPT 側モデルと effort を編集する。
+
+`review-claude` は別の表で Claude モデルと Claude effort を編集する。
+選択肢には既存の Claude 側と同じ `claudeModels` と `claudeModelEfforts` を使い、一覧に無いモデル名の直接入力もできる。
+保存時には、選んだモデルが対応していない effort を拒否する。
+`tools`、`description`、本文は書き換えない。
+定義ファイルが無いか読めない場合は、この選択欄だけを無効にし、理由とファイル名を表示する。
+未配置の場合は [setup.md](setup.md) の配置手順に従って配置し、再読込する。
+この欠落や読み込み失敗はタブ単位の欠落に含めないため、`codex-review` と `codex-subagent` の保存を妨げない。
 
 | 定義 | GPT モデル | effort | `codex_home` | `codex_sandbox` |
 |---|---|---|---|---|
@@ -232,7 +241,7 @@ Claude 側定義は、そのディレクトリがセッション開始時から�
 保存に成功したが書き換えたファイルがないときは「保存しました。変更はありません。」と表示する。
 保存に失敗したときの表示は赤色にする。
 
-保存前に、窓口の 3 定義と Claude 側の実装用の 3 定義の `model` と `effort` が空でないことを検証する。
+保存前に、窓口の 3 定義と Claude 側の実装用の 3 定義、配置済みの `review-claude` の `model` と `effort` が空でないことを検証する。
 レビューと実装補助タブの `codex-review` と `codex-subagent` は、`codex_model` が空だと検証エラーになる。
 サブエージェントタブの GPT 側の `codex_model` は、空でもエラーにしない。空はその区分で GPT 側を使わない設定として扱われるため、GPT 経路が有効かどうかにかかわらず検証しない。
 GPT 側の `codex_reasoning_effort` は、GPT 経路の有効状態にかかわらず `low`、`medium`、`high`、`xhigh`、`max`、`ultra` のいずれかであることを検証する。この一覧は `tools/codex-agent.sh` が受け付ける値である。値を追加するときは、`tools/codex-agent.sh` の `validate_effort`、`ConsoleSettings` の `ValidGptEfforts`、`choices.default.json` の `gptEfforts` に加え、`gptModelEfforts` の対応値も更新する。

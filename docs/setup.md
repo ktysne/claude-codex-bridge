@@ -101,6 +101,11 @@ codex login status
 そのため、スクリプトは定義より先に置く。仕組みは [gpt-agents.md](gpt-agents.md) の「ラッパー役の定義の道具を絞る」にある。
 各パターンで配置する定義は、パターンごとの追加手順に示す。
 
+Claude だけでレビューする `review-claude` は、どのパターンでも配置してよい任意の定義である。
+使う場合は、このリポジトリの `.claude/agents/review-claude.md` を Claude のホームの `agents/review-claude.md` へ配置する。
+Codex を呼ばないので、GPT 側の定義や認証ホームは要らない。
+配置を省いた場合は、設定コンソールでこの定義の選択欄だけが無効になり、他のレビュー用定義は保存できる。
+
 `.claude/agents/impl-hard.md`、`.claude/agents/impl-hard-claude.md`、`.claude/gpt-agents/impl-hard.md` は、どのパターンでも配置する。
 `.claude/gpt-agents/impl-hard.md` は出荷時から GPT 経路が有効であり、他の実装用定義と同じく GPT 側が使えないときに `impl-hard-claude` への再委譲を報告する。
 GPT 経路の有効状態やモデル、effort は定義ファイルを正とし、設定コンソールからも変更できる。

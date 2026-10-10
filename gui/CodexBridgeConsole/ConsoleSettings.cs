@@ -40,6 +40,7 @@ namespace CodexBridgeConsole
             new DefinitionPath(Path.Combine("gpt-agents", "impl-standard.md"), DefinitionKind.GptStandard, SettingsTab.Subagent),
             new DefinitionPath(Path.Combine("gpt-agents", "impl-light.md"), DefinitionKind.GptLight, SettingsTab.Subagent),
             new DefinitionPath(Path.Combine("gpt-agents", "codex-review.md"), DefinitionKind.CodexReview, SettingsTab.Review),
+            new DefinitionPath(Path.Combine("agents", "review-claude.md"), DefinitionKind.ClaudeReview, SettingsTab.Review),
             new DefinitionPath(Path.Combine("gpt-agents", "codex-subagent.md"), DefinitionKind.CodexSubagent, SettingsTab.Review)
         };
 
@@ -69,6 +70,7 @@ namespace CodexBridgeConsole
         private AgentSettings _loadedImplHard;
         private AgentSettings _loadedImplStandard;
         private AgentSettings _loadedImplLight;
+        private AgentSettings _loadedClaudeReview;
         private readonly Dictionary<DefinitionKind, CodexAgentSettings> _loadedCodexAgents =
             new Dictionary<DefinitionKind, CodexAgentSettings>();
         private bool _loadedCodexEnabled;
@@ -103,6 +105,15 @@ namespace CodexBridgeConsole
         public AgentSettings ImplLight { get; private set; }
 
         public CodexAgentSettings CodexReview { get; private set; }
+
+        public AgentSettings ClaudeReview { get; private set; }
+
+        public bool ClaudeReviewAvailable
+        {
+            get { return _files.ContainsKey(GetRelativePath(DefinitionKind.ClaudeReview)); }
+        }
+
+        public string ClaudeReviewUnavailableReason { get; private set; }
 
         public CodexAgentSettings CodexSubagent { get; private set; }
 
@@ -320,6 +331,7 @@ namespace CodexBridgeConsole
         private List<string> DescribeReviewChanges()
         {
             var changes = new List<string>();
+            AddClaudeChanges(changes, _loadedClaudeReview, ClaudeReview, GetRelativePath(DefinitionKind.ClaudeReview));
             for (int i = 0; i < CodexAgentKinds.Length; i++)
             {
                 DefinitionKind kind = CodexAgentKinds[i];
@@ -441,6 +453,8 @@ namespace CodexBridgeConsole
         // 編集した項目が外部でも変えられていた場合は入力中の値を優先し、その項目を戻り値で知らせる。
         public IReadOnlyList<string> ReloadPreservingEdits()
         {
+            AgentSettings editedClaudeReview = ClaudeReview.Clone();
+            AgentSettings previousClaudeReview = _loadedClaudeReview.Clone();
             AgentSettings editedHard = ImplHard.Clone();
             AgentSettings editedStandard = ImplStandard.Clone();
             AgentSettings editedLight = ImplLight.Clone();
@@ -471,6 +485,8 @@ namespace CodexBridgeConsole
             Reload();
 
             var conflicts = new List<string>();
+            RestoreClaudeEdits(ClaudeReview, editedClaudeReview, previousClaudeReview,
+                GetRelativePath(DefinitionKind.ClaudeReview), conflicts);
             RestoreGatewayEdits(ImplHard, editedHard, previousHard, GetRelativePath(DefinitionKind.GatewayHard), conflicts);
             RestoreGatewayEdits(ImplStandard, editedStandard, previousStandard, GetRelativePath(DefinitionKind.GatewayStandard), conflicts);
             RestoreGatewayEdits(ImplLight, editedLight, previousLight, GetRelativePath(DefinitionKind.GatewayLight), conflicts);
@@ -661,6 +677,7 @@ namespace CodexBridgeConsole
 
         public void Reload()
         {
+            ClaudeReviewUnavailableReason = null;
             var missingFiles = new List<string>();
             var unreadableFiles = new List<string>();
             var reviewMissingFiles = new List<string>();
@@ -676,6 +693,12 @@ namespace CodexBridgeConsole
                 string path = Path.Combine(RootDirectory, definition.RelativePath);
                 if (!File.Exists(path))
                 {
+                    if (definition.Kind == DefinitionKind.ClaudeReview)
+                    {
+                        ClaudeReviewUnavailableReason = "定義ファイルが存在しない: " + definition.RelativePath
+                            + "。docs/setup.md の配置手順を参照してください。";
+                        continue;
+                    }
                     (isReviewTab ? reviewMissingFiles : missingFiles).Add(definition.RelativePath);
                     continue;
                 }
@@ -690,6 +713,11 @@ namespace CodexBridgeConsole
                     || exception is UnauthorizedAccessException
                     || exception is DecoderFallbackException)
                 {
+                    if (definition.Kind == DefinitionKind.ClaudeReview)
+                    {
+                        ClaudeReviewUnavailableReason = "定義ファイルを読めない: " + definition.RelativePath + ": " + exception.Message;
+                        continue;
+                    }
                     // 読めない定義があっても画面は開く。定義を直すための道具が、
                     // 定義が壊れているときに起動できないと使えないためである。
                     (isReviewTab ? reviewUnreadableFiles : unreadableFiles)
@@ -736,6 +764,7 @@ namespace CodexBridgeConsole
             ReadGptSettings(ImplLight, DefinitionKind.GptLight);
 
             CodexReview = ReadCodexAgentSettings(DefinitionKind.CodexReview);
+            ClaudeReview = ReadClaudeSettings(DefinitionKind.ClaudeReview);
             CodexSubagent = ReadCodexAgentSettings(DefinitionKind.CodexSubagent);
 
             MissingFiles = ReadOnly(missingFiles);
@@ -752,6 +781,13 @@ namespace CodexBridgeConsole
             var errors = new List<string>();
             bool subagentTabAvailable = SubagentTabAvailable;
             bool reviewTabAvailable = ReviewTabAvailable;
+
+            var claudeReviewChanges = new List<string>();
+            AddClaudeChanges(claudeReviewChanges, _loadedClaudeReview, ClaudeReview, GetRelativePath(DefinitionKind.ClaudeReview));
+            if (!ClaudeReviewAvailable && claudeReviewChanges.Count > 0)
+            {
+                errors.Add(ClaudeReviewUnavailableReason);
+            }
 
             // 保存できないタブの項目は書き込まない。編集が残っているときだけ理由を返し、
             // 黙って編集を捨てないようにする。編集の無いタブの欠落はもう片方の保存を止めない。
@@ -771,6 +807,11 @@ namespace CodexBridgeConsole
             {
                 DefinitionPath definition = DefinitionPaths[i];
                 if (!IsTabAvailable(definition.Tab, subagentTabAvailable, reviewTabAvailable))
+                {
+                    continue;
+                }
+
+                if (definition.Kind == DefinitionKind.ClaudeReview && !ClaudeReviewAvailable)
                 {
                     continue;
                 }
@@ -819,6 +860,18 @@ namespace CodexBridgeConsole
 
             if (reviewTabAvailable)
             {
+                if (ClaudeReviewAvailable)
+                {
+                    string path = GetRelativePath(DefinitionKind.ClaudeReview);
+                    ValidateClaudeModelAndEffort(ClaudeReview.ClaudeModel, ClaudeReview.ClaudeEffort, path, errors);
+                    Choices choices = Choices.Load();
+                    if (!string.IsNullOrEmpty(ClaudeReview.ClaudeEffort)
+                        && !ContainsOrdinal(choices.ClaudeEffortsFor(ClaudeReview.ClaudeModel), ClaudeReview.ClaudeEffort))
+                    {
+                        errors.Add(path + " の model と effort の組み合わせに対応していない: "
+                            + ClaudeReview.ClaudeModel + " / " + ClaudeReview.ClaudeEffort);
+                    }
+                }
                 for (int i = 0; i < CodexAgentKinds.Length; i++)
                 {
                     DefinitionKind kind = CodexAgentKinds[i];
@@ -880,6 +933,10 @@ namespace CodexBridgeConsole
 
             if (reviewTabAvailable)
             {
+                if (ClaudeReviewAvailable)
+                {
+                    ApplyClaudeModelAndEffort(ClaudeReview.ClaudeModel, ClaudeReview.ClaudeEffort, DefinitionKind.ClaudeReview);
+                }
                 for (int i = 0; i < CodexAgentKinds.Length; i++)
                 {
                     ApplyCodexAgent(CodexAgentKinds[i]);
@@ -1018,6 +1075,18 @@ namespace CodexBridgeConsole
             {
                 errors.Add(relativePath + " の effort に使えない文字がある: " + effort + ScalarRuleText);
             }
+        }
+
+        private static bool ContainsOrdinal(IReadOnlyList<string> values, string value)
+        {
+            for (int i = 0; i < values.Count; i++)
+            {
+                if (string.Equals(values[i], value, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         // 値は FrontMatterFile が二重引用符で囲んで書くため、YAML の予約語や数値でも文字列として読まれる。
@@ -1439,6 +1508,9 @@ namespace CodexBridgeConsole
                 case DefinitionKind.ClaudeLight:
                     CopyClaudeValues(ImplLight, _loadedImplLight);
                     break;
+                case DefinitionKind.ClaudeReview:
+                    CopyClaudeValues(ClaudeReview, _loadedClaudeReview);
+                    break;
                 case DefinitionKind.GptHard:
                     CopyGptValues(ImplHard, _loadedImplHard);
                     break;
@@ -1496,6 +1568,7 @@ namespace CodexBridgeConsole
             _loadedImplHard = ImplHard.Clone();
             _loadedImplStandard = ImplStandard.Clone();
             _loadedImplLight = ImplLight.Clone();
+            _loadedClaudeReview = ClaudeReview.Clone();
             for (int i = 0; i < CodexAgentKinds.Length; i++)
             {
                 DefinitionKind kind = CodexAgentKinds[i];
@@ -1637,6 +1710,7 @@ namespace CodexBridgeConsole
             ClaudeHard,
             ClaudeStandard,
             ClaudeLight,
+            ClaudeReview,
             GptHard,
             GptStandard,
             GptLight,
@@ -1644,7 +1718,7 @@ namespace CodexBridgeConsole
             CodexSubagent
         }
 
-        // 欠落と読み込み失敗はタブ単位で集計し、保存できるかもタブ単位で決める。
+        // 必須の定義の欠落と読み込み失敗はタブ単位で集計する。任意の review-claude は単独で無効にする。
         private enum SettingsTab
         {
             Subagent,
