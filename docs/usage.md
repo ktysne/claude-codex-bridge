@@ -17,11 +17,12 @@ Claude Code(メインセッション)
 │   ├─ impl-hard / impl-light / impl-standard
 │   └─ codex-review / codex-subagent
 │       └─ CODEX_HOME=~/.codex
-└─ パターン 3(2 アカウント、役割別。通常利用とレビューを既定ホームに置く)
+├─ パターン 3(2 アカウント、役割別。通常利用とレビューを既定ホームに置く)
     ├─ codex-review
     │   └─ CODEX_HOME=~/.codex
     └─ impl-hard / impl-light / impl-standard / codex-subagent
         └─ CODEX_HOME=~/.codex-subagent
+└─ review-claude .claude/agents/review-claude.md(任意、どのパターンでも配置可)
 ```
 
 各定義は Claude 側の `.claude/agents/<name>.md` から `~/.claude/tools/codex-agent.sh` を呼び出し、スクリプトが `.claude/gpt-agents/<name>.md` を読んで `codex exec` を組み立てる。

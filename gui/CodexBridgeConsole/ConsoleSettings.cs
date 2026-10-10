@@ -189,8 +189,10 @@ namespace CodexBridgeConsole
             {
                 bool subagentNeedsSave = _saveInterrupted || HasSubagentChanges || HasPendingRepairs;
                 bool reviewNeedsSave = _saveInterrupted || HasReviewChanges;
+                bool claudeReviewNeedsSave = _saveInterrupted || HasClaudeReviewChanges;
                 return (SubagentTabAvailable && subagentNeedsSave)
-                    || (ReviewTabAvailable && reviewNeedsSave);
+                    || (ReviewTabAvailable && reviewNeedsSave)
+                    || (ClaudeReviewAvailable && claudeReviewNeedsSave);
             }
         }
 
@@ -202,6 +204,11 @@ namespace CodexBridgeConsole
         private bool HasReviewChanges
         {
             get { return DescribeReviewChanges().Count > 0; }
+        }
+
+        private bool HasClaudeReviewChanges
+        {
+            get { return DescribeClaudeReviewChanges().Count > 0; }
         }
 
         // codex_enabled の不正値と codex_home の食い違いは、利用者が何も変えなくても保存で直す。
@@ -247,6 +254,7 @@ namespace CodexBridgeConsole
             }
 
             changes.AddRange(DescribeSubagentChanges());
+            changes.AddRange(DescribeClaudeReviewChanges());
             changes.AddRange(DescribeReviewChanges());
             return ReadOnly(changes);
         }
@@ -331,7 +339,6 @@ namespace CodexBridgeConsole
         private List<string> DescribeReviewChanges()
         {
             var changes = new List<string>();
-            AddClaudeChanges(changes, _loadedClaudeReview, ClaudeReview, GetRelativePath(DefinitionKind.ClaudeReview));
             for (int i = 0; i < CodexAgentKinds.Length; i++)
             {
                 DefinitionKind kind = CodexAgentKinds[i];
@@ -346,6 +353,13 @@ namespace CodexBridgeConsole
                     current.CodexReasoningEffort);
             }
 
+            return changes;
+        }
+
+        private List<string> DescribeClaudeReviewChanges()
+        {
+            var changes = new List<string>();
+            AddClaudeChanges(changes, _loadedClaudeReview, ClaudeReview, GetRelativePath(DefinitionKind.ClaudeReview));
             return changes;
         }
 
@@ -806,12 +820,7 @@ namespace CodexBridgeConsole
             for (int i = 0; i < DefinitionPaths.Length; i++)
             {
                 DefinitionPath definition = DefinitionPaths[i];
-                if (!IsTabAvailable(definition.Tab, subagentTabAvailable, reviewTabAvailable))
-                {
-                    continue;
-                }
-
-                if (definition.Kind == DefinitionKind.ClaudeReview && !ClaudeReviewAvailable)
+                if (!IsTabAvailable(definition, subagentTabAvailable, reviewTabAvailable, ClaudeReviewAvailable))
                 {
                     continue;
                 }
@@ -858,12 +867,12 @@ namespace CodexBridgeConsole
                 }
             }
 
-            if (reviewTabAvailable)
+            if (ClaudeReviewAvailable)
             {
-                if (ClaudeReviewAvailable)
+                string path = GetRelativePath(DefinitionKind.ClaudeReview);
+                ValidateClaudeModelAndEffort(ClaudeReview.ClaudeModel, ClaudeReview.ClaudeEffort, path, errors);
+                if (claudeReviewChanges.Count > 0)
                 {
-                    string path = GetRelativePath(DefinitionKind.ClaudeReview);
-                    ValidateClaudeModelAndEffort(ClaudeReview.ClaudeModel, ClaudeReview.ClaudeEffort, path, errors);
                     Choices choices = Choices.Load();
                     if (!string.IsNullOrEmpty(ClaudeReview.ClaudeEffort)
                         && !ContainsOrdinal(choices.ClaudeEffortsFor(ClaudeReview.ClaudeModel), ClaudeReview.ClaudeEffort))
@@ -872,6 +881,10 @@ namespace CodexBridgeConsole
                             + ClaudeReview.ClaudeModel + " / " + ClaudeReview.ClaudeEffort);
                     }
                 }
+            }
+
+            if (reviewTabAvailable)
+            {
                 for (int i = 0; i < CodexAgentKinds.Length; i++)
                 {
                     DefinitionKind kind = CodexAgentKinds[i];
@@ -898,9 +911,18 @@ namespace CodexBridgeConsole
             }
         }
 
-        private static bool IsTabAvailable(SettingsTab tab, bool subagentTabAvailable, bool reviewTabAvailable)
+        private static bool IsTabAvailable(
+            DefinitionPath definition,
+            bool subagentTabAvailable,
+            bool reviewTabAvailable,
+            bool claudeReviewAvailable)
         {
-            return tab == SettingsTab.Review ? reviewTabAvailable : subagentTabAvailable;
+            if (definition.Kind == DefinitionKind.ClaudeReview)
+            {
+                return claudeReviewAvailable;
+            }
+
+            return definition.Tab == SettingsTab.Review ? reviewTabAvailable : subagentTabAvailable;
         }
 
         public ConsoleSettingsSaveResult Save()
@@ -931,12 +953,13 @@ namespace CodexBridgeConsole
                 ApplyGpt(ImplLight, DefinitionKind.GptLight);
             }
 
+            if (ClaudeReviewAvailable)
+            {
+                ApplyClaudeModelAndEffort(ClaudeReview.ClaudeModel, ClaudeReview.ClaudeEffort, DefinitionKind.ClaudeReview);
+            }
+
             if (reviewTabAvailable)
             {
-                if (ClaudeReviewAvailable)
-                {
-                    ApplyClaudeModelAndEffort(ClaudeReview.ClaudeModel, ClaudeReview.ClaudeEffort, DefinitionKind.ClaudeReview);
-                }
                 for (int i = 0; i < CodexAgentKinds.Length; i++)
                 {
                     ApplyCodexAgent(CodexAgentKinds[i]);
@@ -951,7 +974,7 @@ namespace CodexBridgeConsole
                 for (int i = 0; i < DefinitionPaths.Length; i++)
                 {
                     DefinitionPath definition = DefinitionPaths[i];
-                    if (!IsTabAvailable(definition.Tab, subagentTabAvailable, reviewTabAvailable))
+                    if (!IsTabAvailable(definition, subagentTabAvailable, reviewTabAvailable, ClaudeReviewAvailable))
                     {
                         continue;
                     }

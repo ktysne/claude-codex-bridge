@@ -1287,8 +1287,8 @@ namespace CodexBridgeConsole
         private void UpdateReviewControlState()
         {
             bool available = _settings.ReviewTabAvailable;
-            _claudeReviewRow.ModelComboBox.Enabled = available && _settings.ClaudeReviewAvailable;
-            _claudeReviewRow.EffortComboBox.Enabled = available && _settings.ClaudeReviewAvailable;
+            _claudeReviewRow.ModelComboBox.Enabled = _settings.ClaudeReviewAvailable;
+            _claudeReviewRow.EffortComboBox.Enabled = _settings.ClaudeReviewAvailable;
             _claudeReviewUnavailableLabel.Text = _settings.ClaudeReviewUnavailableReason ?? string.Empty;
             _claudeReviewUnavailableLabel.Visible = !_settings.ClaudeReviewAvailable;
             for (int i = 0; i < _codexAgentRows.Length; i++)
@@ -1314,13 +1314,14 @@ namespace CodexBridgeConsole
                 _settings.CodexHome = SelectedCodexHome();
             }
 
+            if (_settings.ClaudeReviewAvailable)
+            {
+                _settings.ClaudeReview.ClaudeModel = _claudeReviewRow.ModelComboBox.Text;
+                _settings.ClaudeReview.ClaudeEffort = _claudeReviewRow.EffortComboBox.Text;
+            }
+
             if (_settings.ReviewTabAvailable)
             {
-                if (_settings.ClaudeReviewAvailable)
-                {
-                    _settings.ClaudeReview.ClaudeModel = _claudeReviewRow.ModelComboBox.Text;
-                    _settings.ClaudeReview.ClaudeEffort = _claudeReviewRow.EffortComboBox.Text;
-                }
                 for (int i = 0; i < _codexAgentRows.Length; i++)
                 {
                     CodexAgentRow row = _codexAgentRows[i];
