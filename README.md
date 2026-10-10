@@ -9,6 +9,7 @@ Claude Code のメインセッションが設計と監査を受け持ち、実�
 
 - **実装の委譲**:`impl-hard`、`impl-standard`、`impl-light` の 3 定義を、難易度で選んで委譲する。3 定義は依頼を Codex へ転送する窓口で、Codex が使えないときは Claude 側の実装用の定義(`impl-*-claude`)への再委譲を報告する。
 - **レビューと調査**:`codex-review`(read-only)と `codex-subagent`(workspace-write)に、単発のレビューや調査を依頼する。
+- **Claude のレビュー**:`review-claude` は Claude だけで動く読み取り専用の担当であり、Codex の実装に対する別ベンダーのレビューや、Claude の実装に対する客観レビューに使う。任意で配置でき、設定コンソールからモデルと effort を変更できる。
 - **設定の一元化**:Codex のモデル、effort、認証ホーム(`CODEX_HOME`)、サンドボックスを `.claude/gpt-agents/` の定義ファイルで固定する。起動スクリプト `codex-agent.sh` がこの定義を読んで `codex exec` を組み立てる。
 - **アカウントの分離**:1 アカウントでも使える。2 アカウントで使うときは、通常利用とレビューに使うアカウントを既定ホーム `~/.codex` に、サブエージェント専用のアカウントを `~/.codex-subagent` に置き、役割ごとに認証を固定する。
 - **設定コンソール**:定義のモデル、effort、GPT 経路の有効状態、認証ホームを GUI から変える Windows のアプリ(任意)。

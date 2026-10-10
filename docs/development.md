@@ -25,6 +25,7 @@ claude-codex-bridge 自体を開発するときの入口である。利用者向
 | `.claude/agents/impl-hard-claude.md` | 高難度実装を Claude 側で行う定義。委譲を止める指定のある依頼だけを実装する |
 | `.claude/agents/impl-light-claude.md` | 小規模実装を Claude 側で行う定義。委譲を止める指定のある依頼だけを実装する |
 | `.claude/agents/impl-standard-claude.md` | 一般実装を Claude 側で行う定義。委譲を止める指定のある依頼だけを実装する |
+| `.claude/agents/review-claude.md` | Claude 側でレビューを行う任意定義 |
 | `.claude/gpt-agents/codex-review.md` | レビュー用 GPT 側定義。Codex のモデル、effort、認証ホーム、サンドボックス、役割文を持つ |
 | `.claude/gpt-agents/codex-subagent.md` | 実装補助用 GPT 側定義。Codex のモデル、effort、認証ホーム、サンドボックス、役割文を持つ |
 | `.claude/gpt-agents/impl-hard.md` | 高難度実装用 GPT 側定義。Codex のモデル、effort、認証ホーム、サンドボックス、役割文を持つ |

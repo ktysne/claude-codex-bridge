@@ -10,7 +10,7 @@ GPT 側が未設定、未導入、無効化、または GPT 側の事情で使�
 2 アカウントで運用する場合は、通常利用とレビューに使うアカウントを既定ホーム(`~/.codex`)に置き、サブエージェント専用のアカウントに `~/.codex-subagent` を与える。
 ここでいう**通常利用**は Codex CLI の対話、VS Code や Chrome の Codex 拡張、Claude Code の Codex プラグインを指し、**サブエージェント**は GPT 側へ実装を委譲する `impl-hard`、`impl-light`、`impl-standard`、`codex-subagent` の 4 定義を指す。
 `codex-review` も Claude Code からはサブエージェントとして起動されるが、役割はレビューなので既定ホーム側に置く。
-Claude 側の実装用の 3 定義は Codex を呼ばないので、この文書で「5 定義」「4 定義」と数えるときには含めない。
+Claude 側の実装用の 3 定義とレビュー用の `review-claude` は Codex を呼ばないので、この文書で「5 定義」「4 定義」と数えるときには含めない。
 どの定義を配置するかは、実装用の委譲だけを使うパターンと、レビュー用も使うパターンで選べる。
 
 委譲の対象は `impl-hard`、`impl-light`、`impl-standard`、`codex-review`、`codex-subagent` の 5 つである。
@@ -21,6 +21,7 @@ GPT 側が未設定、未導入、無効化、または GPT 側の事情で使�
 
 ```text
 Claude Code(メインセッション)
+├─ review-claude                     .claude/agents/review-claude.md(Claude 側でレビューする。Codex を呼ばない)
 ├─ codex-review                      .claude/agents/codex-review.md
 │   └─ ~/.claude/tools/codex-agent.sh  .claude/gpt-agents/codex-review.md を読む
 │       └─ codex exec                 CODEX_HOME=~/.codex、read-only
@@ -42,6 +43,13 @@ Claude Code(メインセッション)
 ```
 
 1 アカウント運用では割り当てが異なるため、「認証ホームの割り当て」の表に従う。
+
+`review-claude` は、Claude だけで動く読み取り専用のレビュー担当である。
+クロスレビューで実装者が Codex のときは別ベンダーのレビュアー、実装者が Claude のときは同ベンダーの客観レビュアーとして使う。
+道具を Read、Grep、Glob に絞り、Bash、Write、Edit、Agent を持たせないことで、`codex-agent.sh` の実行、ファイルの書き換え、他の担当への委譲を防ぐ。
+差分や PR コメント、レビュー用プロンプトは依頼文やファイルで渡す。
+用途固定の原則が数える Codex の定義には含めず、Codex の認証ホームを持たない。
+モデルと effort は `.claude/agents/review-claude.md` が正であり、設定コンソールのレビューと実装補助タブから変更できる。
 
 `codex-review` と `codex-subagent` は同じ形で、サンドボックスだけが異なる。
 `impl-hard`、`impl-light`、`impl-standard` の窓口も同じ形で、GPT 側の定義に書くモデルと effort だけが異なる。

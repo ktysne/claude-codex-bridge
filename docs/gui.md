@@ -45,7 +45,7 @@ exe が無ければ先にビルドしてから起動する。
 ## 書き換えの対象
 
 既定の対象は `%USERPROFILE%\.claude` であり、画面には環境変数を展開した絶対パスが表示される。
-設定コンソールが書き換える定義ファイルは 11 ファイルであり、対象をタブごとに分けている。
+設定コンソールが書き換える定義ファイルは最大 12 ファイルであり、任意の `review-claude` を含めて対象をタブごとに分けている。
 
 ### サブエージェントタブ
 
@@ -67,14 +67,16 @@ exe が無ければ先にビルドしてから起動する。
 
 ### レビューと実装補助タブ
 
-レビューと実装補助タブは GPT 側の定義を 2 件扱う。
+レビューと実装補助タブは GPT 側の定義を 2 件扱い、Claude 側のレビュー用定義 `review-claude` は独立して扱う。
 
 | 定義 | ファイル |
 |---|---|
 | `codex-review` | `%USERPROFILE%\.claude\gpt-agents\codex-review.md` |
 | `codex-subagent` | `%USERPROFILE%\.claude\gpt-agents\codex-subagent.md` |
+| `review-claude`(任意) | `%USERPROFILE%\.claude\agents\review-claude.md` |
 
-このタブでは、2 定義の `codex_model` と `codex_reasoning_effort` だけを書き換える。
+このタブでは、GPT 側 2 定義の `codex_model` と `codex_reasoning_effort`、`review-claude` の `model` と `effort` だけを書き換える。
+`review-claude` の選択欄と保存可否は GPT 側 2 定義の配置状況に左右されない。
 
 Claude 側定義は、利用先プロジェクトの `.claude/agents/` に同名の定義があると、プロジェクト側が優先される。
 GPT 側の設定値は、プロジェクト側の `.claude/gpt-agents/` に `codex_model` または `codex_reasoning_effort` がある場合に、そのキーだけプロジェクト側が優先される。
@@ -148,6 +150,14 @@ GPT モデルのプルダウンは、3 行すべての先頭に「(未設定)」
 
 このタブは `codex-review` と `codex-subagent` の GPT 側モデルと effort を編集する。
 
+`review-claude` は別の表で Claude モデルと Claude effort を編集する。
+選択肢には既存の Claude 側と同じ `claudeModels` と `claudeModelEfforts` を使い、一覧に無いモデル名の直接入力もできる。
+保存時には、選んだモデルが対応していない effort を拒否する。
+`tools`、`description`、本文は書き換えない。
+定義ファイルが無いか読めない場合は、この選択欄だけを無効にし、理由とファイル名を表示する。
+未配置の場合は [setup.md](setup.md) の配置手順に従って配置し、再読込する。
+この欠落や読み込み失敗はタブ単位の欠落に含めないため、`codex-review` と `codex-subagent` の保存を妨げない。
+
 | 定義 | GPT モデル | effort | `codex_home` | `codex_sandbox` |
 |---|---|---|---|---|
 | `codex-review` | 編集 | 編集 | 表示のみ | 表示のみ |
@@ -208,10 +218,12 @@ GPT モデルの選択肢に「(未設定)」はない。
 ### 警告と注意の表示
 
 定義ファイルの欠落と読み込み失敗はタブごとに判定する。
-対象ファイルが 1 つでも欠けているか読めないタブは、入力を無効にしてタブ内に赤字で「このタブは保存できない。」と理由を表示する。
+レビューと実装補助タブでは、GPT 側 2 定義の欠落や読み込み失敗が GPT 欄の入力と保存を止める。
+`review-claude` の入力と保存はそのファイルだけで判定し、GPT 側 2 定義の状態には左右されない。
 ファイルが欠けている場合は、赤字の案内に定義の配置手順が `docs/setup.md` にあることと、見つからないファイル名も表示する。
+レビューと実装補助タブで `review-claude` を保存できるときは、案内の冒頭を「GPT 側の欄は保存できない。」とし、保存できない範囲を GPT 側に限って示す。
 窓口と Claude 側の実装用の定義を分けた後のリポジトリへ更新したときは、`agents\impl-*-claude.md` を配置するまでサブエージェントタブは保存できない。
-もう一方のタブは独立して操作でき、対象ファイルが揃っていれば単独で保存できる。
+サブエージェントタブと `review-claude` は独立して操作でき、それぞれの対象ファイルが利用可能なら単独で保存できる。
 定義が壊れていても画面は開く。定義を直すための道具が、定義が壊れているときに起動できないと使えないためである。
 保存した GPT 側定義は、次に `codex-agent.sh` を呼んだときから効く。
 Claude 側定義は、そのディレクトリがセッション開始時から在れば数秒で次の委譲に反映される。再起動が要る条件は [setup.md](setup.md) の共通手順 6 にある。
@@ -232,7 +244,7 @@ Claude 側定義は、そのディレクトリがセッション開始時から�
 保存に成功したが書き換えたファイルがないときは「保存しました。変更はありません。」と表示する。
 保存に失敗したときの表示は赤色にする。
 
-保存前に、窓口の 3 定義と Claude 側の実装用の 3 定義の `model` と `effort` が空でないことを検証する。
+保存前に、窓口の 3 定義と Claude 側の実装用の 3 定義、配置済みの `review-claude` の `model` と `effort` が空でないことを検証する。
 レビューと実装補助タブの `codex-review` と `codex-subagent` は、`codex_model` が空だと検証エラーになる。
 サブエージェントタブの GPT 側の `codex_model` は、空でもエラーにしない。空はその区分で GPT 側を使わない設定として扱われるため、GPT 経路が有効かどうかにかかわらず検証しない。
 GPT 側の `codex_reasoning_effort` は、GPT 経路の有効状態にかかわらず `low`、`medium`、`high`、`xhigh`、`max`、`ultra` のいずれかであることを検証する。この一覧は `tools/codex-agent.sh` が受け付ける値である。値を追加するときは、`tools/codex-agent.sh` の `validate_effort`、`ConsoleSettings` の `ValidGptEfforts`、`choices.default.json` の `gptEfforts` に加え、`gptModelEfforts` の対応値も更新する。
