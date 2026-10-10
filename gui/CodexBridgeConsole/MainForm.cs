@@ -1102,7 +1102,8 @@ namespace CodexBridgeConsole
             // 目録の取得も起動時の 1 回だけなので、再読込では取得済みの結果を出し直す。
             _codexCatalogLabel.Text = "GPT モデル一覧: " + _codexCatalogText;
 
-            string unavailableText = FormatUnavailableFiles(_settings.MissingFiles, _settings.UnreadableFiles);
+            string unavailableText = FormatUnavailableFiles(
+                "このタブは保存できない。", _settings.MissingFiles, _settings.UnreadableFiles);
             if (unavailableText.Length > 0)
             {
                 _missingFilesLabel.Text = unavailableText;
@@ -1146,7 +1147,12 @@ namespace CodexBridgeConsole
 
             UpdateReviewCodexStatusLabels();
 
+            // review-claude は GPT 側の定義が欠けても単独で保存できるため、そのときは保存できない範囲を GPT 側に限って示す。
+            string unavailableScope = _settings.ClaudeReviewAvailable
+                ? "GPT 側の欄は保存できない。"
+                : "このタブは保存できない。";
             _reviewMissingFilesLabel.Text = FormatUnavailableFiles(
+                unavailableScope,
                 _settings.ReviewMissingFiles,
                 _settings.ReviewUnreadableFiles);
             _reviewMissingFilesLabel.Visible = _reviewMissingFilesLabel.Text.Length > 0;
@@ -1197,6 +1203,7 @@ namespace CodexBridgeConsole
 
         // 対象ファイルが欠けたタブに出す警告。欠けていなければ空を返す。
         private static string FormatUnavailableFiles(
+            string unavailableScope,
             IReadOnlyList<string> missingFiles,
             IReadOnlyList<string> unreadableFiles)
         {
@@ -1204,7 +1211,7 @@ namespace CodexBridgeConsole
             {
                 // ラベルは 2 行固定で末尾が省略記号になる。ファイル一覧は長くなりやすく、
                 // 後ろに置くと配置手順の案内ごと切れてしまうため、案内を一覧より前に置く。
-                var text = new StringBuilder("このタブは保存できない。定義の配置は docs/setup.md の手順に従う。");
+                var text = new StringBuilder(unavailableScope).Append("定義の配置は docs/setup.md の手順に従う。");
                 text.Append("見つからない: ").Append(string.Join(", ", missingFiles)).Append('。');
                 if (unreadableFiles.Count > 0)
                 {
@@ -1217,7 +1224,7 @@ namespace CodexBridgeConsole
             if (unreadableFiles.Count > 0)
             {
                 // 読めないだけの場合、置き場所は分かっていて中身が壊れているだけなので配置手順は無関係である。
-                return "このタブは保存できない。読めない: " + string.Join(" / ", unreadableFiles);
+                return unavailableScope + "読めない: " + string.Join(" / ", unreadableFiles);
             }
 
             return string.Empty;

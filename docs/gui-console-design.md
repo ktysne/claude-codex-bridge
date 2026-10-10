@@ -66,7 +66,8 @@ Windows 10 1903 以降と Windows 11 には 4.8 が同梱されているため�
 `review-claude` は `agents/review-claude.md` の `model` と `effort` だけを書き換える。
 `tools`、`description`、本文は保ち、Codex の設定項目を追加しない。
 Claude モデルと effort の選択欄は、既存の Claude 側と同じ `SelectionPreservingComboBox`、`claudeModels`、`claudeModelEfforts` を使う。
-モデル変更時の effort の補正も共通の処理を使い、保存時には対応表に合わない組み合わせを拒否する。
+モデル変更時の effort の補正も共通の処理を使う。
+編集した値が対応表に合わない組み合わせなら保存時に拒否し、未編集の値は読み込んだまま残して他の定義の保存を止めない。
 一覧に無いモデルには `claudeEfforts` を使う。
 読み込み時の値との差分、外部変更の検出、入力を保持する再読込は既存の Claude 側と同じ方式で扱う。
 定義が無いか読めない場合は、専用の選択欄だけを無効にして理由をその近くに表示する。
