@@ -104,3 +104,4 @@ ai-cross-review は `~/.claude/tools/codex-agent.sh` を見つけると、レビ
 agent-cockpit のダッシュボードは、サブエージェントの行に Codex のモデルと経路を表示する。
 「経路の設定」で Claude を選ぶと、次に起動する窓口は Codex を呼べずに `impl-*-claude` への再委譲を報告する。Codex を選ぶと、窓口に Codex で行う指定が伝えられる。
 経路ごとの動きと確認は [setup.md](setup.md) の「連携: + agent-cockpit」にある。
+画面での操作は、agent-cockpit のマニュアルの[経路の設定](https://ktysne.info/agent-cockpit/manual/routing.html)と[経路の札](https://ktysne.info/agent-cockpit/manual/work.html#work-agent-route)にある。

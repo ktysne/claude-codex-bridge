@@ -26,7 +26,7 @@ claude-codex-bridge は単独で使える。次のツールを導入済みなら
 | ツール | 概要 | 連携するとできること |
 |---|---|---|
 | [ai-cross-review](https://github.com/ktysne/ai-cross-review) | Claude と Codex に、git の差分で交互にコードレビューさせる CLI | `npm run review:codex` が、bridge の `codex-review`(`--fix` 付きなら `codex-subagent`)の定義で Codex を起動する。差分のレビューでも、モデル、effort、認証ホームが bridge の定義にそろう。 |
-| [agent-cockpit](https://github.com/ktysne/agent-cockpit) | Claude Code のセッションの状態を表示するローカルのダッシュボード | サブエージェントの行に、経路と Codex のモデルが表示される。ダッシュボードの「経路の設定」で、次に起動するサブエージェントを Codex と Claude のどちらで動かすかを切り替えられる。 |
+| [agent-cockpit](https://github.com/ktysne/agent-cockpit)([紹介ページ](https://ktysne.info/agent-cockpit/)) | Claude Code と Codex のセッションの状態を 1 画面にまとめるローカルのダッシュボード | サブエージェントの行に、経路と Codex のモデルが表示される。ダッシュボードの「経路の設定」で、次に起動するサブエージェントを Codex と Claude のどちらで動かすかを切り替えられる。 |
 
 ## 導入
 
@@ -37,6 +37,7 @@ AI には、次のように依頼する。
 
 手順書は、アカウントの使い方で選ぶパターン 1〜3 と、連携ツールごとの設定の手順に分かれている。
 連携ツールそのものの導入は、それぞれのドキュメントに従う。
+agent-cockpit と ai-cross-review もまとめて入れるときは、agent-cockpit の依頼文(`agent-cockpit を導入して。手順は https://raw.githubusercontent.com/ktysne/agent-cockpit/main/docs/setup.md にある。`)から始めると、AI が bridge と ai-cross-review の導入状況を確かめ、bridge のパターンを尋ねながら 3 つを順に入れる。
 `~/.claude/settings.json`、`~/.claude/CLAUDE.md`、`~/.claude/agents/` など、リポジトリの外のファイルを変えるときは、AI が変更内容を示して確認を求める。
 
 ## 導入できたかの確認
