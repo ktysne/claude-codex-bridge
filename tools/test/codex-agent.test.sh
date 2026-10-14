@@ -57,10 +57,13 @@ ps_path="$(command -v pwsh 2>/dev/null || command -v powershell 2>/dev/null)"
 norm_path() {
   local p="${1//\\//}"
   if [ "$has_cygpath" -eq 1 ]; then
-    cygpath -m "$p" 2>/dev/null || printf '%s' "$p"
-  else
-    printf '%s' "$p"
+    p="$(cygpath -m "$p" 2>/dev/null || printf '%s' "$p")"
+    case "$p" in
+      //\?/UNC/*) p="//${p#//\?/UNC/}" ;;
+      //\?/*) p="${p#//\?/}" ;;
+    esac
   fi
+  printf '%s' "$p"
 }
 
 # ---------------------------------------------------------------------------
@@ -1561,6 +1564,35 @@ t_new_prompt_missing_parent() {
   expect_no_codex_call
 }
 
+t_new_prompt_long_parent() {
+  [ "$has_cygpath" -eq 1 ] || { skip "cygpath が無い環境では長いパスの接頭辞が付かない"; return; }
+  local parent segment prompt_file node_bin
+  # 払い出し先が 260 文字を超える長さにして、cygpath が //?/ を付ける条件を作る。
+  segment="$(printf 'x%.0s' $(seq 1 200))"
+  parent="$root/$segment/scratchpad"
+  mkdir -p "$parent" || { fail "長い親ディレクトリを作れない"; return; }
+  run_wrapper --new-prompt "$AGENT" "$parent"
+  expect_rc 0
+  prompt_file="$(sed -n 's/^codex-agent: prompt-file=//p' "$root/out")"
+  [ "${#prompt_file}" -gt 260 ] || fail "払い出し先が 260 文字を超えていない: ${#prompt_file}"
+  case "$prompt_file" in
+    //\?/*) fail "払い出し先に長いパスの接頭辞が付いている: [$prompt_file]" ;;
+    [A-Za-z]:/*) ;;
+    *) fail "払い出し先がドライブ文字付きの形ではない: [$prompt_file]" ;;
+  esac
+  printf 'probe\n' >"$prompt_file" || fail "払い出し先へ書けない"
+  expect_eq "払い出し先から読んだ内容" "probe" "$(cat <"$prompt_file")"
+  # フックは窓口の定義名しか受け付けないので、名前の部分だけ impl-light に置き換えて判定させる。
+  node_bin="$(command -v node 2>/dev/null)"
+  if [ -n "$node_bin" ]; then
+    PROMPT_FILE="${prompt_file/codex-agent-$AGENT-/codex-agent-impl-light-}" "$node_bin" -e \
+      'process.stdout.write(JSON.stringify({tool_name: "Write", tool_input: {file_path: process.env.PROMPT_FILE, content: "x"}}))' \
+      | "$node_bin" "$repo_root/tools/codex-agent-hook.js" impl-light >/dev/null 2>"$root/hook-err" \
+      || fail "フックが払い出し先への Write を拒否した: $(cat "$root/hook-err")"
+  fi
+  expect_no_codex_call
+}
+
 t_new_prompt_incompatible_args() {
   local args
   for args in \
@@ -2546,6 +2578,7 @@ run_case "依頼文の置き場: 作られ、9 日前のファイルを消し、
 run_case "--new-prompt: ディレクトリを払い出し、同じ秒でも重複しない" t_new_prompt
 run_case "--new-prompt: 親を省略すると prompts の下に作り、chmod が効く環境では権限を 700 にする" t_new_prompt_default_parent
 run_case "--new-prompt: 存在しない親では終了コード 2 で止まり、親を作らない" t_new_prompt_missing_parent
+run_case "--new-prompt: 260 文字を超える払い出し先にも長いパスの接頭辞を付けず、フックが Write を認める" t_new_prompt_long_parent
 run_case "--new-prompt: ほかの入口と引数を併用すると終了コード 2 になる" t_new_prompt_incompatible_args
 run_case "依頼文監査: 通常ファイルからの転送ではパスと SHA-256 を出力と報告の写しに含める" t_prompt_file_audit
 run_case "依頼文監査: ヒアストリングからの転送では prompt-file の行を出さない" t_prompt_here_string_no_audit

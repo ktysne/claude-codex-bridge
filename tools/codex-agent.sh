@@ -180,10 +180,21 @@ to_windows_path() {
   local p
   p="$(to_slash "$1")"
   if command -v cygpath >/dev/null 2>&1; then
-    cygpath -m "$p" 2>/dev/null || printf '%s' "$p"
+    strip_long_path_prefix "$(cygpath -m "$p" 2>/dev/null || printf '%s' "$p")"
   else
     printf '%s' "$p"
   fi
+}
+
+# cygpath は 260 文字を超えるパスに //?/ を付ける。フックはこの形を依頼文の置き場と認めず、
+# Write ツールと bash は接頭辞なしでも長いパスを扱えるので、外して返す。
+strip_long_path_prefix() {
+  local p="$1"
+  case "$p" in
+    //\?/UNC/*) printf '//%s' "${p#//\?/UNC/}" ;;
+    //\?/*) printf '%s' "${p#//\?/}" ;;
+    *) printf '%s' "$p" ;;
+  esac
 }
 
 agent_name=""
