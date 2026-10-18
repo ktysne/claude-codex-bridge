@@ -124,7 +124,7 @@ GPT 側定義は利用者側の `~/.claude/gpt-agents/` への配置が必須で
 例外として、`codex_enabled` はどちらかが `false` なら GPT 側の無効化として扱う(詳細は [gpt-agents.md](gpt-agents.md) の「定義ファイルの二層」)。
 
 `tools/codex-agent.sh` は行末が LF のまま配置する。
-CRLF に変換されると、bash が行末の CR を引数として読み、実行に失敗する。
+Git for Windows の bash は行末の CR を読み飛ばすので CRLF でも動くが、WSL などの bash は CR を引数の一部として読み、実行に失敗する。
 リポジトリでは `.gitattributes` で LF に固定しているが、エディタやコピーの経路で変換された場合は LF に戻す。
 
 リポジトリを更新して定義やスクリプトの変更を取り込んだときは、同じ手順で再配置する。
@@ -521,7 +521,7 @@ bridge 側で追加する設定は無い。agent-cockpit とは次の形でつ�
 - `Agent type '<定義名>' not found` と出る:共通手順 3 の配置と、共通手順 6 の再起動を確かめる。
 - 窓口やラッパー役の定義の Bash と Write がすべて拒否される:`~/.claude/tools/codex-agent-hook.js` が無い、古い、または node が見つからない。共通手順 3 で、スクリプトを定義より先に配置し直す。
 - プロジェクト側に置いた定義で、フックの制限が効かず、窓口が転送以外の操作をする:そのフォルダ(worktree なら元のリポジトリのフォルダ)のワークスペースの信頼を受け入れる。信頼が無いと、フックだけが黙って飛ばされる。
-- `codex-agent.sh` が `$'\r': command not found` などで失敗する:行末が CRLF に変わっている。LF に戻す。
+- `codex-agent.sh` が `$'\r': command not found` などで失敗する:行末が CRLF に変わっていて、行末の CR を読み飛ばさない bash(WSL などの bash)で動かしている。LF に戻す。
 - auto mode でサブエージェントが Codex を呼べない:共通手順 4 の `permissions.allow` を確かめる。
 - 終了コード 3 で止まる:`codex` が PATH に無い、GPT 側定義が無い、`codex_enabled: false` になっている、または `codex_model` が空である。窓口は `impl-*-claude` への再委譲を報告し、`codex-review` と `codex-subagent` は再委譲せずに止まる。
 - `codex_home が存在しない` と出て終了コード 2 で止まる:定義の `codex_home` のディレクトリが無い。パターン 1 と 2 では、「使う定義」の手順で `codex_home` を `~/.codex` に書き換えたかを確かめる。パターン 3 では、`~/.codex-subagent` へのログインを確かめる。

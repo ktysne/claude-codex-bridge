@@ -1,4 +1,4 @@
-# bash が読むスクリプトは LF で固定する。CRLF だと Git Bash が行末の CR を引数として扱い、実行に失敗する。
+# bash が読むスクリプトは LF で固定する。Git for Windows の bash は行末の CR を読み飛ばすが、WSL などの bash は CR を引数の一部として読み、実行に失敗するためである。
 tools/codex-agent.sh text eol=lf
 tools/test/*.sh text eol=lf
 
