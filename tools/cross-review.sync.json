@@ -3,6 +3,11 @@
     "repo": "https://github.com/ktysne/ai-cross-review.git",
     "ref": "main"
   },
+  "excludedFiles": [
+    "tests/cross-review.test.js",
+    "tests/cross-review.sync.test.js",
+    "tests/cross-review.sync-all.test.js"
+  ],
   "files": [
     {
       "from": "tools/cross-review.js",
@@ -33,7 +38,7 @@
       "to": ".claude/skills/cross-review/SKILL.md"
     }
   ],
-  "lastSyncedCommit": "d51cd2d48cf0ba707687cad8c83b960ba2d4bfce",
+  "lastSyncedCommit": "f3730f9763de3e1debdef3143a944c3f2280d9c5",
   "lastSyncedRef": "main",
   "shownMigrations": [
     "2026-09-phase1-review-rules.md",
