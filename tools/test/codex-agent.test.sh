@@ -902,6 +902,25 @@ t_tool_handshake_failed_exit0() {
   esac
 }
 
+t_tool_handshake_failed_exit_forced() {
+  fake_set stderr '2026-09-23T16:03:29.519274Z ERROR codex_core::tools::router: error=code-mode host exited during handshake
+'
+  fake_set last_message '接続に失敗した。
+'
+  fake_set sleep 10
+  EXTRA_ENV=(CODEX_AGENT_EXIT_GRACE_SEC=2)
+  EXTRA_PATH=""
+  [ -z "$PS_BIN_DIR" ] || EXTRA_PATH="$PS_BIN_DIR"
+  [ -z "$TASKKILL_BIN_DIR" ] || EXTRA_PATH="${EXTRA_PATH:+$EXTRA_PATH:}$TASKKILL_BIN_DIR"
+  if [ -r "/proc/$$/winpid" ] && { [ -z "$PS_BIN_DIR" ] || [ -z "$TASKKILL_BIN_DIR" ]; }; then
+    skip "Windows のプロセス照合に必要な PowerShell または taskkill が無い"
+    return
+  fi
+  run_wrapper "$AGENT"
+  expect_out_line 'codex-agent: warning=codex-exit-forced grace=2'
+  expect_fallback_tail unavailable unavailable
+}
+
 t_tool_handshake_recovered_exit0() {
   fake_set stderr 'ERROR codex_core::tools::router: error=code-mode host exited during handshake
 exec
@@ -2755,6 +2774,7 @@ run_case "利用上限(stdout): 75、evidence の直後に result=rate-limited" 
 run_case "利用上限(根拠 2 行): evidence を 1 行ずつ接頭辞付きで result の直前に並べる" t_rate_limit_multi_evidence
 run_case "モデルの混雑: 75、evidence の直後に result=unavailable" t_unavailable
 run_case "ツール接続の失敗(終了コード 0、成功行なし): 75、evidence の直後に result=unavailable" t_tool_handshake_failed_exit0
+run_case "ツール接続の失敗の後も Codex が残る: 猶予後に止めても 75 と result=unavailable を返す" t_tool_handshake_failed_exit_forced
 run_case "ツール接続の失敗後に復旧(終了コード 0、成功行あり): result=ok" t_tool_handshake_recovered_exit0
 run_case "通常の失敗: 1、result=failed exit=1" t_plain_failure
 run_case "Codex 自身の 75: 1 に写像し result=failed exit=75" t_codex_exit_75

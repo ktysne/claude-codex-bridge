@@ -121,7 +121,7 @@ codex-agent: warning=child-spawn-failed の行と、最初の根拠の行を出�
 MSBuild がエラー文を出さずに Checking File Globs の直後で止まった印があれば、続けて
 codex-agent: warning=sandbox-build-failed の行と、起動したコマンドの行を出す(同じく result= は変えない)。
 最終報告を書いた後も Codex が終了しない場合は、60 秒後に停止して最終報告の前に
-codex-agent: warning=codex-exit-forced の行を出し、result=ok を返す。
+codex-agent: warning=codex-exit-forced の行を出し、Codex の終了コードを 0 とみなして判定する。
 実行中の委譲を止める手順は docs/gpt-agents.md の「既知の制約」にある。
 
 終了コード:
@@ -1179,7 +1179,7 @@ emit_evidence() {
 # この ERROR 行は先頭にタイムスタンプが付くため、行頭でなく行内の ERROR で照合する。
 # ツール実行の成功行(" succeeded in ")が 1 行でもあれば、接続が復旧して作業できたとみなし ok のままにする。
 # 本文は変数に受けてから調べる。pipefail の下で grep -q へパイプすると、書き手が SIGPIPE で失敗して判定が反転しうるためである。
-if [ "$codex_status" -eq 0 ] && [ "$forced_codex_exit" -eq 0 ]; then
+if [ "$codex_status" -eq 0 ]; then
   matched="$(printf '%s\n' "$stderr_body" | grep -E 'ERROR' | grep -F 'code-mode host exited during handshake' | head -n 3)"
   if [ -n "$matched" ] && [[ "$stderr_body" != *' succeeded in '* ]]; then
     log_body | tail -n "$tail_lines" | out

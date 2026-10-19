@@ -368,7 +368,7 @@ codex-agent: sandbox-build-failed evidence: <起動したコマンドの行>
 印の形は「既知の制約」の「サンドボックスの中の MSBuild がエラー文を出さずに止まる」にある。
 
 最終報告を書いた後も Codex が終了せず、ラッパーが残ったプロセスを停止した場合は、最終報告の前に次の警告を出す。
-終了コードは 0 とみなし、ログと報告の写しにも警告を残す。
+Codex の終了コードは 0 とみなして通常の判定へ進み、ログと報告の写しにも警告を残す。
 
 ```text
 codex-agent: warning=codex-exit-forced grace=<秒>
@@ -647,7 +647,7 @@ Issue が閉じたら、その記述を更新するか消す。
 照合できない目印が残る環境で排他にすると、残った目印 1 つで、その worktree の委譲がすべて止まるためである。
 
 **Codex が最終報告を書いた後も終了しないことがある。**
-ラッパーは `.last` が空でなくなってから 60 秒後に、コマンドラインに `<実行 ID>.last` を含む Codex 側のプロセスとその子孫を停止し、`result=ok` を返す。
+ラッパーは `.last` が空でなくなってから 60 秒後に、コマンドラインに `<実行 ID>.last` を含む Codex 側のプロセスとその子孫を停止し、Codex の終了コードを 0 とみなして、ツール接続の失敗の判定を含む通常の判定へ進む。
 その場合は `codex-agent: warning=codex-exit-forced grace=60` を標準出力とログに出す([Issue #161](https://github.com/ktysne/claude-codex-bridge/issues/161))。
 
 **Codex が書き込めるのは `-C` で指定した作業ディレクトリの配下だけである。**
