@@ -195,7 +195,7 @@ PR コメントの投稿やブランチの操作のような実装でない作�
 実装担当に任せると、委譲の中から別アカウントの Codex が入れ子で起動する場合があり、レビュー往復の数え方がずれるためである。
 
 `CODEX_AGENT_RUN` は、`codex-agent.sh` が起動した Codex とその子プロセスであることを示す目印である。
-ai-cross-review はこの変数を見てレビュアーの起動を断る([ktysne/ai-cross-review#76](https://github.com/ktysne/ai-cross-review/issues/76))。
+この変数を見てレビュアーの起動を断る処理は ai-cross-review 側に置く([ktysne/ai-cross-review#76](https://github.com/ktysne/ai-cross-review/issues/76))。その処理を含む版を取り込むまでは、定義の禁止事項だけが防ぎになる。
 値には実行 ID を入れ、契約は値が空でないことだけとする。
 
 GPT への委譲を止めて Claude 側で実装させたいときは、依頼文の最初の行に次の指定を置き、直後の行に理由を書く。
