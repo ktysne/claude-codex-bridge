@@ -14,6 +14,8 @@
 #
 # 標準出力(Codex を起動する場合):
 #   codex-agent: agent=... model=... effort=... sandbox=... codex_home=... workdir=...   監査行
+#   codex-agent: workdir-from=prompt                                                     依頼文の指定を使った場合
+#   codex-agent: warning=workdir-mismatch ... / warning=prompt-workdir-ignored ...       指定の不一致または無視
 #   codex-agent: prompt-file=<パス> sha256=<64 桁の 16 進>                             通常ファイルから依頼文を読んだ場合
 #   codex-agent: run=<実行 ID> pid=<ラッパーの PID> started=<UTC の ISO 8601>            Codex の起動前に出す
 #   codex-agent: log=<ログのパス>                                                         Codex の起動前に出す
@@ -45,7 +47,7 @@
 #   その実行が標準出力へ出したものと同じ内容で、最後の行は result= の行である。result= の行を出した実行だけが残す。
 #   完了を待つ入口 --wait <実行 ID> は、これを読んで元の実行の出力と終了コードを返す。
 #   --wait の状態と終了コードは用法の表示(usage)にあり、契約は docs/gpt-agents.md の「完了を待つ」にある。
-#   --header-of <出力ファイル> は、背景へ移った起動の出力ファイルの先頭に続く codex-agent: の行(監査行、prompt-file=、run=、log=、警告)だけを出す。
+#   --header-of <出力ファイル> は、背景へ移った起動の出力ファイルの先頭に続く codex-agent: の行(監査行、workdir-from=、prompt-file=、run=、log=、警告)だけを出す。
 #   ラッパー役の定義はフックで出力ファイルを読めないため、この入口で実行 ID と「進行中」の報告に添える行を取る。
 #
 # 書き込み担当の目印(<worktree 固有の git ディレクトリ>/codex-agent/runs/<実行 ID>.run):
@@ -94,6 +96,7 @@ usage() {
 
   <agent-name>      .claude/gpt-agents/<agent-name>.md の名前
   -C <workdir>      Codex の作業ディレクトリ(既定はカレントディレクトリ)
+                    -C が無いときは依頼文の作業ディレクトリ指定も使う
   --effort <level>  推論 effort を定義ファイルの値より優先して指定する
                     (low|medium|high|xhigh|max|ultra)
   --new-prompt <agent-name> ["<親ディレクトリ>"]
@@ -108,7 +111,7 @@ usage() {
 
 依頼文は標準入力から読む(--new-prompt、--wait と --header-of では読まない)。
 
-標準出力は、監査行、通常ファイルから依頼文を読んだ場合は prompt-file= の行、run= の行、log= の行、最終報告、result= の行の順である。
+標準出力は、監査行、依頼文から作業ディレクトリを採用した場合の workdir-from= 行または指定に関する warning= 行、通常ファイルから依頼文を読んだ場合の prompt-file= 行、run= の行、log= の行、最終報告、result= の行の順である。
 run= の行と log= の行は Codex の起動前に出す。
 書き込み可能な定義では、同じ worktree に書き込み可能な別の実行が残っていると、
 log= の行の後に codex-agent: warning=concurrent-writer の行を出す(起動は止めない)。
@@ -184,6 +187,72 @@ to_windows_path() {
   else
     printf '%s' "$p"
   fi
+}
+
+expand_prompt_workdir() {
+  local path
+  path="$(to_slash "$1")"
+  case "$path" in
+    "~") path="$(to_slash "$home_dir")" ;;
+    "~/"*) path="$(to_slash "$home_dir")/${path#\~/}" ;;
+  esac
+  printf '%s' "$path"
+}
+
+parse_prompt_workdir() {
+  printf '%s' "$1" | awk '
+    function trim(value) {
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      return value
+    }
+    function emit(value, first, last) {
+      value = trim(value)
+      if (length(value) >= 2) {
+        first = substr(value, 1, 1)
+        last = substr(value, length(value), 1)
+        if ((first == "`" || first == "\"" || first == sprintf("%c", 39)) && first == last) {
+          value = substr(value, 2, length(value) - 2)
+        }
+      }
+      if (value ~ /[<>]/) print "H" value
+      else if ((value ~ /^[[:alpha:]]:/ && (substr(value, 3, 1) == "/" || substr(value, 3, 1) == "\\")) || value ~ /^\// || value ~ /^~\//) print "P" value
+      else print "I" value
+      found = 1
+      exit
+    }
+    {
+      sub(/\r$/, "", $0)
+      if (fence != "") {
+        if (index($0, fence) == 1) fence = ""
+        next
+      }
+      if ($0 ~ /^```/) { fence = "```"; next }
+      if ($0 ~ /^~~~/) { fence = "~~~"; next }
+      if (pending) {
+        value = trim($0)
+        if (value != "") emit(value)
+        next
+      }
+      if ($0 ~ /^作業ディレクトリ(:|：)[[:space:]]*/) {
+        value = $0
+        sub(/^作業ディレクトリ(:|：)[[:space:]]*/, "", value)
+        emit(value)
+      }
+      if ($0 ~ /^#{1,6}[[:space:]]+作業ディレクトリ[[:space:]]*$/) {
+        pending = 1
+        next
+      }
+    }
+    END { if (!found) print "" }
+  '
+}
+
+normalize_workdir_for_compare() {
+  local path
+  path="$(to_windows_path "$1")"
+  while [[ "$path" == */ ]]; do path="${path%/}"; done
+  printf '%s' "$path"
 }
 
 # cygpath は 260 文字を超えるパスに //?/ を付ける。フックはこの形を依頼文の置き場と認めず、
@@ -593,6 +662,7 @@ codex_home="$(expand_codex_home "$codex_home")"
 
 [ -d "$codex_home" ] || die "codex_home が存在しない: $codex_home (docs/setup.md のログイン手順を参照)"
 
+workdir_option="$workdir"
 [ -n "$workdir" ] || workdir="$PWD"
 workdir="$(to_windows_path "$workdir")"
 [ -d "$workdir" ] || die "作業ディレクトリが存在しない: $workdir"
@@ -600,6 +670,36 @@ workdir="$(to_windows_path "$workdir")"
 # 依頼文は標準入力から読む。端末から起動されたときは待ち続けてしまうので先に止める。
 [ -t 0 ] && die "依頼文が標準入力から渡されていない"
 request="$(cat)"
+case "$request" in
+  *[![:space:]]*) ;;
+  *) die "依頼文が空である" ;;
+esac
+
+prompt_workdir=""
+prompt_workdir_ignored=""
+workdir_from_prompt=0
+if [ "$codex_sandbox" != "read-only" ]; then
+  parsed_workdir="$(parse_prompt_workdir "$request")"
+  case "${parsed_workdir:0:1}" in
+    P) prompt_workdir="${parsed_workdir:1}" ;;
+    I) prompt_workdir_ignored="not-absolute:${parsed_workdir:1}" ;;
+    H) prompt_workdir_ignored="placeholder:${parsed_workdir:1}" ;;
+  esac
+fi
+
+if [ -n "$prompt_workdir" ]; then
+  expanded_prompt_workdir="$(expand_prompt_workdir "$prompt_workdir")"
+  if [ -n "$workdir_option" ]; then
+    if [ "$(normalize_workdir_for_compare "$expanded_prompt_workdir")" != "$(normalize_workdir_for_compare "$workdir_option")" ]; then
+      workdir_mismatch="codex-agent: warning=workdir-mismatch prompt=$prompt_workdir option=$workdir_option"
+    fi
+  else
+    workdir="$(to_windows_path "$expanded_prompt_workdir")"
+    [ -d "$workdir" ] || die "依頼文から読み取った作業ディレクトリが存在しない: $workdir"
+    workdir_from_prompt=1
+  fi
+fi
+
 prompt_audit_line=""
 if [ -f /proc/self/fd/0 ]; then
   prompt_input_file="$(readlink /proc/self/fd/0 2>/dev/null || true)"
@@ -620,12 +720,6 @@ if [ -f /proc/self/fd/0 ]; then
   fi
 fi
 
-# 空白だけの依頼文は Codex を起動しても意味がないので、ここで止める。
-case "$request" in
-  *[![:space:]]*) ;;
-  *) die "依頼文が空である" ;;
-esac
-
 if [ -n "$role_body" ]; then
   prompt="$role_body
 
@@ -641,6 +735,11 @@ fi
 audit_line="$(printf 'codex-agent: agent=%s model=%s effort=%s sandbox=%s codex_home=%s workdir=%s' \
   "$agent_name" "$codex_model" "$codex_effort" "$codex_sandbox" "$codex_home" "$workdir")"
 printf '%s\n' "$audit_line"
+[ "$workdir_from_prompt" -eq 0 ] || printf 'codex-agent: workdir-from=prompt\n'
+[ -z "${workdir_mismatch:-}" ] || printf '%s\n' "$workdir_mismatch"
+if [ -n "$prompt_workdir_ignored" ]; then
+  printf 'codex-agent: warning=prompt-workdir-ignored reason=%s value=%s\n' "${prompt_workdir_ignored%%:*}" "${prompt_workdir_ignored#*:}"
+fi
 [ -z "$prompt_audit_line" ] || printf '%s\n' "$prompt_audit_line"
 
 # 試験用フック。フォールバック経路(終了コード 75)の確認にだけ使う。

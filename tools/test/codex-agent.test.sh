@@ -96,6 +96,12 @@ expect_out_line() {
   grep -Fxq -- "$1" "$root/out" || fail "標準出力に行が無い: [$1]"
 }
 
+expect_workdir() {
+  local expected="$1" agent="${2:-$AGENT}" sandbox="${3:-workspace-write}"
+  expect_out_line "codex-agent: agent=$agent model=model-test effort=low sandbox=$sandbox codex_home=$(norm_path "$root/home/.codex-test") workdir=$(norm_path "$expected")"
+  expect_arg_pair -C "$(norm_path "$expected")"
+}
+
 expect_out_no_match() {
   if grep -Fq -- "$1" "$root/out"; then
     fail "標準出力に出てはならない文字列がある: [$1]"
@@ -487,6 +493,102 @@ t_args_workdir() {
   run_wrapper "$AGENT" -C "$root/other dir"
   expect_rc 0
   expect_arg_pair -C "$(norm_path "$root/other dir")"
+}
+
+t_prompt_workdir_label() {
+  mkdir -p "$root/prompt work"
+  REQ="作業ディレクトリ： \"$root/prompt work\""
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_workdir "$root/prompt work"
+  expect_out_line "codex-agent: workdir-from=prompt"
+  expect_eq "監査行の次" "codex-agent: workdir-from=prompt" "$(sed -n 2p "$root/out")"
+}
+
+t_prompt_workdir_heading() {
+  mkdir -p "$root/prompt heading"
+  REQ=$'###### 作業ディレクトリ \n \n  '"$root/prompt heading"
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_workdir "$root/prompt heading"
+  expect_out_line "codex-agent: workdir-from=prompt"
+}
+
+t_prompt_workdir_tilde() {
+  mkdir -p "$root/home/prompt-home"
+  REQ='作業ディレクトリ: ~/prompt-home'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_workdir "$root/home/prompt-home"
+  expect_out_line "codex-agent: workdir-from=prompt"
+}
+
+t_prompt_workdir_option_mismatch() {
+  mkdir -p "$root/prompt-work" "$root/option-work"
+  REQ="作業ディレクトリ: $root/prompt-work"
+  run_wrapper "$AGENT" -C "$root/option-work"
+  expect_rc 0
+  expect_workdir "$root/option-work"
+  expect_out_line "codex-agent: warning=workdir-mismatch prompt=$root/prompt-work option=$root/option-work"
+  expect_out_no_match "codex-agent: workdir-from=prompt"
+}
+
+t_prompt_workdir_option_same() {
+  REQ="作業ディレクトリ: $root/work"
+  run_wrapper "$AGENT" -C "$root/work/"
+  expect_rc 0
+  expect_out_no_match "codex-agent: warning=workdir-mismatch"
+  expect_out_no_match "codex-agent: workdir-from=prompt"
+  expect_arg_pair -C "$(norm_path "$root/work/")"
+}
+
+t_prompt_workdir_ignores_fences() {
+  REQ=$'~~~text\n作業ディレクトリ: /missing/tilde\n~~~\n```markdown\n## 作業ディレクトリ\n/missing/backtick\n```\n依頼本文'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_workdir "$root/work"
+  expect_out_no_match "workdir-from=prompt"
+  expect_out_no_match "prompt-workdir-ignored"
+}
+
+t_prompt_workdir_ignored_values() {
+  REQ="作業ディレクトリ: relative/path
+作業ディレクトリ: $root/work"
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_workdir "$root/work"
+  expect_out_line "codex-agent: warning=prompt-workdir-ignored reason=not-absolute value=relative/path"
+  expect_out_no_match "codex-agent: workdir-from=prompt"
+
+  REQ="作業ディレクトリ: $root/work/<名前>"
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_workdir "$root/work"
+  expect_out_line "codex-agent: warning=prompt-workdir-ignored reason=placeholder value=$root/work/<名前>"
+  expect_out_no_match "codex-agent: workdir-from=prompt"
+}
+
+t_prompt_workdir_read_only_ignored() {
+  mkdir -p "$root/prompt-work"
+  write_def "$root/home/.claude/gpt-agents/codex-review.md" 'codex_home: ~/.codex-test
+codex_model: model-test
+codex_reasoning_effort: low
+codex_sandbox: read-only'
+  REQ="作業ディレクトリ: $root/prompt-work"
+  run_wrapper codex-review
+  expect_rc 0
+  expect_workdir "$root/work" codex-review read-only
+  expect_out_no_match "workdir-from=prompt"
+  expect_out_no_match "prompt-workdir-ignored"
+}
+
+t_prompt_workdir_missing() {
+  REQ="作業ディレクトリ: $root/no-such-prompt-workdir"
+  run_wrapper "$AGENT"
+  expect_exit2
+  grep -Fq 'codex-agent: 依頼文から読み取った作業ディレクトリが存在しない:' "$root/err" \
+    || fail "依頼文から読み取った値だと分かるエラーが無い"
+  expect_no_codex_call
 }
 
 t_prompt_with_role() {
@@ -2495,6 +2597,15 @@ run_case "起動引数: sandbox、-m、effort、-C、approval_policy=never が 1
 run_case "起動引数: --effort high が定義の値より優先する" t_args_effort_override
 run_case "起動引数: effort の既定は medium、sandbox の既定は read-only" t_args_defaults
 run_case "起動引数: -C <dir> の値が渡る" t_args_workdir
+run_case "依頼文の作業ディレクトリ: 全角コロンの行から読み、引用符を外して -C に使う" t_prompt_workdir_label
+run_case "依頼文の作業ディレクトリ: 見出しの次の空でない行から読む" t_prompt_workdir_heading
+run_case "依頼文の作業ディレクトリ: ~/ を明示的にホームへ展開する" t_prompt_workdir_tilde
+run_case "依頼文の作業ディレクトリ: -C が優先され、異なる指定を警告する" t_prompt_workdir_option_mismatch
+run_case "依頼文の作業ディレクトリ: -C の末尾スラッシュを無視して同じ値と判定する" t_prompt_workdir_option_same
+run_case "依頼文の作業ディレクトリ: コードフェンス内の指定を読まない" t_prompt_workdir_ignores_fences
+run_case "依頼文の作業ディレクトリ: 相対パスと山括弧を含む値を無視する" t_prompt_workdir_ignored_values
+run_case "依頼文の作業ディレクトリ: codex-review では読み取らない" t_prompt_workdir_read_only_ignored
+run_case "依頼文の作業ディレクトリ: 存在しないパスは終了コード 2" t_prompt_workdir_missing
 run_case "依頼文: 役割文、---、## 依頼、依頼文の順で渡る" t_prompt_with_role
 run_case "依頼文: 役割文が無い定義では依頼文だけが渡る" t_prompt_without_role
 run_case "成功時の出力: 監査行、run=、log=、最終報告、result=ok の順で、経過はログにだけ残る" t_success_output
