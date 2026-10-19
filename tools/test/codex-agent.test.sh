@@ -232,6 +232,9 @@ case "$kind" in
     fi
     cat >"$FAKE_DIR/exec.stdin.$$"
     cp "$FAKE_DIR/exec.stdin.$$" "$FAKE_DIR/exec.stdin"
+    # 出力より先に hold を取る。印を見たテストが起動した 2 つ目に hold を取られると、互いに待ち続けるためである。
+    held=0
+    mv "$FAKE_DIR/hold" "$FAKE_DIR/held.$$" 2>/dev/null && held=1
     out=""
     prev=""
     for a in "$@"; do
@@ -246,7 +249,7 @@ case "$kind" in
     if [ -f "$FAKE_DIR/native_wait" ]; then
       exec "$(cat "$FAKE_DIR/ping_exe")" -n "$(cat "$FAKE_DIR/native_wait")" 127.0.0.1 >/dev/null
     fi
-    if mv "$FAKE_DIR/hold" "$FAKE_DIR/held.$$" 2>/dev/null; then
+    if [ "$held" -eq 1 ]; then
       while [ ! -f "$FAKE_DIR/release" ]; do sleep 0.1; done
     fi
     [ -f "$FAKE_DIR/sleep" ] && sleep "$(cat "$FAKE_DIR/sleep")"
