@@ -488,18 +488,19 @@ bridge 側で追加する設定は無い。agent-cockpit とは次の形でつ�
 | 経路 | 窓口(`impl-hard`、`impl-light`、`impl-standard`) | `codex-review`、`codex-subagent` |
 |---|---|---|
 | 既定 | 通常どおり Codex へ転送する | 通常どおり Codex を起動する |
-| Codex | Codex へ転送する。起動時に「Codex で行う」指定が伝えられる | 通常どおり Codex を起動する |
-| Claude | `codex-agent.sh` の実行が agent-cockpit のフックに拒否される。窓口は拒否の文言を添えて `再委譲: impl-*-claude` を報告し、メインセッションが `impl-*-claude` へ委譲し直す | `codex-agent.sh` の実行が拒否され、拒否の文言を報告して止まる |
+| Codex | 通常どおり Codex へ転送する | 通常どおり Codex を起動する |
+| Claude | 起動時の指定を見て `--new-prompt` を実行せずに `再委譲: impl-*-claude` を報告する。呼び出しを試みて拒否された場合も再委譲を報告する。メインセッションは、報告に添えられた指定の文か拒否の文言を `理由: 再委譲:` の後ろに置いて `impl-*-claude` へ委譲し直す | 拒否の文言を報告して止まり、メインセッションが `CLAUDE.md` の扱いで続ける |
 
-経路を Claude にしたときの再委譲は、窓口の定義の「権限判定やフックに拒否された場合」の扱いによる。agent-cockpit の拒否の文言は `開発者の指定(agent-cockpit の経路設定):` で始まり、`codex-agent-hook:` では始まらない。
-メインセッションは、この拒否の文言を `理由: 再委譲:` の後ろに置いて委譲し直す(「委譲の検証」の手順)。
-この表は、定義の一般の規則から期待される動きである。経路が Claude のときは起動時にも「codex-agent.sh を呼ばない」指定が伝わるので、窓口が呼び出しを試みずに再委譲を報告することもある。経路が Codex のときは、再委譲で起動した `impl-*-claude` にも「Codex で行う」指定が伝わり、`codex-agent.sh` を実行しない定義と食い違う。agent-cockpit の指定を定義で名指しして扱うことと、実機での確認は [#129](https://github.com/ktysne/claude-codex-bridge/issues/129) で進める。
+agent-cockpit の経路 Codex の指定は再委譲で起動した `impl-*-claude` にも渡るが、定義は依頼文の `委譲: Claude 側で実装` を優先して Claude 側で実装する。
+経路 Claude で `codex-review` が止まった場合は `review-claude` でレビューし、`codex-subagent` が止まった場合はメインセッションが自分で作業するか、実装依頼を `impl-*-claude` へ委譲する。
+実機では経路 Claude の窓口 `impl-light` のみを確認し、起動時の指定を見て `--new-prompt` を実行せず再委譲を報告したことを確かめた。
+ほかの組み合わせは実機で確認していない。
 
 ### 確認
 
 1. 新しいセッションを開き、ダッシュボードを再読み込みする。上部の「経路の設定」に、サブエージェントの段(既定、Codex、Claude)が出ればよい。出ないときは、`~/.claude/tools/codex-agent.sh` の配置と、`CLAUDE_CONFIG_DIR` の設定を確かめる。
 2. 経路を「既定」のまま、パターンごとの確認と同じ依頼で `impl-light` を起動する。サブエージェントの行に、Codex のモデルの札が出ればよい。
-3. 経路を「Claude」にしてから、同じ依頼で `impl-light` を起動する。窓口が `再委譲: impl-light-claude` と、`開発者の指定(agent-cockpit の経路設定):` を含む拒否の文言を報告すればよい。違う報告になったときは #129 を見る。確かめ終わったら、経路を元の値に戻す。
+3. 経路を「Claude」にしてから、同じ依頼で `impl-light` を起動する。窓口が `再委譲: impl-light-claude` と、起動時の指定の文をそのまま報告すればよい。違う報告になったときは、定義と agent-cockpit の設定を確かめる。確かめ終わったら、経路を元の値に戻す。
 
 ## 更新するとき
 
