@@ -591,6 +591,29 @@ t_prompt_workdir_missing() {
   expect_no_codex_call
 }
 
+t_prompt_workdir_ignores_long_and_indented_fences() {
+  mkdir -p "$root/quoted-work"
+  REQ=$'````markdown\n```\n作業ディレクトリ: '"$root/quoted-work"$'\n````\n   ~~~\n作業ディレクトリ: '"$root/quoted-work"$'\n   ~~~\n依頼本文'
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_workdir "$root/work"
+  expect_out_no_match "workdir-from=prompt"
+}
+
+t_prompt_workdir_lines_replayed_by_wait() {
+  mkdir -p "$root/prompt-work" "$root/option-work"
+  REQ="作業ディレクトリ: $root/prompt-work"
+  run_wrapper "$AGENT" -C "$root/option-work"
+  expect_rc 0
+  expect_out_line "codex-agent: warning=workdir-mismatch prompt=$root/prompt-work option=$root/option-work"
+  local id
+  id="$(run_id_of "$root/out")"
+  keep_run_out
+  run_wait "$id"
+  expect_rc 0
+  expect_same_as_run_out
+}
+
 t_prompt_with_role() {
   run_wrapper "$AGENT"
   expect_rc 0
@@ -2606,6 +2629,8 @@ run_case "依頼文の作業ディレクトリ: コードフェンス内の指�
 run_case "依頼文の作業ディレクトリ: 相対パスと山括弧を含む値を無視する" t_prompt_workdir_ignored_values
 run_case "依頼文の作業ディレクトリ: codex-review では読み取らない" t_prompt_workdir_read_only_ignored
 run_case "依頼文の作業ディレクトリ: 存在しないパスは終了コード 2" t_prompt_workdir_missing
+run_case "依頼文の作業ディレクトリ: 長いフェンスの中の短い記号と、字下げしたフェンスの中を読まない" t_prompt_workdir_ignores_long_and_indented_fences
+run_case "依頼文の作業ディレクトリ: 足した行も --wait が元の出力どおりに返す" t_prompt_workdir_lines_replayed_by_wait
 run_case "依頼文: 役割文、---、## 依頼、依頼文の順で渡る" t_prompt_with_role
 run_case "依頼文: 役割文が無い定義では依頼文だけが渡る" t_prompt_without_role
 run_case "成功時の出力: 監査行、run=、log=、最終報告、result=ok の順で、経過はログにだけ残る" t_success_output

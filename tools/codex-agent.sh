@@ -223,12 +223,20 @@ parse_prompt_workdir() {
     }
     {
       sub(/\r$/, "", $0)
-      if (fence != "") {
-        if (index($0, fence) == 1) fence = ""
+      # CommonMark と同じく、3 文字までの字下げを許し、開始と同じ記号で開始以上の長さの行だけが閉じる。
+      line = $0
+      sub(/^ {0,3}/, "", line)
+      if (fence_char != "") {
+        n = 0
+        while (substr(line, n + 1, 1) == fence_char) n++
+        if (n >= fence_len && substr(line, n + 1) ~ /^[[:space:]]*$/) fence_char = ""
         next
       }
-      if ($0 ~ /^```/) { fence = "```"; next }
-      if ($0 ~ /^~~~/) { fence = "~~~"; next }
+      if (match(line, /^(`{3,}|~{3,})/)) {
+        fence_char = substr(line, 1, 1)
+        fence_len = RLENGTH
+        next
+      }
       if (pending) {
         value = trim($0)
         if (value != "") emit(value)
@@ -735,11 +743,13 @@ fi
 audit_line="$(printf 'codex-agent: agent=%s model=%s effort=%s sandbox=%s codex_home=%s workdir=%s' \
   "$agent_name" "$codex_model" "$codex_effort" "$codex_sandbox" "$codex_home" "$workdir")"
 printf '%s\n' "$audit_line"
-[ "$workdir_from_prompt" -eq 0 ] || printf 'codex-agent: workdir-from=prompt\n'
-[ -z "${workdir_mismatch:-}" ] || printf '%s\n' "$workdir_mismatch"
+workdir_notice_lines=""
+[ "$workdir_from_prompt" -eq 0 ] || workdir_notice_lines="codex-agent: workdir-from=prompt"$'\n'
+[ -z "${workdir_mismatch:-}" ] || workdir_notice_lines+="$workdir_mismatch"$'\n'
 if [ -n "$prompt_workdir_ignored" ]; then
-  printf 'codex-agent: warning=prompt-workdir-ignored reason=%s value=%s\n' "${prompt_workdir_ignored%%:*}" "${prompt_workdir_ignored#*:}"
+  workdir_notice_lines+="codex-agent: warning=prompt-workdir-ignored reason=${prompt_workdir_ignored%%:*} value=${prompt_workdir_ignored#*:}"$'\n'
 fi
+printf '%s' "$workdir_notice_lines"
 [ -z "$prompt_audit_line" ] || printf '%s\n' "$prompt_audit_line"
 
 # 試験用フック。フォールバック経路(終了コード 75)の確認にだけ使う。
@@ -800,7 +810,7 @@ trap 'rm -f "$out_file" "$last_msg_file" "$report_tmp"; [ -z "$marker_file" ] ||
 : >"$last_msg_file" || die "最終報告の受け皿を作れない: $last_msg_file"
 : >"$out_file" || die "標準出力の受け皿を作れない: $out_file"
 # 報告の写しは補助なので、作れなくても起動は止めない。
-printf '%s\n' "$audit_line" 2>/dev/null >"$report_tmp" || true
+printf '%s\n%s' "$audit_line" "$workdir_notice_lines" 2>/dev/null >"$report_tmp" || true
 if [ -n "$prompt_audit_line" ]; then
   printf '%s\n' "$prompt_audit_line" 2>/dev/null >>"$report_tmp" || true
 fi
