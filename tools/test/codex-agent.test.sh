@@ -141,6 +141,7 @@ call_field() {
   awk -v want="$1" -v field="$2" '
     /^@@CALL / { n++; next }
     n == want && field == "home" && /^CODEX_HOME=/ { sub(/^CODEX_HOME=/, ""); print }
+    n == want && field == "agent_run" && /^CODEX_AGENT_RUN=/ { sub(/^CODEX_AGENT_RUN=/, ""); print }
   ' "$root/fake/calls.log"
 }
 
@@ -218,6 +219,7 @@ fi
 {
   printf '@@CALL %s\n' "$kind"
   printf 'CODEX_HOME=%s\n' "${CODEX_HOME-<unset>}"
+  printf 'CODEX_AGENT_RUN=%s\n' "${CODEX_AGENT_RUN-<unset>}"
   for a in "$@"; do printf 'ARG %s\n' "$a"; done
   printf '@@END\n'
 } >>"$FAKE_DIR/calls.log"
@@ -460,6 +462,17 @@ t_auth_home() {
   expect_eq "2 回目の種類" "exec" "$(call_kind 2)"
   expect_eq "exec --help の CODEX_HOME" "$want" "$(call_field 1 home)"
   expect_eq "exec の CODEX_HOME" "$want" "$(call_field 2 home)"
+}
+
+t_agent_run_env() {
+  EXTRA_ENV=("CODEX_AGENT_RUN=parent-run")
+  run_wrapper "$AGENT"
+  expect_rc 0
+  local run_id
+  run_id="$(sed -n 's/^codex-agent: run=\([^ ]*\).*/\1/p' "$root/out")"
+  [ -n "$run_id" ] || fail "run= の行から実行 ID を読めない"
+  expect_eq "exec の CODEX_AGENT_RUN" "$run_id" "$(call_field 2 agent_run)"
+  expect_eq "exec --help の CODEX_AGENT_RUN" "<unset>" "$(call_field 1 agent_run)"
 }
 
 t_args_basic() {
@@ -2641,6 +2654,7 @@ run_case() {
 }
 
 run_case "認証ホーム: exec --help と exec に定義の CODEX_HOME が渡る" t_auth_home
+run_case "実行 ID: 本体の exec にだけ CODEX_AGENT_RUN を渡す" t_agent_run_env
 run_case "起動引数: sandbox、-m、effort、-C、approval_policy=never が 1 回" t_args_basic
 run_case "起動引数: --effort high が定義の値より優先する" t_args_effort_override
 run_case "起動引数: effort の既定は medium、sandbox の既定は read-only" t_args_defaults

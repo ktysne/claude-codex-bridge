@@ -962,7 +962,7 @@ log_body() {
 # ヘルプは変数に受けてから調べる。pipefail の下で grep -q へパイプすると、一致した時点で grep が終わり、
 # 残りを書こうとした codex が SIGPIPE で失敗して、有る版でも無い版と判定されることがあるためである。
 output_last_message=0
-codex_help="$(CODEX_HOME="$codex_home" codex exec --help 2>/dev/null)"
+codex_help="$(env -u CODEX_AGENT_RUN CODEX_HOME="$codex_home" codex exec --help 2>/dev/null)"
 case "$codex_help" in
   *--output-last-message*) output_last_message=1 ;;
 esac
@@ -997,7 +997,7 @@ fi
 # 標準出力(最終回答)はログ置き場の <実行 ID>.out に受け、終了後にログへ追記する。
 # プロセス置換でなくパイプラインにするのは、書き込み側の終了を待ってから次へ進むためである。
 # Codex の終了コードは PIPESTATUS の先頭から取る。grep の終了コード(除いた結果が空なら 1)は使わない。
-CODEX_HOME="$codex_home" codex exec -c approval_policy=never "${codex_args[@]}" - <<<"$prompt" 2>&1 >"$out_file" \
+CODEX_AGENT_RUN="$run_id" CODEX_HOME="$codex_home" codex exec -c approval_policy=never "${codex_args[@]}" - <<<"$prompt" 2>&1 >"$out_file" \
   | grep --line-buffered -v -e '^WARNING' -e '^hook:' >>"$log_file"
 codex_status="${PIPESTATUS[0]}"
 
