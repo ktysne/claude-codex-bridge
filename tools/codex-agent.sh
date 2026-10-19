@@ -24,6 +24,7 @@
 #   codex-agent: child-spawn-failed evidence: <最初に一致した行>                           上の行に続けて 1 行
 #   codex-agent: warning=sandbox-build-failed count=<回数>                                Codex の終了後、MSBuild がエラー文なしで止まった印があれば出す
 #   codex-agent: sandbox-build-failed evidence: <起動したコマンドの行>                     上の行に続けて 1 行
+#   codex-agent: warning=codex-exit-forced grace=<秒>                                      最終報告後も残った Codex を停止した場合
 #   <最終報告>(失敗時はログの末尾と根拠の行)
 #   codex-agent: result=...
 # run= と log= の行を起動前に出すのは、呼び出し側がバックグラウンドへ移ったあとも、
@@ -39,7 +40,7 @@
 #
 # 実行ログ(~/.claude/codex-agent/logs/<実行 ID>.log):
 #   1 行目は run= の行と同じ内容である。標準出力へ warning=concurrent-writer の行を出すときは、続けて同じ行を書く。残った目印を消したときは note=stale-run-marker-removed の行を書く。
-#   Codex の標準エラーは実行中から行ごとに追記する。続けて、終了後に warning=child-spawn-failed と warning=sandbox-build-failed の行(出すときだけ)と Codex の標準出力を追記する。
+#   Codex の標準エラーは実行中から行ごとに追記する。続けて終了後の警告行(出すときだけ)と Codex の標準出力を追記する。
 #   最後の行は標準出力へ出すのと同じ result= の行である。ログだけで完了と結果を判定できるようにするためである。
 #   Codex の起動前に止まる経路(終了コード 2、3、試験用フック)ではログを作らない。
 #
@@ -67,7 +68,7 @@
 #   同じ worktree を編集するメインセッションは、このラッパーを通らないため目印に現れない。
 #
 # 終了コード:
-#   0   Codex が正常に終了した
+#   0   Codex が正常終了したか、最終報告後の残存プロセスを停止した
 #   2   引数、定義ファイルの内容、環境の不備でスクリプトが起動しなかった
 #   3   GPT 側が未導入、無効化、または未設定である
 #       (codex コマンドが無い、定義ファイルが無い、codex_enabled: false、または codex_model が無いか空)
@@ -119,10 +120,12 @@ Codex の経過に子プロセスの起動失敗の印があれば、最終報�
 codex-agent: warning=child-spawn-failed の行と、最初の根拠の行を出す(result= の値は変えない)。
 MSBuild がエラー文を出さずに Checking File Globs の直後で止まった印があれば、続けて
 codex-agent: warning=sandbox-build-failed の行と、起動したコマンドの行を出す(同じく result= は変えない)。
+最終報告を書いた後も Codex が終了しない場合は、60 秒後に停止して最終報告の前に
+codex-agent: warning=codex-exit-forced の行を出し、Codex の終了コードを 0 とみなして判定する。
 実行中の委譲を止める手順は docs/gpt-agents.md の「既知の制約」にある。
 
 終了コード:
-  0   Codex が正常に終了した
+  0   Codex が正常終了したか、最終報告後の残存プロセスを停止した
   2   引数、定義ファイルの内容、環境の不備でスクリプトが起動しなかった
   3   GPT 側が未導入、無効化、または未設定である
       (codex コマンドが無い、定義ファイルが無い、codex_enabled: false、または codex_model が無いか空)
@@ -439,6 +442,57 @@ probe_run_processes() {
     $codex
   ' 2>/dev/null | tr -d '\r'
   return 0
+}
+
+kill_process_tree() {
+  local process_id="$1" process_list="$2" line child_id child_parent child_command
+  while IFS= read -r line; do
+    read -r child_id child_parent child_command <<<"$line"
+    [ "$child_parent" = "$process_id" ] || continue
+    case "$child_id" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    kill_process_tree "$child_id" "$process_list"
+  done <<<"$process_list"
+  kill -9 "$process_id" 2>/dev/null || true
+}
+
+stop_codex_run_processes() {
+  local line process_id process_list process_parent process_command found=0
+  case "${OSTYPE:-}" in
+    msys*|cygwin*|win32*)
+      command -v taskkill >/dev/null 2>&1 || return 1
+      while IFS= read -r line; do
+        case "$line" in
+          codex=*)
+            process_id="${line#codex=}"
+            if taskkill //T //F //PID "$process_id" >/dev/null 2>&1; then
+              found=1
+            fi
+            ;;
+        esac
+      done < <(probe_run_processes "$run_pid" "$run_started_at" "$run_id")
+      ;;
+    *)
+      process_list="$(ps -eo pid=,ppid=,args= 2>/dev/null)" || return 1
+      while IFS= read -r line; do
+        read -r process_id process_parent process_command <<<"$line"
+        case "$process_id" in
+          ''|*[!0-9]*) continue ;;
+        esac
+        case "$process_parent" in
+          ''|*[!0-9]*) continue ;;
+        esac
+        case "$process_command" in
+          *"$run_id.last"*)
+            kill_process_tree "$process_id" "$process_list"
+            found=1
+            ;;
+        esac
+      done <<<"$process_list"
+      ;;
+  esac
+  [ "$found" -eq 1 ]
 }
 
 # --wait <実行 ID> の本体。契約は docs/gpt-agents.md の「完了を待つ」にある。
@@ -774,8 +828,8 @@ mkdir -p "$log_dir" || die "実行ログの置き場を作れない: $log_dir"
 # POSIX 権限が効く環境ではさらに本人だけが読める形に落とす。多重防御である。
 chmod 700 "$log_dir" 2>/dev/null || true
 # 残し続けると 1 回あたり数百 KB が溜まるため、古いものを落とす。
-# .last、.out、.report.tmp は通常は終了時に消すが、taskkill /F などで強制終了されると EXIT の trap が動かずに残るため、同じ規則で落とす。
-find "$log_dir" -maxdepth 1 -type f \( -name '*.log' -o -name '*.last' -o -name '*.out' -o -name '*.report' -o -name '*.report.tmp' \) \
+# 一時ファイルは通常は終了時に消すが、taskkill /F などで強制終了されると EXIT の trap が動かずに残るため、同じ規則で落とす。
+find "$log_dir" -maxdepth 1 -type f \( -name '*.log' -o -name '*.last' -o -name '*.out' -o -name '*.status' -o -name '*.report' -o -name '*.report.tmp' \) \
   -mtime +7 -delete 2>/dev/null || true
 
 # 定義がスクラッチパッドを使えないときに依頼文を置く場所。7 日を過ぎたファイルと codex-agent-* ディレクトリを消す。
@@ -795,6 +849,7 @@ log_file="$log_base.log"
 # 強制終了で残っても、実行 ID から特定して消せるうえ、古いものは上の削除で落ちるためである。
 out_file="$log_base.out"
 last_msg_file="$log_base.last"
+status_file="$log_base.status"
 # 標準出力へ出したものの写し。完了後に --wait が取り出す。
 # 一時ファイルに書き、result= の行まで書いてから改名する。--wait が書きかけを読むと、途切れた報告を返すためである。
 # Codex の起動前に止まる経路(終了コード 2、3、試験用フック)では作らない。ログも無く、--wait の対象にならないためである。
@@ -804,7 +859,7 @@ report_tmp="$log_base.report.tmp"
 marker_file=""
 # ログ本体と報告だけを残す。他は標準出力へ出すかログへ写した時点で役目を終える。
 # 目印も終了時に消す。強制終了で残った目印は、次の起動が古い目印の規則で扱う。
-trap 'rm -f "$out_file" "$last_msg_file" "$report_tmp"; [ -z "$marker_file" ] || rm -f "$marker_file" 2>/dev/null' EXIT
+trap 'rm -f "$out_file" "$last_msg_file" "$status_file" "$report_tmp"; [ -z "$marker_file" ] || rm -f "$marker_file" 2>/dev/null' EXIT
 # 先に作って権限を落とす。あとの書き込みは truncate か追記なので、この権限が残る。
 : >"$log_file" || die "実行ログを作れない: $log_file"
 : >"$last_msg_file" || die "最終報告の受け皿を作れない: $last_msg_file"
@@ -831,7 +886,8 @@ if [ -r "/proc/$$/winpid" ]; then
     *) run_pid="$winpid" ;;
   esac
 fi
-run_line="codex-agent: run=$run_id pid=$run_pid started=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+run_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+run_line="codex-agent: run=$run_id pid=$run_pid started=$run_started_at"
 printf '%s\n' "$run_line" >>"$log_file"
 
 # Codex の起動前に出す。実行中に呼び出し側がログの場所と止める対象を知るための行である。
@@ -966,6 +1022,13 @@ codex_help="$(env -u CODEX_AGENT_RUN CODEX_HOME="$codex_home" codex exec --help 
 case "$codex_help" in
   *--output-last-message*) output_last_message=1 ;;
 esac
+exit_grace_sec=60
+if [ "$output_last_message" -eq 1 ]; then
+  exit_grace_sec="${CODEX_AGENT_EXIT_GRACE_SEC:-60}"
+  case "$exit_grace_sec" in
+    ''|*[!0-9]*) die "CODEX_AGENT_EXIT_GRACE_SEC は 0 以上の整数で指定する: $exit_grace_sec" ;;
+  esac
+fi
 # 無い版では Codex のコマンドラインに <実行 ID>.last が載らず、--wait が残った Codex を探せない。
 # その実行で「Codex は残っていない」と断定させないため、ログに目印を残す。
 if [ "$output_last_message" -eq 0 ]; then
@@ -995,11 +1058,47 @@ fi
 # WARNING で始まる行と hook: で始まる行は、ログへ書く時点で除く。
 # grep --line-buffered は、1 行ごとに書き出してログへの反映を遅らせないために付ける。
 # 標準出力(最終回答)はログ置き場の <実行 ID>.out に受け、終了後にログへ追記する。
-# プロセス置換でなくパイプラインにするのは、書き込み側の終了を待ってから次へ進むためである。
-# Codex の終了コードは PIPESTATUS の先頭から取る。grep の終了コード(除いた結果が空なら 1)は使わない。
-CODEX_AGENT_RUN="$run_id" CODEX_HOME="$codex_home" codex exec -c approval_policy=never "${codex_args[@]}" - <<<"$prompt" 2>&1 >"$out_file" \
-  | grep --line-buffered -v -e '^WARNING' -e '^hook:' >>"$log_file"
-codex_status="${PIPESTATUS[0]}"
+# Codex の終了コードは、パイプライン直後にサブシェルからログ置き場の一時ファイルへ渡す。
+rm -f "$status_file"
+(
+  CODEX_AGENT_RUN="$run_id" CODEX_HOME="$codex_home" codex exec -c approval_policy=never "${codex_args[@]}" - <<<"$prompt" 2>&1 >"$out_file" \
+    | grep --line-buffered -v -e '^WARNING' -e '^hook:' >>"$log_file"
+  pipeline_status="${PIPESTATUS[0]}"
+  printf '%s\n' "$pipeline_status" >"$status_file"
+  chmod 600 "$status_file" 2>/dev/null || true
+) &
+pipeline_pid=$!
+last_msg_written_at=-1
+forced_codex_exit=0
+while [ ! -s "$status_file" ]; do
+  sleep 1
+  [ -s "$status_file" ] && break
+  if [ "$output_last_message" -eq 1 ] && [ -s "$last_msg_file" ]; then
+    if [ "$last_msg_written_at" -lt 0 ]; then
+      last_msg_written_at="$SECONDS"
+    fi
+    if [ "$((SECONDS - last_msg_written_at))" -ge "$exit_grace_sec" ]; then
+      if stop_codex_run_processes; then
+        forced_codex_exit=1
+        break
+      fi
+      # 止める対象が見つからないときは猶予を数え直す。毎秒 PowerShell で照合し続けないためである。
+      last_msg_written_at="$SECONDS"
+    fi
+  fi
+done
+wait "$pipeline_pid" 2>/dev/null || true
+codex_status="$(cat "$status_file" 2>/dev/null || true)"
+# サブシェルが終了コードを書く前に止められたときは、失敗として扱う。
+case "$codex_status" in
+  ''|*[!0-9]*) codex_status=1 ;;
+esac
+if [ "$forced_codex_exit" -eq 1 ]; then
+  codex_status=0
+  forced_exit_warning="codex-agent: warning=codex-exit-forced grace=$exit_grace_sec"
+  printf '%s\n' "$forced_exit_warning" | out
+  printf '%s\n' "$forced_exit_warning" >>"$log_file"
+fi
 
 # ツール接続の判定に使う経過(標準エラー)は、最終回答を写す前に取り出す。
 # 最終回答も含めて判定すると、回答の本文に書かれた語で判定が反転する。

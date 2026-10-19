@@ -52,6 +52,9 @@ fi
 PS_BIN_DIR=""
 ps_path="$(command -v pwsh 2>/dev/null || command -v powershell 2>/dev/null)"
 [ -z "$ps_path" ] || PS_BIN_DIR="$(dirname "$ps_path")"
+TASKKILL_BIN_DIR=""
+taskkill_path="$(command -v taskkill 2>/dev/null || command -v taskkill.exe 2>/dev/null)"
+[ -z "$taskkill_path" ] || TASKKILL_BIN_DIR="$(dirname "$taskkill_path")"
 
 # ラッパーと同じ規則でパスを揃える。比較の前に両辺へ適用する。
 norm_path() {
@@ -168,6 +171,34 @@ expect_arg_pair() {
   values="$(arg_values_after "$1")"
   if ! printf '%s\n' "$values" | grep -Fxq -- "$2"; then
     fail "引数 $1 の値が期待と違う: 期待=[$2] 実際=[$(printf '%s' "$values" | tr '\n' ' ')]"
+  fi
+}
+
+expect_fake_exec_stopped() {
+  local pid
+  if [ ! -s "$root/fake/exec.pid" ]; then
+    fail "偽 codex の PID が記録されていない"
+    return
+  fi
+  if [ -s "$root/fake/exec.winpid" ]; then
+    if [ -z "$ps_path" ]; then
+      fail "偽 codex の Windows PID を照合する PowerShell が無い"
+      return
+    fi
+    pid="$(tr -d '\r\n' <"$root/fake/exec.winpid")"
+    if ! CXA_PID="$pid" "$ps_path" -NoProfile -NonInteractive -Command '
+      $ErrorActionPreference = "Stop"
+      $process = Get-CimInstance Win32_Process -Filter ("ProcessId=" + [int]$env:CXA_PID)
+      if ($process) { exit 1 }
+      exit 0
+    ' >/dev/null 2>&1; then
+      fail "偽 codex のプロセスが残っている: Windows PID $pid"
+    fi
+    return
+  fi
+  pid="$(cat "$root/fake/exec.pid")"
+  if kill -0 "$pid" 2>/dev/null; then
+    fail "偽 codex のプロセスが残っている: PID $pid"
   fi
 }
 
@@ -752,6 +783,44 @@ t_empty_last_message() {
   expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
 }
 
+t_codex_exit_forced_after_last_message() {
+  fake_set last_message '猶予後に返す最終報告
+'
+  fake_set sleep 10
+  EXTRA_ENV=(CODEX_AGENT_EXIT_GRACE_SEC=2)
+  EXTRA_PATH=""
+  [ -z "$PS_BIN_DIR" ] || EXTRA_PATH="$PS_BIN_DIR"
+  [ -z "$TASKKILL_BIN_DIR" ] || EXTRA_PATH="${EXTRA_PATH:+$EXTRA_PATH:}$TASKKILL_BIN_DIR"
+  if [ -r "/proc/$$/winpid" ] && { [ -z "$PS_BIN_DIR" ] || [ -z "$TASKKILL_BIN_DIR" ]; }; then
+    skip "Windows のプロセス照合に必要な PowerShell または taskkill が無い"
+    return
+  fi
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_eq "4 行目" "codex-agent: warning=codex-exit-forced grace=2" "$(sed -n 4p "$root/out")"
+  expect_out_line "猶予後に返す最終報告"
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
+  local id log
+  id="$(run_id_of "$root/out")"
+  log="$(out_log_path "$root/out")"
+  grep -Fxq 'codex-agent: warning=codex-exit-forced grace=2' "$log" || fail "ログに強制終了の警告が無い"
+  cmp -s "$root/out" "$(logs_dir)/$id.report" || fail "報告の写しが標準出力と違う"
+  expect_fake_exec_stopped
+  [ ! -e "$(logs_dir)/$id.status" ] || fail "終了コードの一時ファイルが残っている"
+}
+
+t_codex_waits_when_last_message_is_empty() {
+  fake_set stdout '標準出力から返す最終報告
+'
+  fake_set sleep 3
+  EXTRA_ENV=(CODEX_AGENT_EXIT_GRACE_SEC=2)
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_out_no_match 'warning=codex-exit-forced'
+  expect_out_line '標準出力から返す最終報告'
+  expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
+}
+
 t_last_message_no_newline() {
   fake_set last_message '改行で終わらない報告'
   run_wrapper "$AGENT"
@@ -831,6 +900,25 @@ t_tool_handshake_failed_exit0() {
     *'code-mode host exited during handshake'*) ;;
     *) fail "result 行の直前の evidence に一致した ERROR 行が無い: [$prev]" ;;
   esac
+}
+
+t_tool_handshake_failed_exit_forced() {
+  fake_set stderr '2026-09-23T16:03:29.519274Z ERROR codex_core::tools::router: error=code-mode host exited during handshake
+'
+  fake_set last_message '接続に失敗した。
+'
+  fake_set sleep 10
+  EXTRA_ENV=(CODEX_AGENT_EXIT_GRACE_SEC=2)
+  EXTRA_PATH=""
+  [ -z "$PS_BIN_DIR" ] || EXTRA_PATH="$PS_BIN_DIR"
+  [ -z "$TASKKILL_BIN_DIR" ] || EXTRA_PATH="${EXTRA_PATH:+$EXTRA_PATH:}$TASKKILL_BIN_DIR"
+  if [ -r "/proc/$$/winpid" ] && { [ -z "$PS_BIN_DIR" ] || [ -z "$TASKKILL_BIN_DIR" ]; }; then
+    skip "Windows のプロセス照合に必要な PowerShell または taskkill が無い"
+    return
+  fi
+  run_wrapper "$AGENT"
+  expect_out_line 'codex-agent: warning=codex-exit-forced grace=2'
+  expect_fallback_tail unavailable unavailable
 }
 
 t_tool_handshake_recovered_exit0() {
@@ -1603,11 +1691,11 @@ t_kill_by_run_pid() {
   fi
 }
 
-# .last、.out、.report.tmp は、強制終了で EXIT の trap が動かなかった実行の残りであり、.log と .report と同じ規則で落とす。
+# 一時ファイルは、強制終了で EXIT の trap が動かなかった実行の残りであり、.log と .report と同じ規則で落とす。
 t_log_prune() {
   mkdir -p "$(logs_dir)"
   local ext
-  for ext in log last out report report.tmp; do
+  for ext in log last out status report report.tmp; do
     : >"$(logs_dir)/old-9days.$ext"
     : >"$(logs_dir)/recent-6days.$ext"
     touch -d '9 days ago' "$(logs_dir)/old-9days.$ext"
@@ -1615,7 +1703,7 @@ t_log_prune() {
   done
   run_wrapper "$AGENT"
   expect_rc 0
-  for ext in log last out report report.tmp; do
+  for ext in log last out status report report.tmp; do
     [ ! -e "$(logs_dir)/old-9days.$ext" ] || fail "9 日前の .$ext が消えていない"
     [ -e "$(logs_dir)/recent-6days.$ext" ] || fail "6 日前の .$ext が消えている"
   done
@@ -1795,6 +1883,8 @@ t_no_leftover_temp() {
   [ -z "$left" ] || fail "*.last が残っている: $left"
   left="$(ls "$(logs_dir)"/*.out 2>/dev/null)"
   [ -z "$left" ] || fail "*.out が残っている: $left"
+  left="$(ls "$(logs_dir)"/*.status 2>/dev/null)"
+  [ -z "$left" ] || fail "*.status が残っている: $left"
   left="$(ls "$(logs_dir)"/*.report.tmp 2>/dev/null)"
   [ -z "$left" ] || fail "*.report.tmp が残っている: $left"
   expect_eq "ログファイルの数" "2" "$(ls "$(logs_dir)"/*.log 2>/dev/null | wc -l | tr -d ' ')"
@@ -2673,6 +2763,8 @@ run_case "依頼文の作業ディレクトリ: 足した行も --wait が元の
 run_case "依頼文: 役割文、---、## 依頼、依頼文の順で渡る" t_prompt_with_role
 run_case "依頼文: 役割文が無い定義では依頼文だけが渡る" t_prompt_without_role
 run_case "成功時の出力: 監査行、run=、log=、最終報告、result=ok の順で、経過はログにだけ残る" t_success_output
+run_case "最終報告後も Codex が残る: 猶予後に停止して warning、最終報告、result=ok を出す" t_codex_exit_forced_after_last_message
+run_case "最終報告が空のまま Codex が動く: 猶予を過ぎても止めず、正常終了を待つ" t_codex_waits_when_last_message_is_empty
 run_case "--output-last-message が無い版: -o を渡さず標準出力の末尾 40 行を報告にする" t_no_output_last_message
 run_case "--output-last-message の判定: ヘルプの途中で読み手が終わっても有る版と判定する" t_help_detect_late_writer
 run_case "最終報告が空: 標準出力の末尾を報告にする" t_empty_last_message
@@ -2682,6 +2774,7 @@ run_case "利用上限(stdout): 75、evidence の直後に result=rate-limited" 
 run_case "利用上限(根拠 2 行): evidence を 1 行ずつ接頭辞付きで result の直前に並べる" t_rate_limit_multi_evidence
 run_case "モデルの混雑: 75、evidence の直後に result=unavailable" t_unavailable
 run_case "ツール接続の失敗(終了コード 0、成功行なし): 75、evidence の直後に result=unavailable" t_tool_handshake_failed_exit0
+run_case "ツール接続の失敗の後も Codex が残る: 猶予後に止めても 75 と result=unavailable を返す" t_tool_handshake_failed_exit_forced
 run_case "ツール接続の失敗後に復旧(終了コード 0、成功行あり): result=ok" t_tool_handshake_recovered_exit0
 run_case "通常の失敗: 1、result=failed exit=1" t_plain_failure
 run_case "Codex 自身の 75: 1 に写像し result=failed exit=75" t_codex_exit_75
@@ -2748,7 +2841,7 @@ run_case "完了後のログ(成功): 最後の行が標準出力の result=ok �
 run_case "完了後のログ(利用上限): 最後の行が標準出力の result=rate-limited と一致し、result= は 1 回" t_log_result_rate_limited
 run_case "完了後のログ(通常の失敗): 最後の行が標準出力の result=failed と一致し、result= と run= は 1 回" t_log_result_failed
 run_case "停止: run= の pid と実行 ID を含む Codex 側を taskkill /T /F で止めると、偽 codex まで止まり result= が残らない" t_kill_by_run_pid
-run_case "ログ: 9 日前の .log、.last、.out を消し、6 日前のものを残す" t_log_prune
+run_case "ログ: 9 日前のログと一時ファイルを消し、6 日前のものを残す" t_log_prune
 run_case "依頼文の置き場: 作られ、9 日前のファイルを消し、6 日前のものを残す" t_prompts_prune
 run_case "--new-prompt: ディレクトリを払い出し、同じ秒でも重複しない" t_new_prompt
 run_case "--new-prompt: 親を省略すると prompts の下に作り、chmod が効く環境では権限を 700 にする" t_new_prompt_default_parent
@@ -2757,7 +2850,7 @@ run_case "--new-prompt: 260 文字を超える払い出し先にも長いパス�
 run_case "--new-prompt: ほかの入口と引数を併用すると終了コード 2 になる" t_new_prompt_incompatible_args
 run_case "依頼文監査: 通常ファイルからの転送ではパスと SHA-256 を出力と報告の写しに含める" t_prompt_file_audit
 run_case "依頼文監査: ヒアストリングからの転送では prompt-file の行を出さない" t_prompt_here_string_no_audit
-run_case "一時ファイル: 成功と失敗のあとに *.last、*.out、TMPDIR の一時ファイルが残らず、ログは残る" t_no_leftover_temp
+run_case "一時ファイル: 成功と失敗のあとに *.last、*.out、*.status、TMPDIR の一時ファイルが残らず、ログは残る" t_no_leftover_temp
 run_case "ログの権限: ログファイル 600、ログ置き場 700" t_log_permissions
 run_case "試験用フック: CODEX_AGENT_SIMULATE_RATE_LIMIT" t_simulate_rate_limit
 run_case "試験用フック: CODEX_AGENT_SIMULATE_UNAVAILABLE" t_simulate_unavailable

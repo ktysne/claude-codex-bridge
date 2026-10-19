@@ -289,7 +289,7 @@ Claude 側の定義(`.claude/agents/<name>.md`)のフロントマターは、Cla
 窓口の `impl-hard`、`impl-light`、`impl-standard` は、スクリプトの終了コードで再委譲の要否を決める。
 窓口は自分では実装も検証もしない。Claude 側で実装する必要があるときは、再委譲を報告して止まる(「再委譲の流れ」)。
 
-- **0**：Codex が完了した。窓口はラッパーの標準出力から `codex-agent:` で始まる行だけを出た順に加工せず返し、最終報告の本文はメインセッションが `--wait` で取り出す(「完了の報告を取り出す」)。子プロセスの起動失敗の警告(`warning=child-spawn-failed`)かビルドの停止の警告(`warning=sandbox-build-failed`)の行がある場合は、窓口の 1 行目に「検証未実行」と書く。検証はメインセッションが監査で実行し直す(「既知の制約」の「子プロセスを起こす検証は `spawn EPERM` で失敗する」)。
+- **0**：Codex が正常終了したか、最終報告後の残存プロセスをラッパーが停止した。窓口はラッパーの標準出力から `codex-agent:` で始まる行だけを出た順に加工せず返し、最終報告の本文はメインセッションが `--wait` で取り出す(「完了の報告を取り出す」)。子プロセスの起動失敗の警告(`warning=child-spawn-failed`)かビルドの停止の警告(`warning=sandbox-build-failed`)の行がある場合は、窓口の 1 行目に「検証未実行」と書く。検証はメインセッションが監査で実行し直す(「既知の制約」の「子プロセスを起こす検証は `spawn EPERM` で失敗する」)。
 - **2**：引数、定義ファイルの内容、環境の不備でスクリプトが起動しなかった。フロントマターのキー不足、effort やサンドボックスの不正値、`codex_home` の不在、作業ディレクトリの不在、端末からの起動、空の依頼文がこれにあたる。再委譲せず、終了コードと出力の末尾を報告して終わる。
 - **3**：GPT 側が未導入、無効化、または未設定である。`codex` コマンドが PATH に無い、`.claude/gpt-agents/<name>.md` が見つからない、`codex_enabled: false` が書かれている、`codex_model` が無いか空である、のいずれかに当たる場合である。窓口は再委譲を報告し、ラッパーが出した `codex-agent:` の理由行と `result=` の行を添える。キー名の誤記も `codex_model` の未設定と同じ経路で Claude 側へ倒れるため、理由行で見分けられるようにする。
 - **75**：呼び出し側では直せない GPT 側の事情で実行できなかった。利用上限の場合は `codex-agent: result=rate-limited`、それ以外の場合は `codex-agent: result=unavailable` として理由を区別する。`unavailable` は、いまのところモデルの混雑を示す `Selected model is at capacity` と、終了コード 0 でもツール接続が一度も成立しなかった実行(`code-mode host exited during handshake`)を対象にする。利用上限なら `codex-agent: rate-limit evidence: ...`、それ以外なら `codex-agent: unavailable evidence: ...` の行に判定の根拠を残す。窓口は再委譲を報告し、根拠の行と `result=` の行を添える。
@@ -367,16 +367,23 @@ codex-agent: sandbox-build-failed evidence: <起動したコマンドの行>
 
 印の形は「既知の制約」の「サンドボックスの中の MSBuild がエラー文を出さずに止まる」にある。
 
+最終報告を書いた後も Codex が終了せず、ラッパーが残ったプロセスを停止した場合は、最終報告の前に次の警告を出す。
+Codex の終了コードは 0 とみなして通常の判定へ進み、ログと報告の写しにも警告を残す。
+
+```text
+codex-agent: warning=codex-exit-forced grace=<秒>
+```
+
 最終報告は `codex exec` の `--output-last-message` から取る。
 この選択肢がない版では標準出力の末尾で代用する。
 失敗時は最終報告の位置にログの末尾 40 行が出る。
 ログは `%USERPROFILE%\.claude\codex-agent\logs` に置く。
 ログには Codex が読んだファイルの中身が入りうるため、共有される一時ディレクトリを避けてホーム配下に取る。
 共有の場所では、他の利用者から読まれる余地と、先回りして置かれたシンボリックリンク越しに別のファイルを切り詰める余地が残る。
-Codex の標準出力と最終報告の受け皿も、同じ置き場に `<実行 ID>.out` と `<実行 ID>.last` として置き、終了時に消す。
+Codex の標準出力、最終報告の受け皿、終了コードの一時ファイルも、同じ置き場に `<実行 ID>.out`、`<実行 ID>.last`、`<実行 ID>.status` として置き、終了時に消す。
 強制終了で終了時の後始末が動かなくても、実行 ID から特定して消せるようにするためである。
 報告の写し `<実行 ID>.report` は、下の「完了を待つ」で使うため、ログと同じく終了後も残す。
-スクリプトの起動時に 7 日より古い `.log`、`.last`、`.out`、`.report`、`.report.tmp` を削除する。
+スクリプトの起動時に 7 日より古い `.log`、`.last`、`.out`、`.status`、`.report`、`.report.tmp` を削除する。
 
 スクリプトは末尾に結果の 1 行を出す。
 成功なら `codex-agent: result=ok`、利用上限なら `codex-agent: result=rate-limited`、モデルの混雑など GPT 側の事情なら `codex-agent: result=unavailable`、それ以外の失敗なら `codex-agent: result=failed exit=<code>` である。
@@ -639,6 +646,10 @@ Issue が閉じたら、その記述を更新するか消す。
 警告から排他(重なりを見つけたら起動しない形)へ上げるのは、再測定で同じ worktree の並行が残っており、かつ強制終了で残った目印をプロセスの照合で正しく見分けられると実運用で確かめた場合に限る。
 照合できない目印が残る環境で排他にすると、残った目印 1 つで、その worktree の委譲がすべて止まるためである。
 
+**Codex が最終報告を書いた後も終了しないことがある。**
+ラッパーは `.last` が空でなくなってから 60 秒後に、コマンドラインに `<実行 ID>.last` を含む Codex 側のプロセスとその子孫を停止し、Codex の終了コードを 0 とみなして、ツール接続の失敗の判定を含む通常の判定へ進む。
+その場合は `codex-agent: warning=codex-exit-forced grace=60` を標準出力とログに出す([Issue #161](https://github.com/ktysne/claude-codex-bridge/issues/161))。
+
 **Codex が書き込めるのは `-C` で指定した作業ディレクトリの配下だけである。**
 `workspace-write` の書き込み範囲は作業ディレクトリに限られる。
 作業ディレクトリの外のファイルは読める。
@@ -759,7 +770,7 @@ Windows 10 と Git Bash 5.3 で確かめたところ、Bash ツールで止ま�
    2 だけでは Codex まで止まらないため、この手順が要る。
    Git Bash が Git Bash 系のプログラム(npm のシムの `sh` など)を起動すると、中継のプロセスが先に終わり、Windows 上の親子関係がラッパーから途切れるためである。
    `--output-last-message` の無い版の Codex で起動した実行では、`.last` がコマンドラインに載らない(ログに `codex-agent: note=no-output-last-message` の行がある)。その場合は、コマンドラインに `exec` と作業ディレクトリ(監査行の `workdir=` の値)を含むプロセスを候補として探し、別の実行でないことを人が確かめてから止める。
-4. 止めたあと、ログ置き場(`%USERPROFILE%\.claude\codex-agent\logs`)の `<実行 ID>.last`、`<実行 ID>.out`、`<実行 ID>.report.tmp` を消す。ログ本体の `<実行 ID>.log` は残す。
+4. 止めたあと、ログ置き場(`%USERPROFILE%\.claude\codex-agent\logs`)の `<実行 ID>.last`、`<実行 ID>.out`、`<実行 ID>.status`、`<実行 ID>.report.tmp` を消す。ログ本体の `<実行 ID>.log` は残す。
    強制終了ではラッパーの終了時の後始末が動かないため、これらが残る。
    消さなくても、次にラッパーを起動したときに 7 日より古いものは消える。
    書き込み可能な定義の実行であれば、作業ディレクトリの目印 `<git ディレクトリ>/codex-agent/runs/<実行 ID>.run` も消す。
