@@ -285,6 +285,10 @@ case "$kind" in
     fi
     [ -f "$FAKE_DIR/stdout" ] && cat "$FAKE_DIR/stdout"
     [ -f "$FAKE_DIR/stderr" ] && cat "$FAKE_DIR/stderr" >&2
+    if [ -f "$FAKE_DIR/stderr_holder" ]; then
+      sleep "$(cat "$FAKE_DIR/stderr_holder")" >&2 &
+      printf '%s\n' "$!" >"$FAKE_DIR/stderr-holder.pid"
+    fi
     if [ -f "$FAKE_DIR/native_wait" ]; then
       exec "$(cat "$FAKE_DIR/ping_exe")" -n "$(cat "$FAKE_DIR/native_wait")" 127.0.0.1 >/dev/null
     fi
@@ -819,6 +823,94 @@ t_codex_waits_when_last_message_is_empty() {
   expect_out_no_match 'warning=codex-exit-forced'
   expect_out_line '標準出力から返す最終報告'
   expect_eq "最後の行" "codex-agent: result=ok" "$(last_out_line)"
+}
+
+t_codex_exits_during_grace() {
+  fake_set last_message '猶予中に正常終了した報告
+'
+  fake_set sleep 1
+  EXTRA_ENV=(CODEX_AGENT_EXIT_GRACE_SEC=4)
+  run_wrapper "$AGENT"
+  expect_rc 0
+  expect_out_line '猶予中に正常終了した報告'
+  expect_out_no_match 'warning=codex-exit-forced'
+  expect_out_no_match 'warning=stderr-collection-truncated'
+  expect_fake_exec_stopped
+  expect_log_ends_with_result
+}
+
+check_stderr_holder_run() {
+  local expected_rc="$1" expected_result="$2" started="$SECONDS" elapsed holder_pid unrelated_pid id log
+  fake_set stderr_holder 20
+  fake_set last_message 'stderr の収集を打ち切った報告
+'
+  fake_set stdout 'STDOUT-BEFORE-STDERR-CUTOFF
+'
+  EXTRA_ENV=(CODEX_AGENT_EXIT_GRACE_SEC=2)
+  sleep 20 >/dev/null 2>&1 &
+  unrelated_pid=$!
+  run_wrapper "$AGENT"
+  elapsed=$((SECONDS - started))
+  expect_rc "$expected_rc"
+  # 収集待ちに加えて、Git Bash の起動と終了監視のポーリングに余裕を持たせる。
+  [ "$elapsed" -lt 12 ] || fail "stderr の収集が上限内に返らない: ${elapsed}秒"
+  expect_out_line 'codex-agent: warning=stderr-collection-truncated grace=2'
+  expect_out_no_match 'warning=codex-exit-forced'
+  expect_eq "最後の行" "$expected_result" "$(last_out_line)"
+  kill -0 "$unrelated_pid" 2>/dev/null || fail "別の実行のプロセスが停止された"
+  kill -9 "$unrelated_pid" 2>/dev/null || true
+  wait "$unrelated_pid" 2>/dev/null || true
+  if [ -s "$root/fake/stderr-holder.pid" ]; then
+    holder_pid="$(cat "$root/fake/stderr-holder.pid")"
+    kill -0 "$holder_pid" 2>/dev/null || fail "収集を打ち切る前に stderr を持つ子孫が終了している"
+    kill -9 "$holder_pid" 2>/dev/null || true
+  else
+    fail "stderr を持つ子孫の PID が記録されていない"
+  fi
+  expect_fake_exec_stopped
+  expect_log_ends_with_result
+  id="$(run_id_of "$root/out")"
+  log="$(out_log_path "$root/out")"
+  grep -Fxq 'codex-agent: warning=stderr-collection-truncated grace=2' "$log" || fail "ログに収集打ち切りの警告が無い"
+  grep -Fxq 'STDOUT-BEFORE-STDERR-CUTOFF' "$log" || fail "ログに標準出力が無い"
+  cmp -s "$root/out" "$(logs_dir)/$id.report" || fail "報告の写しが標準出力と違う"
+  [ ! -e "$(logs_dir)/$id.status" ] || fail "*.status が残っている"
+  [ ! -e "$(logs_dir)/$id.last" ] || fail "*.last が残っている"
+  [ ! -e "$(logs_dir)/$id.out" ] || fail "*.out が残っている"
+  cp "$root/out" "$root/run.out"
+  run_wait "$id"
+  expect_rc "$expected_rc"
+  expect_same_as_run_out
+}
+
+t_stderr_holder_after_codex_exit() {
+  fake_set stderr 'STDERR-BEFORE-STDERR-CUTOFF
+'
+  check_stderr_holder_run 0 'codex-agent: result=ok'
+  expect_out_line 'stderr の収集を打ち切った報告'
+  grep -Fxq 'STDERR-BEFORE-STDERR-CUTOFF' "$(only_log_file)" || fail "打ち切り前のログが失われている"
+}
+
+t_stderr_holder_preserves_codex_failure() {
+  fake_set stderr 'ERROR: something went wrong
+'
+  fake_set exit_code 7
+  check_stderr_holder_run 7 'codex-agent: result=failed exit=7'
+}
+
+t_stderr_holder_preserves_handshake_failure() {
+  fake_set stderr 'ERROR codex_core::tools::router: error=code-mode host exited during handshake
+'
+  check_stderr_holder_run 75 'codex-agent: result=unavailable'
+  expect_out_line 'codex-agent: unavailable evidence: ERROR codex_core::tools::router: error=code-mode host exited during handshake'
+}
+
+t_stderr_holder_preserves_child_spawn_warning() {
+  fake_set stderr 'Error: spawn EPERM
+    at ChildProcess.spawn (node:internal/child_process:420:11)
+'
+  check_stderr_holder_run 0 'codex-agent: result=ok'
+  expect_out_line 'codex-agent: warning=child-spawn-failed count=1'
 }
 
 t_last_message_no_newline() {
@@ -2764,6 +2856,11 @@ run_case "依頼文: 役割文、---、## 依頼、依頼文の順で渡る" t_p
 run_case "依頼文: 役割文が無い定義では依頼文だけが渡る" t_prompt_without_role
 run_case "成功時の出力: 監査行、run=、log=、最終報告、result=ok の順で、経過はログにだけ残る" t_success_output
 run_case "最終報告後も Codex が残る: 猶予後に停止して warning、最終報告、result=ok を出す" t_codex_exit_forced_after_last_message
+run_case "最終報告後に Codex が猶予中に正常終了する: 強制終了や収集打ち切りの警告を出さない" t_codex_exits_during_grace
+run_case "子孫だけが stderr を持つ: 収集を上限で打ち切り、正常終了と最終報告を --wait でも返す" t_stderr_holder_after_codex_exit
+run_case "子孫だけが stderr を持つ: 本体の終了コード 7 を収集の結果で上書きしない" t_stderr_holder_preserves_codex_failure
+run_case "子孫だけが stderr を持つ: MCP 接続失敗の判定を --wait でも保つ" t_stderr_holder_preserves_handshake_failure
+run_case "子孫だけが stderr を持つ: 子プロセス起動失敗の警告を保つ" t_stderr_holder_preserves_child_spawn_warning
 run_case "最終報告が空のまま Codex が動く: 猶予を過ぎても止めず、正常終了を待つ" t_codex_waits_when_last_message_is_empty
 run_case "--output-last-message が無い版: -o を渡さず標準出力の末尾 40 行を報告にする" t_no_output_last_message
 run_case "--output-last-message の判定: ヘルプの途中で読み手が終わっても有る版と判定する" t_help_detect_late_writer

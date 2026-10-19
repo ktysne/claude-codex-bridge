@@ -25,6 +25,7 @@
 #   codex-agent: warning=sandbox-build-failed count=<回数>                                Codex の終了後、MSBuild がエラー文なしで止まった印があれば出す
 #   codex-agent: sandbox-build-failed evidence: <起動したコマンドの行>                     上の行に続けて 1 行
 #   codex-agent: warning=codex-exit-forced grace=<秒>                                      最終報告後も残った Codex を停止した場合
+#   codex-agent: warning=stderr-collection-truncated grace=<秒>                          本体終了後の標準エラーの収集を打ち切った場合
 #   <最終報告>(失敗時はログの末尾と根拠の行)
 #   codex-agent: result=...
 # run= と log= の行を起動前に出すのは、呼び出し側がバックグラウンドへ移ったあとも、
@@ -122,6 +123,9 @@ MSBuild がエラー文を出さずに Checking File Globs の直後で止まっ
 codex-agent: warning=sandbox-build-failed の行と、起動したコマンドの行を出す(同じく result= は変えない)。
 最終報告を書いた後も Codex が終了しない場合は、60 秒後に停止して最終報告の前に
 codex-agent: warning=codex-exit-forced の行を出し、Codex の終了コードを 0 とみなして判定する。
+本体終了後の標準エラー収集も最大 60 秒待ち、終わらなければ収集だけを停止して
+codex-agent: warning=stderr-collection-truncated の行を出す(本体の終了コードは変えない)。
+両方の猶予は CODEX_AGENT_EXIT_GRACE_SEC で変更できる(0 以上の整数、既定 60)。
 実行中の委譲を止める手順は docs/gpt-agents.md の「既知の制約」にある。
 
 終了コード:
@@ -458,41 +462,23 @@ kill_process_tree() {
 }
 
 stop_codex_run_processes() {
-  local line process_id process_list process_parent process_command found=0
+  local process_id process_list
+  kill -0 "$codex_pid" 2>/dev/null || return 1
   case "${OSTYPE:-}" in
     msys*|cygwin*|win32*)
       command -v taskkill >/dev/null 2>&1 || return 1
-      while IFS= read -r line; do
-        case "$line" in
-          codex=*)
-            process_id="${line#codex=}"
-            if taskkill //T //F //PID "$process_id" >/dev/null 2>&1; then
-              found=1
-            fi
-            ;;
-        esac
-      done < <(probe_run_processes "$run_pid" "$run_started_at" "$run_id")
+      # MSYS の PID と Windows の PID は異なり、exec 後は対応する Windows の PID も変わりうる。
+      process_id="$(cat "/proc/$codex_pid/winpid" 2>/dev/null)"
+      case "$process_id" in
+        ''|*[!0-9]*) return 1 ;;
+      esac
+      taskkill //T //F //PID "$process_id" >/dev/null 2>&1
       ;;
     *)
       process_list="$(ps -eo pid=,ppid=,args= 2>/dev/null)" || return 1
-      while IFS= read -r line; do
-        read -r process_id process_parent process_command <<<"$line"
-        case "$process_id" in
-          ''|*[!0-9]*) continue ;;
-        esac
-        case "$process_parent" in
-          ''|*[!0-9]*) continue ;;
-        esac
-        case "$process_command" in
-          *"$run_id.last"*)
-            kill_process_tree "$process_id" "$process_list"
-            found=1
-            ;;
-        esac
-      done <<<"$process_list"
+      kill_process_tree "$codex_pid" "$process_list"
       ;;
   esac
-  [ "$found" -eq 1 ]
 }
 
 # --wait <実行 ID> の本体。契約は docs/gpt-agents.md の「完了を待つ」にある。
@@ -1022,13 +1008,10 @@ codex_help="$(env -u CODEX_AGENT_RUN CODEX_HOME="$codex_home" codex exec --help 
 case "$codex_help" in
   *--output-last-message*) output_last_message=1 ;;
 esac
-exit_grace_sec=60
-if [ "$output_last_message" -eq 1 ]; then
-  exit_grace_sec="${CODEX_AGENT_EXIT_GRACE_SEC:-60}"
-  case "$exit_grace_sec" in
-    ''|*[!0-9]*) die "CODEX_AGENT_EXIT_GRACE_SEC は 0 以上の整数で指定する: $exit_grace_sec" ;;
-  esac
-fi
+exit_grace_sec="${CODEX_AGENT_EXIT_GRACE_SEC:-60}"
+case "$exit_grace_sec" in
+  ''|*[!0-9]*) die "CODEX_AGENT_EXIT_GRACE_SEC は 0 以上の整数で指定する: $exit_grace_sec" ;;
+esac
 # 無い版では Codex のコマンドラインに <実行 ID>.last が載らず、--wait が残った Codex を探せない。
 # その実行で「Codex は残っていない」と断定させないため、ログに目印を残す。
 if [ "$output_last_message" -eq 0 ]; then
@@ -1054,25 +1037,19 @@ fi
 # ai-cross-review の cross-review.js は、codex exec の起動行の文字列(\ で続けた行を含む論理行)に
 # この指定がある場合に限って bridge 経由を選ぶ。配列の中身までは追わないため、配列へ移すと直接起動へ戻ってしまう。
 #
-# 標準エラーはパイプで受け、実行中から行ごとにログへ追記する。実行中にログの末尾で経過を読めるようにするためである。
-# WARNING で始まる行と hook: で始まる行は、ログへ書く時点で除く。
-# grep --line-buffered は、1 行ごとに書き出してログへの反映を遅らせないために付ける。
-# 標準出力(最終回答)はログ置き場の <実行 ID>.out に受け、終了後にログへ追記する。
-# Codex の終了コードは、パイプライン直後にサブシェルからログ置き場の一時ファイルへ渡す。
+# 子孫が stderr を継承しても本体の終了を観測できるよう、収集側と本体を別々に待つ。
+# exec で収集側を grep 自身にし、打ち切り時に待機するシェルを残さない。
 rm -f "$status_file"
-(
-  CODEX_AGENT_RUN="$run_id" CODEX_HOME="$codex_home" codex exec -c approval_policy=never "${codex_args[@]}" - <<<"$prompt" 2>&1 >"$out_file" \
-    | grep --line-buffered -v -e '^WARNING' -e '^hook:' >>"$log_file"
-  pipeline_status="${PIPESTATUS[0]}"
-  printf '%s\n' "$pipeline_status" >"$status_file"
-  chmod 600 "$status_file" 2>/dev/null || true
-) &
-pipeline_pid=$!
+exec 3> >(exec grep --line-buffered -v -e '^WARNING' -e '^hook:' >>"$log_file" 2>/dev/null)
+stderr_pid=$!
+CODEX_AGENT_RUN="$run_id" CODEX_HOME="$codex_home" codex exec -c approval_policy=never "${codex_args[@]}" - <<<"$prompt" >"$out_file" 2>&3 3>&- &
+codex_pid=$!
+exec 3>&-
 last_msg_written_at=-1
 forced_codex_exit=0
-while [ ! -s "$status_file" ]; do
+while kill -0 "$codex_pid" 2>/dev/null; do
   sleep 1
-  [ -s "$status_file" ] && break
+  kill -0 "$codex_pid" 2>/dev/null || break
   if [ "$output_last_message" -eq 1 ] && [ -s "$last_msg_file" ]; then
     if [ "$last_msg_written_at" -lt 0 ]; then
       last_msg_written_at="$SECONDS"
@@ -1082,22 +1059,34 @@ while [ ! -s "$status_file" ]; do
         forced_codex_exit=1
         break
       fi
-      # 止める対象が見つからないときは猶予を数え直す。毎秒 PowerShell で照合し続けないためである。
-      last_msg_written_at="$SECONDS"
     fi
   fi
 done
-wait "$pipeline_pid" 2>/dev/null || true
-codex_status="$(cat "$status_file" 2>/dev/null || true)"
-# サブシェルが終了コードを書く前に止められたときは、失敗として扱う。
-case "$codex_status" in
-  ''|*[!0-9]*) codex_status=1 ;;
-esac
+wait "$codex_pid" 2>/dev/null
+codex_status=$?
+printf '%s\n' "$codex_status" >"$status_file"
+chmod 600 "$status_file" 2>/dev/null || true
+stderr_wait_started_at="$SECONDS"
+stderr_truncated=0
+while kill -0 "$stderr_pid" 2>/dev/null; do
+  if [ "$((SECONDS - stderr_wait_started_at))" -ge "$exit_grace_sec" ]; then
+    kill -9 "$stderr_pid" 2>/dev/null || true
+    stderr_truncated=1
+    break
+  fi
+  sleep 0.1
+done
+wait "$stderr_pid" 2>/dev/null || true
 if [ "$forced_codex_exit" -eq 1 ]; then
   codex_status=0
   forced_exit_warning="codex-agent: warning=codex-exit-forced grace=$exit_grace_sec"
   printf '%s\n' "$forced_exit_warning" | out
   printf '%s\n' "$forced_exit_warning" >>"$log_file"
+fi
+if [ "$stderr_truncated" -eq 1 ]; then
+  stderr_warning="codex-agent: warning=stderr-collection-truncated grace=$exit_grace_sec"
+  printf '%s\n' "$stderr_warning" | out
+  printf '%s\n' "$stderr_warning" >>"$log_file"
 fi
 
 # ツール接続の判定に使う経過(標準エラー)は、最終回答を写す前に取り出す。
