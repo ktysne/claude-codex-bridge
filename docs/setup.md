@@ -479,7 +479,7 @@ bridge 側で追加する設定は無い。ai-cross-review は `codex` を起動
 
 bridge 側で追加する設定は無い。agent-cockpit とは次の形でつながる。
 
-- agent-cockpit は、Claude のホームの `tools/codex-agent.sh` があることで、bridge が導入済みだと判断する。agent-cockpit は `CLAUDE_CONFIG_DIR` が設定されていればそのディレクトリを Claude のホームとして見るが、bridge は `~/.claude` に固定で置く。`CLAUDE_CONFIG_DIR` を `~/.claude` 以外に設定しているときは、agent-cockpit が bridge を検出できない。([ktysne/agent-cockpit#115](https://github.com/ktysne/agent-cockpit/issues/115))
+- agent-cockpit は、`tools/codex-agent.sh` があることで、bridge が導入済みだと判断する。探す先は、Claude のホーム(`CLAUDE_CONFIG_DIR` が設定されていればその値)と `~/.claude` の両方である。bridge は `~/.claude` に固定で置くので、`CLAUDE_CONFIG_DIR` を `~/.claude` 以外に設定していても検出される。
 - agent-cockpit は、サブエージェントの Bash に出る `codex-agent.sh <定義名>` と、ラッパーが出す `codex-agent: agent=` の監査行から、Codex のモデル、effort、認証ホームを読んで表示する。
 - ダッシュボードの「経路の設定」は、次に起動するサブエージェントに効く。稼働中のサブエージェントは切り替わらない。
 
@@ -498,7 +498,7 @@ agent-cockpit の経路 Codex の指定は再委譲で起動した `impl-*-claud
 
 ### 確認
 
-1. 新しいセッションを開き、ダッシュボードを再読み込みする。上部の「経路の設定」に、サブエージェントの段(既定、Codex、Claude)が出ればよい。出ないときは、`~/.claude/tools/codex-agent.sh` の配置と、`CLAUDE_CONFIG_DIR` の設定を確かめる。
+1. 新しいセッションを開き、ダッシュボードを再読み込みする。上部の「経路の設定」に、サブエージェントの段(既定、Codex、Claude)が出ればよい。出ないときは、`~/.claude/tools/codex-agent.sh` の配置を確かめる。
 2. 経路を「既定」のまま、パターンごとの確認と同じ依頼で `impl-light` を起動する。サブエージェントの行に、Codex のモデルの札が出ればよい。
 3. 経路を「Claude」にしてから、同じ依頼で `impl-light` を起動する。窓口が `再委譲: impl-light-claude` と、起動時の指定の文をそのまま報告すればよい。違う報告になったときは、定義と agent-cockpit の設定を確かめる。確かめ終わったら、経路を元の値に戻す。
 
