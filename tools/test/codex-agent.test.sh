@@ -195,6 +195,7 @@ FAKE
 #   last_message            -o <file> へ書く最終報告
 #   stdout / stderr         そのまま出す内容
 #   sleep                   stderr を出したあとに待つ秒数
+#   hold                    最初に受け取った exec だけが、release ファイルができるまで待つ
 #   help_delay              exec --help で --output-last-message の行を出したあと、残りを出す前に待つ秒数
 #   exit_code               終了コード(既定 0)
 #   native_wait             stderr を出したあと、Windows の ping.exe をこの回数で exec して待つ
@@ -244,6 +245,9 @@ case "$kind" in
     [ -f "$FAKE_DIR/stderr" ] && cat "$FAKE_DIR/stderr" >&2
     if [ -f "$FAKE_DIR/native_wait" ]; then
       exec "$(cat "$FAKE_DIR/ping_exe")" -n "$(cat "$FAKE_DIR/native_wait")" 127.0.0.1 >/dev/null
+    fi
+    if mv "$FAKE_DIR/hold" "$FAKE_DIR/held.$$" 2>/dev/null; then
+      while [ ! -f "$FAKE_DIR/release" ]; do sleep 0.1; done
     fi
     [ -f "$FAKE_DIR/sleep" ] && sleep "$(cat "$FAKE_DIR/sleep")"
     code=0
@@ -1382,6 +1386,10 @@ win_codex_side_pids() {
     2>/dev/null | tr -d '\r'
 }
 
+win_codex_side_alive() {
+  [ -n "$(win_codex_side_pids "$1")" ]
+}
+
 # Windows で、指定した PID の直接の子の PID を 1 行ずつ出す。
 win_child_pids() {
   powershell -NoProfile -NonInteractive -Command \
@@ -1807,10 +1815,12 @@ wait_into() {
 # 上限は 1 秒に縮める。実行中と判定するには、ラッパー本人の照合が通る必要がある。
 # 完了後にもう一度 --wait すると、元の実行と同じ出力を返す。
 t_wait_limit_then_done() {
-  set_running_fake 6
+  set_running_fake 0
+  : >"$root/fake/hold"
   start_bg_wrapper "$AGENT"
   if ! wait_until 10 running_log_has '経過: 実行中の印'; then
     fail "実行中のログに印の行が現れない"
+    : >"$root/fake/release"
     finish_bg_wrapper
     return
   fi
@@ -1822,6 +1832,7 @@ t_wait_limit_then_done() {
   expect_eq "上限で終えた --wait の最後から 2 行目" "codex-agent: last-log-line: 経過: 実行中の印" \
     "$(tail -n 2 "$root/wait1.out" | head -n 1)"
   expect_eq "上限で終えた --wait の行数" "2" "$(wc -l <"$root/wait1.out" | tr -d ' ')"
+  : >"$root/fake/release"
   finish_bg_wrapper
   expect_rc 0
   keep_run_out
@@ -2143,10 +2154,12 @@ t_marker_lifecycle() {
 t_marker_same_worktree_warns() {
   setup_git_work || return
   local id1 log1 log2 warning
-  set_running_fake 3
+  set_running_fake 0
+  : >"$root/fake/hold"
   start_bg_wrapper "$AGENT"
   if ! wait_until 10 running_log_has '経過: 実行中の印'; then
     fail "実行中のログに印の行が現れない"
+    : >"$root/fake/release"
     finish_bg_wrapper
     return
   fi
@@ -2162,6 +2175,7 @@ t_marker_same_worktree_warns() {
   expect_eq "2 つ目の 4 行目(log= の行の後)" "$warning" "$(sed -n 4p "$root/out2")"
   log2="$(out_log_path "$root/out2")"
   grep -Fxq -- "$warning" "$log2" || fail "2 つ目のログに警告の行が無い"
+  : >"$root/fake/release"
   finish_bg_wrapper
   expect_rc 0
   expect_eq "1 つ目の最後の行" "codex-agent: result=ok" "$(last_out_line)"
@@ -2269,6 +2283,11 @@ t_marker_codex_left_warns() {
   need_process_probe || return
   local id="cxa-orphan-$RANDOM"
   start_holder cxa-holder "$(logs_dir)/$id.last"
+  if ! wait_until 10 win_codex_side_alive "$id"; then
+    fail "実行 ID を含むプロセスが一覧に現れない: [$id]"
+    stop_holder
+    return
+  fi
   plant_probe_case "$id" "$(dead_win_pid)" "$(now_utc)"
   run_wrapper "$AGENT"
   stop_holder
@@ -2463,6 +2482,9 @@ SKIPPED=0
 
 run_case() {
   local name="$1" fn="$2"
+  if [ -n "${CODEX_AGENT_TEST_ONLY:-}" ] && [[ ! "$fn" =~ $CODEX_AGENT_TEST_ONLY ]]; then
+    return
+  fi
   N=$((N + 1))
   FAILS=""
   SKIP_REASON=""
@@ -2622,4 +2644,5 @@ run_case "出荷既定の定義: フロントマターの引用符の無い値�
 run_case "環境の分離: 実ホームのログ置き場にテスト用のログが無い" t_real_home_untouched
 
 printf '# 合計 %d 件: 成功 %d、失敗 %d、SKIP %d\n' "$N" "$PASSED" "$FAILED" "$SKIPPED"
+[ -z "${CODEX_AGENT_TEST_ONLY:-}" ] || [ "$N" -gt 0 ] || { printf 'CODEX_AGENT_TEST_ONLY に一致するケースがありません\n' >&2; exit 2; }
 [ "$FAILED" -eq 0 ]
