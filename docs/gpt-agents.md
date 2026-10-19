@@ -461,6 +461,10 @@ PowerShell が無い環境と、ログの 1 行目に `run=` の行が無い実�
 - ラッパーが出した `codex-agent:` の行(理由行、`run=`、`log=`、警告、evidence、`result=` の行)
 - `--new-prompt`、払い出されたパスへの依頼文の Write、転送の 1 行に対する、権限判定やフックによる拒否の文言
 - 依頼文の `委譲: Claude 側で実装` の指定の行と理由の行
+- 起動時の文脈で渡された agent-cockpit の経路 Claude の指定の文
+
+起動時の文脈に agent-cockpit の経路 Claude の指定があれば、窓口は Codex を呼び出す前に再委譲を報告する。
+呼び出しが agent-cockpit に拒否された場合も、同じ報告形式を使う。
 
 この形の報告は、`codex-agent: agent=` の監査行を含まなくても有効な報告として受け取る。
 
