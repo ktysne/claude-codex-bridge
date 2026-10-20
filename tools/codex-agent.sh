@@ -990,6 +990,11 @@ json_escape() {
   json_hex=""
   json_char=""
   json_value="$1"
+  # 逃がす文字が無い値は od を起動せずに出す。Windows ではプロセスの起動が重く、値ごとの起動が照会の時間の大半を占めるため。
+  case "$json_value" in
+    *[[:cntrl:]\\\"]*) ;;
+    *) printf '%s' "$json_value"; return 0 ;;
+  esac
   json_bytes="$(printf '%s' "$json_value" | LC_ALL=C od -An -v -t u1)" || return 1
   for json_byte in $json_bytes; do
     case "$json_byte" in
@@ -1230,8 +1235,38 @@ copy_item_requires_json() {
   printf ']'
 }
 
+# 全項目の正本と写しのパスを to_windows_path と同じ形へ変換し、copy_item_windows_paths に正本、写しの順で入れる。
+# cygpath を 1 回だけ起動するため。行数が合わなければ 1 件ずつ変換する。
+copy_items_to_windows_paths() {
+  local -a raw=() converted=()
+  local i p
+  raw=("${copy_item_sources[@]}" "${copy_item_targets[@]}")
+  raw=("${raw[@]//\\//}")
+  if command -v cygpath >/dev/null 2>&1 && [ "${#raw[@]}" -gt 0 ]; then
+    mapfile -t converted < <(cygpath -m "${raw[@]}" 2>/dev/null)
+  else
+    converted=("${raw[@]}")
+  fi
+  copy_item_windows_paths=()
+  if [ "${#converted[@]}" -ne "${#raw[@]}" ]; then
+    for ((i = 0; i < ${#raw[@]}; i++)); do
+      copy_item_windows_paths+=("$(to_windows_path "${raw[$i]}")")
+    done
+    return 0
+  fi
+  for p in "${converted[@]}"; do
+    case "$p" in
+      //\?/UNC/*) p="//${p#//\?/UNC/}" ;;
+      //\?/*) p="${p#//\?/}" ;;
+    esac
+    copy_item_windows_paths+=("$p")
+  done
+}
+
 print_check_copies_json() {
-  local checkout_path="$1" head="$2" dirty="$3" i
+  local checkout_path="$1" head="$2" dirty="$3" i item_count="${#copy_item_ids[@]}"
+  local -a copy_item_windows_paths=()
+  copy_items_to_windows_paths
   printf '{"protocol":1,"scope":"user-home","checkout":'
   json_quote "$(to_windows_path "$checkout_path")"
   printf ',"head":'
@@ -1246,9 +1281,9 @@ print_check_copies_json() {
     printf ',"name":'
     json_quote "${copy_item_names[$i]}"
     printf ',"source":'
-    json_quote "$(to_windows_path "${copy_item_sources[$i]}")"
+    json_quote "${copy_item_windows_paths[$i]}"
     printf ',"target":'
-    json_quote "$(to_windows_path "${copy_item_targets[$i]}")"
+    json_quote "${copy_item_windows_paths[$((item_count + i))]}"
     printf ',"status":'
     json_quote "${copy_item_statuses[$i]}"
     printf ',"reason":'
