@@ -2558,9 +2558,12 @@ t_cross_review_contract() {
     return
   fi
   local result
+  # tools/cross-review.js は本体を探す入口なので、engine の照会で本体のパスを得てから読む。
   result="$(node -e '
     const fs = require("fs");
-    const m = require(process.argv[1]);
+    const { execFileSync } = require("child_process");
+    const info = JSON.parse(execFileSync(process.execPath, [process.argv[1], "engine"], { encoding: "utf8" }));
+    const m = require(info.enginePath);
     process.stdout.write(String(m.scriptPinsApprovalNever(fs.readFileSync(process.argv[2], "utf8"))));
   ' "$(norm_path "$CROSS_REVIEW_JS")" "$(norm_path "$WRAPPER")" 2>"$root/err")"
   : >"$root/out"
