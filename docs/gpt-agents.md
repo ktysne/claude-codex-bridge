@@ -500,28 +500,28 @@ JSON の項目は次のとおりである。
 
 | 項目 | 内容 |
 |---|---|
-| `protocol` | 応答形式の版数。現在は整数 ` 1`である。 |
-| `status` | 照会結果。` ok`、` disabled`、` invalid`、` unreadable`のいずれかである。 |
-| `reason` | ` ok`では ` null`、ほかの状態では原因コードである。 |
-| `launch_exit` | 同じ条件で起動した場合の終了コード。` ok`では ` null`である。 |
-| `message` | 起動経路が標準エラーに出す日本語の理由。` ok`では ` null`である。 |
+| `protocol` | 応答形式の版数。現在は整数 `1` である。 |
+| `status` | 照会結果。`ok`、`disabled`、`invalid`、`unreadable` のいずれかである。 |
+| `reason` | `ok` では `null`、ほかの状態では原因コードである。 |
+| `launch_exit` | 同じ条件で起動した場合の終了コード。`ok` では `null` である。 |
+| `message` | 起動経路が標準エラーに出す日本語の理由。`ok` では `null` である。 |
 | `agent` | 照会したエージェント名。 |
-| `definition` | ` user`と ` project`の定義ファイルのパス。ファイルが無ければ ` null`である。プロジェクト側の定義を適用したかは ` project_applied`で示す。 |
-| `model`、` model_source` | 起動に渡すモデル名と、その値の出所(` user`または ` project`)。 |
-| `effort`、` effort_source` | 起動に渡す推論 effort と、その値の出所(` user`、` project`、` default`、` option`)。 |
+| `definition` | `user` と `project` の定義ファイルのパス。ファイルが無ければ `null` である。プロジェクト側の定義を適用したかは `project_applied` で示す。 |
+| `model`、`model_source` | 起動に渡すモデル名と、その値の出所(`user` または `project`)。 |
+| `effort`、`effort_source` | 起動に渡す推論 effort と、その値の出所(`user`、`project`、`default`、`option`)。 |
 | `sandbox` | 起動に渡すサンドボックス。 |
-| `approval_policy` | 起動時に固定する ` never`。 |
+| `approval_policy` | 起動時に固定する `never`。 |
 | `codex_home` | 展開後の認証ホーム。 |
-| `workdir` | 起動時に ` -C`へ渡す作業ディレクトリ。 |
+| `workdir` | 起動時に `-C` へ渡す作業ディレクトリ。 |
 
 状態、原因コード、起動経路の終了コードは次の対応になる。
 
-| `status` | ` reason` | ` launch_exit` |
+| `status` | `reason` | `launch_exit` |
 |---|---|---:|
-| `ok` | ` null` | ` null` |
-| `disabled` | ` definition-not-found`、` codex-not-found`、` codex-disabled`、` model-unset` | 3 |
-| `invalid` | ` bad-agent-name`、` bad-effort`、` bad-sandbox`、` bad-enabled`、` codex-home-unset`、` codex-home-missing`、` workdir-missing`、` project-override-rejected` | 2 |
-| `unreadable` | ` front-matter-unreadable-user`、` front-matter-unreadable-project` | 2 |
+| `ok` | `null` | `null` |
+| `disabled` | `definition-not-found`、`codex-not-found`、`codex-disabled`、`model-unset` | 3 |
+| `invalid` | `bad-agent-name`、`bad-effort`、`bad-sandbox`、`bad-enabled`、`codex-home-unset`、`codex-home-missing`、`workdir-missing`、`project-override-rejected` | 2 |
+| `unreadable` | `front-matter-unreadable-user`、`front-matter-unreadable-project` | 2 |
 
 `--describe` が JSON を出せた場合の終了コードは、状態にかかわらず 0 である。
 引数に不備がある場合は終了コード 2 で、JSON を出さない。
