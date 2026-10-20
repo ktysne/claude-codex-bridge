@@ -536,6 +536,90 @@ JSON の項目は次のとおりである。
 標準入力の依頼文にある「作業ディレクトリ:」の指定は読まず、`workdir` にも反映しない。
 役割文と認証情報の内容は JSON に含めない。
 
+## 配置済みの写しを照合する
+
+checkout の正本と利用者ホームに配置済みの写しを比べ、置き直す内容を JSON で返す。
+
+```bash
+bash tools/codex-agent.sh --check-copies
+```
+
+checkout のルートから実行する。
+スクリプト自身の位置を基準に正本を探すため、ホームに配置した写しから実行すると終了コード 2 で止まる。
+標準入力を読まず、ファイルやログを書かず、Codex も起動しない。
+照合に必要なディレクトリとファイルが checkout に無い場合も、終了コード 2 で JSON を出さない。
+所要時間は、Windows の Git Bash で十数秒が目安である。
+項目ごとに複数のプロセスを起動し、Windows ではプロセスの起動が重いためである。
+呼び出す側は、時間切れをこれより十分に長く取る。
+
+対象は利用者のホームに配置した写しだけである。
+プロジェクト側の `.claude/agents/` と `.claude/gpt-agents/` は今の版では照合しない。
+
+| `kind` | 正本 | 写し |
+|---|---|---|
+| `script` | `tools/codex-agent.sh`、`tools/codex-agent-hook.js` | `${USERPROFILE:-$HOME}/.claude/tools/<name>` |
+| `gpt-agent` | `.claude/gpt-agents/*.md` | `${USERPROFILE:-$HOME}/.claude/gpt-agents/<name>` |
+| `claude-agent` | `.claude/agents/*.md` | Claude のホームの `agents/<name>` |
+
+Claude のホームは `CLAUDE_CONFIG_DIR` が設定されていればその値であり、未設定なら `${USERPROFILE:-$HOME}/.claude` である。
+フックは `$HOME/.claude/tools/` を参照し、スクリプトと GPT 側定義は `${USERPROFILE:-$HOME}` を参照するため、`HOME` と `USERPROFILE` が異なる環境ではフックが使う写しと照合先が異なる。
+
+出力は JSON 1 行であり、トップレベルに `protocol`、`scope`、`checkout`、`head`、`dirty`、`items`、`order`、`after` を持つ。
+`protocol` は整数 `1`、`scope` は `user-home` である。
+`checkout` と各項目の `source`、`target` は `to_windows_path` と同じ形式である。
+`head` は checkout に対して Git の `rev-parse` で `HEAD` を取得した値であり、取得できなければ `null` である。
+`dirty` は対象となる正本ファイルに変更があれば `true`、変更が無ければ `false`、Git を使えなければ `null` である。
+正本はコミットではなく checkout の作業ツリーであり、`head` と `dirty` はその状態を判断するために返す。
+
+`items` は `script`、`gpt-agent`、`claude-agent` の順で並び、同じ種類の項目は `name` の昇順で並ぶ。
+項目には `id`、`kind`、`name`、`source`、`target`、`status`、`reason`、`source_sha256`、`observed_sha256`、`content`、`requires` を含む。
+`id` は `<kind>:<name>` であり、定義の `name` は拡張子を含む。
+SHA-256 は正本と写しの生のバイト列から計算し、写しが無ければ `observed_sha256` は `null` である。
+`content` は `stale` と `missing` の場合だけ再配置する全文を含み、それ以外は `null` である。
+`requires` は、その項目を配置するときに存在し、正本の内容も新しい必要がある項目の `id` の配列である。
+
+状態と理由コードは次のとおりである。
+
+| `status` | 条件 | `reason` |
+|---|---|---|
+| `match` | 写しと再配置内容が一致する | `null` |
+| `stale` | 写しが古い、または `codex-agent.sh` の写しに CR が含まれる | `content-differs`、`line-ending` |
+| `missing` | 写しが無く、配置中の項目か常時必須の規則が必要とする | `required` |
+| `not-deployed` | 写しが無く、配置中の項目も常時必須の規則も必要としていない | `null` |
+| `unreadable` | 写しを読めない、または定義のフロントマターを読めない | `unreadable-file`、`front-matter-unreadable` |
+
+`stale` と `missing` の定義ファイルは、行末の CRLF と LF の違いを除いて比較する。
+`tools/codex-agent.sh` の写しに CR が 1 つでもあれば、ほかの差分にかかわらず `line-ending` とする。
+返す `content` の行末は LF にそろえる。
+
+定義のフロントマターでは、字下げの無いトップレベルの行だけを引き継ぎ、`hooks:` 配下の行と本文は引き継がない。
+
+| 群 | GPT 側のキー | Claude 側のキー | 写しにキーが無い場合 |
+|---|---|---|---|
+| 第 1 群 | `codex_model`、`codex_reasoning_effort` | なし | 正本の同じキーを削除する |
+| 第 2 群 | `codex_home`、`codex_enabled` | `model`、`effort` | 正本のキーを残す |
+
+写しにキーがある場合は、その行を行末コメントや引用符ごと正本の同じキーの行と置き換える。
+正本にキーが無ければフロントマターの閉じる区切りの直前に足す。
+`codex_model` が無い定義は GPT 側を使わない設定であり、第 1 群ではキーの不在も保つ。
+設定コンソールは画面で変更していないキーを写しに追加しないため、第 2 群で写しに無いキーは出荷時にも無かったものと見なせる。
+
+ラッパー役の Claude 側定義は、スクリプト 2 項目と同名の GPT 側定義を `requires` に持つ。
+窓口の `impl-hard`、`impl-light`、`impl-standard` は対応する `impl-*-claude.md` も必要とする。
+GPT 側定義は `script:codex-agent.sh` を必要とする。
+`claude-agent:impl-hard.md`、`claude-agent:impl-hard-claude.md`、`gpt-agent:impl-hard.md` は常時必須であり、これらの依存も配置対象に含める。
+`requires` は状態にかかわらず定義に応じて返す。
+選んだ項目とその `requires` を閉包でたどり、そのうち `stale` か `missing` の項目を置き直す。
+閉包に `unreadable` が含まれた場合は置き直しを止める。
+
+`order` は `script`、`gpt-agent`、`claude-agent` の順であり、スクリプトを定義より先に配置する。
+`after` には、Claude 側定義を置き直したときの `restart-claude-code` と、共通手順 5 の役割分担の節を見直す `review-role-section` を返す。
+
+利用側は終了コード 0、JSON としての読み取り、`protocol` が整数 1 であることを確認する。
+どれかを満たさない応答は未対応として扱い、配置しない。
+利用側は書き込み直前に `source_sha256` と `observed_sha256` が示す正本と写しの状態を再確認し、`content` を解釈せずそのまま書き込む。
+`--check-copies` に未対応の古い版は、`不明なオプションである: --check-copies` を標準エラーに出して終了コード 2 で終わる。
+
 ## 再委譲の流れ
 
 窓口が再委譲を報告すると、メインセッションが Claude 側の実装用の定義へ委譲し直す。

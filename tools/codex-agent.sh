@@ -9,6 +9,7 @@
 #   bash tools/codex-agent.sh --new-prompt <agent-name> ["<parent-directory>"]
 #   bash tools/codex-agent.sh --wait <実行 ID>
 #   bash tools/codex-agent.sh --header-of <出力ファイル>
+#   bash tools/codex-agent.sh --check-copies
 #
 # 依頼文は標準入力から読む。引数に埋め込むと引用符の扱いで壊れやすいためである。
 # 呼び出し側は依頼文ファイルを標準入力へリダイレクトする。
@@ -90,6 +91,17 @@ set -o pipefail
 # 関数に包むと呼び出し前に全体を読み終えるので、実行中の書き換えに影響されない。
 main() {
 
+# このパスは照合の正本を特定するため、カレントディレクトリに依存しない絶対パスにする。
+script_path="${BASH_SOURCE[0]}"
+script_path="${script_path//\\//}"
+case "$script_path" in
+  /*|[[:alpha:]]:/*) ;;
+  *) script_path="$PWD/$script_path" ;;
+esac
+script_dir="${script_path%/*}"
+checkout_dir="${script_dir%/*}"
+[ -n "$checkout_dir" ] || checkout_dir="/"
+
 usage() {
   cat <<'USAGE'
 用法: bash tools/codex-agent.sh <agent-name> [-C <workdir>] [--effort <level>] < prompt.txt
@@ -97,6 +109,7 @@ usage() {
       bash tools/codex-agent.sh --new-prompt <agent-name> ["<親ディレクトリ>"]
       bash tools/codex-agent.sh --wait <実行 ID>
       bash tools/codex-agent.sh --header-of <出力ファイル>
+      bash tools/codex-agent.sh --check-copies
 
   <agent-name>      .claude/gpt-agents/<agent-name>.md の名前
   -C <workdir>      Codex の作業ディレクトリ(既定はカレントディレクトリ)
@@ -112,8 +125,10 @@ usage() {
                     背景へ移った起動の出力ファイルの先頭に続く codex-agent: の行だけを出す(0)。
                     ファイルが無い、読めない、その中に run= の行が無いときは
                     codex-agent: not-found header-of=<出力ファイル> を出す(2)
+  --check-copies    checkout と利用者ホームにあるスクリプトと定義の写しを JSON で照合する。
+                    引数を取らず、Codex を起動せず、標準入力とファイルを変更しない
 
-依頼文は標準入力から読む(--describe、--new-prompt、--wait と --header-of では読まない)。
+依頼文は標準入力から読む(--describe、--new-prompt、--wait、--header-of と --check-copies では読まない)。
 
 標準出力は、監査行、依頼文から作業ディレクトリを採用した場合の workdir-from= 行または指定に関する warning= 行、通常ファイルから依頼文を読んだ場合の prompt-file= 行、run= の行、log= の行、最終報告、result= の行の順である。
 run= の行と log= の行は Codex の起動前に出す。
@@ -296,6 +311,7 @@ new_prompt_mode=0
 new_prompt_parent=""
 new_prompt_parent_set=0
 describe_mode=0
+check_copies_mode=0
 
 has_describe_option() {
   while [ "$#" -gt 0 ]; do
@@ -311,8 +327,26 @@ has_describe_option() {
           case "$1" in -*) ;; *) shift ;; esac
         fi
         if [ "$#" -gt 0 ]; then
-          case "$1" in --describe|--wait|--header-of|-C|--effort|--new-prompt|-h|--help) ;; *) shift ;; esac
+          case "$1" in --describe|--check-copies|--wait|--header-of|-C|--effort|--new-prompt|-h|--help) ;; *) shift ;; esac
         fi
+        ;;
+      *) shift ;;
+    esac
+  done
+  return 1
+}
+
+has_check_copies_option() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --check-copies) return 0 ;;
+      -C|--effort|--wait|--header-of)
+        shift
+        [ "$#" -eq 0 ] || shift
+        ;;
+      --new-prompt)
+        shift
+        [ "$#" -eq 0 ] || shift
         ;;
       *) shift ;;
     esac
@@ -327,6 +361,11 @@ while [ $# -gt 0 ]; do
       describe_mode=1
       shift
       ;;
+    --check-copies)
+      [ "$check_copies_mode" -eq 0 ] || die "--check-copies は 1 回だけ指定できる"
+      check_copies_mode=1
+      shift
+      ;;
     --new-prompt)
       [ $# -ge 2 ] || die "--new-prompt にはエージェント名が必要である"
       case "$2" in
@@ -339,7 +378,7 @@ while [ $# -gt 0 ]; do
       shift 2
       if [ $# -gt 0 ]; then
         case "$1" in
-          --describe|--wait|--header-of|-C|--effort|--new-prompt|-h|--help) ;;
+          --describe|--check-copies|--wait|--header-of|-C|--effort|--new-prompt|-h|--help) ;;
           *) new_prompt_parent="$1"; new_prompt_parent_set=1; shift ;;
         esac
       fi
@@ -368,6 +407,9 @@ while [ $# -gt 0 ]; do
       ;;
     -h|--help)
       [ "$new_prompt_mode" -eq 0 ] || die "--new-prompt はほかの入口と併用できない"
+      if [ "$check_copies_mode" -eq 1 ] || has_check_copies_option "$@"; then
+        die "--check-copies は -h、--help と併用できない"
+      fi
       if [ "$describe_mode" -eq 1 ] || has_describe_option "$@"; then
         die "--describe は -h、--help と併用できない"
       fi
@@ -384,6 +426,13 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
+
+if [ "$check_copies_mode" -eq 1 ]; then
+  [ "$new_prompt_mode" -eq 0 ] && [ "$wait_mode" -eq 0 ] && [ "$header_of_mode" -eq 0 ] \
+    && [ "$describe_mode" -eq 0 ] && [ -z "$agent_name" ] \
+    && [ -z "$workdir_option" ] && [ -z "$effort_override" ] \
+    || die "--check-copies はほかの入口や引数と併用できない"
+fi
 
 if [ "$new_prompt_mode" -eq 1 ]; then
   [ "$wait_mode" -eq 0 ] && [ "$header_of_mode" -eq 0 ] && [ "$describe_mode" -eq 0 ] \
@@ -414,6 +463,8 @@ elif [ "$wait_mode" -eq 1 ]; then
     || die "--wait はエージェント名、-C、--effort と併用できない"
 elif [ "$describe_mode" -eq 1 ]; then
   [ -n "$agent_name" ] || { usage >&2; die "エージェント名が指定されていない"; }
+elif [ "$check_copies_mode" -eq 1 ]; then
+  :
 else
   [ -n "$agent_name" ] || { usage >&2; die "エージェント名が指定されていない"; }
 fi
@@ -436,7 +487,7 @@ print_header_of() {
 
 [ "$header_of_mode" -eq 0 ] || print_header_of "$header_of_file"
 
-if [ "$describe_mode" -eq 0 ]; then
+if [ "$describe_mode" -eq 0 ] && [ "$check_copies_mode" -eq 0 ]; then
   validate_agent_name "$agent_name"
 fi
 
@@ -974,6 +1025,458 @@ json_nullable() {
   fi
 }
 
+file_ends_with_lf() {
+  local last_byte=""
+  [ -s "$1" ] || { printf '0'; return; }
+  last_byte="$(tail -c 1 -- "$1" | od -An -t u1 | tr -d '[:space:]')" || return 1
+  [ "$last_byte" = 10 ] && printf '1' || printf '0'
+}
+
+normalize_copy_stream() {
+  LC_ALL=C sed -z 's/\r\n/\n/g'
+}
+
+json_escape_content() {
+  LC_ALL=C od -An -v -t u1 | LC_ALL=C awk '
+    function emit(byte) {
+      if (byte == 92) printf "\\\\"
+      else if (byte == 34) printf "\\\""
+      else if (byte == 9) printf "\\t"
+      else if (byte == 10) printf "\\n"
+      else if (byte == 13) printf "\\r"
+      else if (byte < 32 || byte == 127) printf "\\u%04x", byte
+      else printf "%c", byte
+    }
+    {
+      for (i = 1; i <= NF; i++) {
+        byte = $i + 0
+        if (pending_cr) {
+          if (byte == 10) {
+            emit(10)
+            pending_cr = 0
+            continue
+          }
+          emit(13)
+          pending_cr = 0
+        }
+        if (byte == 13) pending_cr = 1
+        else emit(byte)
+      }
+    }
+    END { if (pending_cr) emit(13) }
+  '
+}
+
+copy_item_requires() {
+  local kind="$1" name="$2" stem=""
+  copy_requires=()
+  case "$kind" in
+    gpt-agent)
+      copy_requires+=("script:codex-agent.sh")
+      ;;
+    claude-agent)
+      case "$name" in
+        impl-hard.md|impl-light.md|impl-standard.md|codex-review.md|codex-subagent.md)
+          stem="${name%.md}"
+          copy_requires+=("script:codex-agent.sh" "script:codex-agent-hook.js" "gpt-agent:$name")
+          case "$stem" in
+            impl-hard|impl-light|impl-standard)
+              copy_requires+=("claude-agent:$stem-claude.md")
+              ;;
+          esac
+          ;;
+      esac
+      ;;
+  esac
+}
+
+copy_item_index() {
+  local wanted="$1" i
+  for ((i = 0; i < ${#copy_item_ids[@]}; i++)); do
+    if [ "${copy_item_ids[$i]}" = "$wanted" ]; then
+      printf '%s' "$i"
+      return 0
+    fi
+  done
+  printf '%s' -1
+}
+
+copy_item_is_required() {
+  local wanted="$1" required_id
+  for required_id in "${copy_required_ids[@]}"; do
+    [ "$required_id" = "$wanted" ] && return 0
+  done
+  return 1
+}
+
+merge_definition_content() {
+  local source="$1" copy="$2" kind="$3" source_final_lf="$4"
+  local -a files=("$source")
+  [ -z "$copy" ] || files+=("$copy")
+  LC_ALL=C awk \
+    -v source_path="$source" \
+    -v copy_path="$copy" \
+    -v kind="$kind" \
+    -v source_final_lf="$source_final_lf" '
+      function key_for_line(line, i) {
+        for (i = 1; i <= key_count; i++) {
+          if (index(line, key_order[i] ":") == 1) return key_order[i]
+        }
+        return ""
+      }
+      BEGIN {
+        if (kind == "gpt-agent") {
+          key_order[++key_count] = "codex_model"
+          key_order[++key_count] = "codex_reasoning_effort"
+          key_order[++key_count] = "codex_home"
+          key_order[++key_count] = "codex_enabled"
+          meaningful["codex_model"] = 1
+          meaningful["codex_reasoning_effort"] = 1
+        } else {
+          key_order[++key_count] = "model"
+          key_order[++key_count] = "effort"
+        }
+      }
+      FILENAME == source_path {
+        line = $0
+        sub(/\r$/, "", line)
+        source_lines[++source_count] = $0
+        if (source_count == 1 && line == "---") source_in_front_matter = 1
+        else if (source_in_front_matter && line == "---") {
+          source_in_front_matter = 0
+          source_close = source_count
+        } else if (source_in_front_matter) {
+          key = key_for_line(line)
+          if (key != "" && !(key in source_key_line)) {
+            source_key_line[key] = source_count
+            source_key_at[source_count] = key
+          }
+        }
+        next
+      }
+      FILENAME == copy_path {
+        line = $0
+        sub(/\r$/, "", line)
+        copy_lines[++copy_count] = $0
+        if (copy_count == 1 && line == "---") copy_in_front_matter = 1
+        else if (copy_in_front_matter && line == "---") copy_in_front_matter = 0
+        else if (copy_in_front_matter) {
+          key = key_for_line(line)
+          if (key != "" && !(key in copy_key_line)) {
+            copy_key_line[key] = copy_count
+          }
+        }
+        next
+      }
+      END {
+        for (i = 1; i <= source_count; i++) {
+          key = source_key_at[i]
+          if (key != "") {
+            if (key in copy_key_line) {
+              line = copy_lines[copy_key_line[key]]
+              sub(/\r$/, "", line)
+              printf "%s\n", line
+              continue
+            }
+            if (meaningful[key]) continue
+          }
+          if (i == source_close) {
+            for (j = 1; j <= key_count; j++) {
+              key = key_order[j]
+              if ((key in copy_key_line) && !(key in source_key_line)) {
+                line = copy_lines[copy_key_line[key]]
+                sub(/\r$/, "", line)
+                printf "%s\n", line
+              }
+            }
+          }
+          line = source_lines[i]
+          if (i < source_count || source_final_lf + 0 == 1) sub(/\r$/, "", line)
+          if (i == source_count && source_final_lf + 0 == 0) printf "%s", line
+          else printf "%s\n", line
+        }
+      }
+    ' "${files[@]}"
+}
+
+copy_item_content_stream() {
+  local index="$1" source="${copy_item_sources[$1]}" copy="" kind="${copy_item_kinds[$1]}"
+  if [ "${copy_item_present[$index]}" -eq 1 ]; then
+    copy="${copy_item_targets[$index]}"
+  fi
+  case "$kind" in
+    script)
+      normalize_copy_stream <"$source"
+      ;;
+    *)
+      # 写しが無ければ引き継ぐ値も無い。merge を通すと第 1 群のキーが消え、GPT 側を使わない定義になるため。
+      if [ -z "$copy" ] || [ "$copy" = "$source" ]; then
+        normalize_copy_stream <"$source"
+      else
+        merge_definition_content "$source" "$copy" "$kind" "${copy_item_final_lf[$index]}"
+      fi
+      ;;
+  esac
+}
+
+copy_item_requires_json() {
+  local kind="$1" name="$2" i
+  copy_item_requires "$kind" "$name"
+  printf '['
+  for ((i = 0; i < ${#copy_requires[@]}; i++)); do
+    [ "$i" -eq 0 ] || printf ','
+    json_quote "${copy_requires[$i]}"
+  done
+  printf ']'
+}
+
+print_check_copies_json() {
+  local checkout_path="$1" head="$2" dirty="$3" i
+  printf '{"protocol":1,"scope":"user-home","checkout":'
+  json_quote "$(to_windows_path "$checkout_path")"
+  printf ',"head":'
+  json_nullable "$head"
+  printf ',"dirty":%s,"items":[' "$dirty"
+  for ((i = 0; i < ${#copy_item_ids[@]}; i++)); do
+    [ "$i" -eq 0 ] || printf ','
+    printf '{"id":'
+    json_quote "${copy_item_ids[$i]}"
+    printf ',"kind":'
+    json_quote "${copy_item_kinds[$i]}"
+    printf ',"name":'
+    json_quote "${copy_item_names[$i]}"
+    printf ',"source":'
+    json_quote "$(to_windows_path "${copy_item_sources[$i]}")"
+    printf ',"target":'
+    json_quote "$(to_windows_path "${copy_item_targets[$i]}")"
+    printf ',"status":'
+    json_quote "${copy_item_statuses[$i]}"
+    printf ',"reason":'
+    json_nullable "${copy_item_reasons[$i]}"
+    printf ',"source_sha256":'
+    json_nullable "${copy_item_source_hashes[$i]}"
+    printf ',"observed_sha256":'
+    json_nullable "${copy_item_observed_hashes[$i]}"
+    printf ',"content":'
+    case "${copy_item_statuses[$i]}" in
+      stale|missing)
+        printf '"'
+        copy_item_content_stream "$i" | json_escape_content
+        printf '"'
+        ;;
+      *) printf 'null' ;;
+    esac
+    printf ',"requires":'
+    copy_item_requires_json "${copy_item_kinds[$i]}" "${copy_item_names[$i]}"
+    printf '}'
+  done
+  printf '],"order":["script","gpt-agent","claude-agent"],"after":[{"id":"restart-claude-code","when":"claude-agent"},{"id":"review-role-section","when":"any"}]}\n'
+}
+
+check_copies() {
+  local checkout="$checkout_dir" user_home="$(to_slash "$home_dir")" claude_home="" \
+    head="" dirty="null" git_status="" git_status_ok=1 source name target id index required_id \
+    source_fm target_fm hash hash_line hash_output hash_index status reason i queue_index source_final_lf target_exists
+  local -a copy_item_ids=() copy_item_kinds=() copy_item_names=() copy_item_sources=() \
+    copy_item_targets=() copy_item_present=() copy_item_statuses=() \
+    copy_item_reasons=() copy_item_source_hashes=() copy_item_observed_hashes=() \
+    copy_item_final_lf=() copy_required_ids=() copy_queue=() copy_processed=() copy_requires=() git_paths=() \
+    copy_hash_paths=() copy_hash_items=() copy_hash_targets=()
+  local LC_ALL=C
+
+  [ -d "$checkout/.claude/agents" ] && [ -d "$checkout/.claude/gpt-agents" ] \
+    && [ -f "$checkout/tools/codex-agent.sh" ] && [ -f "$checkout/tools/codex-agent-hook.js" ] \
+    || die "--check-copies は checkout の tools/codex-agent.sh から実行してください"
+
+  if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+    claude_home="$(to_slash "$CLAUDE_CONFIG_DIR")"
+  else
+    claude_home="$user_home/.claude"
+  fi
+
+  copy_item_add() {
+    local kind="$1" item_name="$2" item_source="$3" item_target="$4" present=0
+    local item_id="$kind:$item_name"
+    if [ -e "$item_target" ] || [ -L "$item_target" ]; then
+      present=1
+    fi
+    copy_item_ids+=("$item_id")
+    copy_item_kinds+=("$kind")
+    copy_item_names+=("$item_name")
+    copy_item_sources+=("$item_source")
+    copy_item_targets+=("$item_target")
+    copy_item_present+=("$present")
+  }
+
+  copy_item_add script codex-agent-hook.js "$checkout/tools/codex-agent-hook.js" \
+    "$user_home/.claude/tools/codex-agent-hook.js"
+  copy_item_add script codex-agent.sh "$checkout/tools/codex-agent.sh" \
+    "$user_home/.claude/tools/codex-agent.sh"
+
+  for source in "$checkout/.claude/gpt-agents/"*.md; do
+    [ -f "$source" ] || continue
+    name="${source##*/}"
+    copy_item_add gpt-agent "$name" "$source" "$user_home/.claude/gpt-agents/$name"
+  done
+  for source in "$checkout/.claude/agents/"*.md; do
+    [ -f "$source" ] || continue
+    name="${source##*/}"
+    copy_item_add claude-agent "$name" "$source" "$claude_home/agents/$name"
+  done
+
+  copy_required_ids=(
+    claude-agent:impl-hard.md
+    claude-agent:impl-hard-claude.md
+    gpt-agent:impl-hard.md
+  )
+  for ((i = 0; i < ${#copy_item_ids[@]}; i++)); do
+    if [ "${copy_item_present[$i]}" -eq 1 ]; then
+      copy_queue+=("${copy_item_ids[$i]}")
+    fi
+  done
+  copy_queue+=("${copy_required_ids[@]}")
+  queue_index=0
+  while [ "$queue_index" -lt "${#copy_queue[@]}" ]; do
+    id="${copy_queue[$queue_index]}"
+    queue_index=$((queue_index + 1))
+    target_exists=0
+    for required_id in "${copy_processed[@]}"; do
+      if [ "$required_id" = "$id" ]; then target_exists=1; break; fi
+    done
+    [ "$target_exists" -eq 0 ] || continue
+    copy_processed+=("$id")
+    if ! copy_item_is_required "$id"; then copy_required_ids+=("$id"); fi
+    index="$(copy_item_index "$id")"
+    [ "$index" -ge 0 ] || continue
+    copy_item_requires "${copy_item_kinds[$index]}" "${copy_item_names[$index]}"
+    for required_id in "${copy_requires[@]}"; do
+      copy_queue+=("$required_id")
+    done
+  done
+
+  for ((i = 0; i < ${#copy_item_ids[@]}; i++)); do
+    copy_item_source_hashes+=("")
+    copy_item_observed_hashes+=("")
+    if [ -f "${copy_item_sources[$i]}" ] && [ -r "${copy_item_sources[$i]}" ]; then
+      copy_hash_paths+=("${copy_item_sources[$i]}")
+      copy_hash_items+=("$i")
+      copy_hash_targets+=(0)
+    fi
+    if [ "${copy_item_present[$i]}" -eq 1 ] && [ -f "${copy_item_targets[$i]}" ] && [ -r "${copy_item_targets[$i]}" ]; then
+      copy_hash_paths+=("${copy_item_targets[$i]}")
+      copy_hash_items+=("$i")
+      copy_hash_targets+=(1)
+    fi
+  done
+  if [ "${#copy_hash_paths[@]}" -gt 0 ]; then
+    if command -v sha256sum >/dev/null 2>&1; then
+      hash_output="$(sha256sum -- "${copy_hash_paths[@]}" 2>/dev/null)" || hash_output=""
+    elif command -v shasum >/dev/null 2>&1; then
+      hash_output="$(shasum -a 256 -- "${copy_hash_paths[@]}" 2>/dev/null)" || hash_output=""
+    else
+      hash_output=""
+    fi
+    hash_index=0
+    while IFS= read -r hash_line; do
+      [ "$hash_index" -lt "${#copy_hash_items[@]}" ] || break
+      index="${copy_hash_items[$hash_index]}"
+      hash="${hash_line:0:64}"
+      if [ "${copy_hash_targets[$hash_index]}" -eq 1 ]; then
+        copy_item_observed_hashes[$index]="$hash"
+      else
+        copy_item_source_hashes[$index]="$hash"
+      fi
+      hash_index=$((hash_index + 1))
+    done <<< "$hash_output"
+  fi
+
+  for ((i = 0; i < ${#copy_item_ids[@]}; i++)); do
+    hash="${copy_item_source_hashes[$i]}"
+    source_final_lf=0
+    if [ "${copy_item_kinds[$i]}" != script ] \
+      && { [ "${copy_item_present[$i]}" -eq 1 ] || copy_item_is_required "${copy_item_ids[$i]}"; }; then
+      source_final_lf="$(file_ends_with_lf "${copy_item_sources[$i]}")" || source_final_lf=0
+    fi
+    copy_item_final_lf+=("$source_final_lf")
+    copy_item_statuses+=("")
+    copy_item_reasons+=("")
+    status=""
+    reason=""
+
+    if [ -z "$hash" ]; then
+      status=unreadable
+      reason=unreadable-file
+    elif [ "${copy_item_present[$i]}" -eq 1 ]; then
+      target="${copy_item_targets[$i]}"
+      if [ ! -f "$target" ] || [ ! -r "$target" ]; then
+        status=unreadable
+        reason=unreadable-file
+      else
+        hash="${copy_item_observed_hashes[$i]}"
+        if [ -z "$hash" ]; then
+          status=unreadable
+          reason=unreadable-file
+        elif [ "${copy_item_kinds[$i]}" != script ]; then
+          source_fm="$(read_front_matter "${copy_item_sources[$i]}")" || source_fm=""
+          target_fm="$(read_front_matter "$target")" || target_fm=""
+          if [ -z "$source_fm" ] || [ -z "$target_fm" ]; then
+            status=unreadable
+            reason=front-matter-unreadable
+          fi
+        fi
+      fi
+    elif copy_item_is_required "${copy_item_ids[$i]}"; then
+      if [ "${copy_item_kinds[$i]}" != script ]; then
+        source_fm="$(read_front_matter "${copy_item_sources[$i]}")" || source_fm=""
+        if [ -z "$source_fm" ]; then
+          status=unreadable
+          reason=front-matter-unreadable
+        fi
+      fi
+      if [ -z "$status" ]; then
+        status=missing
+        reason=required
+      fi
+    else
+      status=not-deployed
+    fi
+
+    if [ -z "$status" ]; then
+      # Git for Windows の grep はパターンの CR を落とすことがあるので、CR は tr で数える。
+      if [ "${copy_item_ids[$i]}" = script:codex-agent.sh ] \
+        && [ "$(tr -cd '\r' <"${copy_item_targets[$i]}" | head -c 1 | wc -c)" -gt 0 ]; then
+        status=stale
+        reason=line-ending
+      elif cmp -s <(copy_item_content_stream "$i") <(normalize_copy_stream <"${copy_item_targets[$i]}"); then
+        status=match
+      else
+        status=stale
+        reason=content-differs
+      fi
+    fi
+    copy_item_statuses[$i]="$status"
+    copy_item_reasons[$i]="$reason"
+  done
+
+  if command -v git >/dev/null 2>&1; then
+    head="$(GIT_OPTIONAL_LOCKS=0 git -C "$checkout" rev-parse HEAD 2>/dev/null)" || head=""
+    git_paths=(
+      ":(literal)tools/codex-agent.sh"
+      ":(literal)tools/codex-agent-hook.js"
+      ":(glob).claude/agents/*.md"
+      ":(glob).claude/gpt-agents/*.md"
+    )
+    git_status="$(GIT_OPTIONAL_LOCKS=0 git -C "$checkout" status --porcelain --untracked-files=all -- "${git_paths[@]}" 2>/dev/null)" || git_status_ok=0
+    if [ "$git_status_ok" -eq 1 ]; then
+      if [ -n "$git_status" ]; then dirty=true; else dirty=false; fi
+    else
+      dirty=null
+    fi
+  fi
+
+  print_check_copies_json "$checkout" "$head" "$dirty"
+}
+
 print_describe_json() {
   describe_status=""
   describe_launch_exit=null
@@ -1008,6 +1511,11 @@ print_describe_json() {
   json_nullable "$workdir"
   printf '}\n'
 }
+
+if [ "$check_copies_mode" -eq 1 ]; then
+  check_copies
+  exit 0
+fi
 
 if [ "$describe_mode" -eq 1 ]; then
   describe_saved_status=""

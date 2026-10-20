@@ -507,15 +507,19 @@ agent-cockpit の経路 Codex の指定は再委譲で起動した `impl-*-claud
 リポジトリを更新して定義やスクリプトの変更を取り込んだときは、共通手順 3 と同じ手順で配置し直す。配置済みの控えは自動では更新されない。
 
 1. `git pull` でリポジトリを更新する。
-2. `tools/codex-agent.sh` と `tools/codex-agent-hook.js` を `~/.claude/tools/` に配置し直す。スクリプトは定義より先に置く。
-3. 選んだパターンの定義を、共通手順 3 で置いた場所に配置し直す。
-   Claude 側は Claude のホームの `agents/` またはプロジェクトの `.claude/agents/`、GPT 側は利用者側の `~/.claude/gpt-agents/` が対象である。
+2. checkout のルートから `bash tools/codex-agent.sh --check-copies` を実行し、配置済みの写しと置き直しが必要な項目を確かめる。
+   JSON の項目、依存関係、再配置内容の扱いは [docs/gpt-agents.md](gpt-agents.md) の「配置済みの写しを照合する」にある。
+3. `tools/codex-agent.sh` と `tools/codex-agent-hook.js` を `~/.claude/tools/` に配置し直す。スクリプトは定義より先に置く。
+4. 選んだパターンの GPT 側定義を、共通手順 3 で置いた場所に配置し直す。
+   GPT 側は利用者側の `~/.claude/gpt-agents/` が対象である。
    プロジェクト側の GPT 側定義を使う場合は、`.claude/gpt-agents/` の差分も更新する。
-   利用者側の GPT 側定義の `codex_home`、`codex_enabled`、モデル、effort を変えて使っているときは、上書きの前に差分を示し、変えた値を引き継ぐ。
+   利用者側の GPT 側定義の `codex_home`、`codex_enabled`、モデル、effort を変えて使っているときは、再配置内容に変えた値が引き継がれていることを確かめる。
    設定コンソールで変えた値も同じである。
-4. 共通手順 5 の役割分担の節が変わっていれば、共通手順 5 で節を足した `CLAUDE.md`(Claude のホームか、プロジェクトのもの)の節を書き換える。
-5. エージェント定義(`.claude/agents/`)を変えたときは、Claude Code を再起動する。
-6. 選んだパターンの「確認」の `codex-agent.sh` のコマンドを流す。
+5. 選んだパターンの Claude 側定義を、共通手順 3 で置いた場所に配置し直す。
+   Claude 側は Claude のホームの `agents/` またはプロジェクトの `.claude/agents/` が対象である。
+6. 共通手順 5 の役割分担の節が変わっていれば、共通手順 5 で節を足した `CLAUDE.md`(Claude のホームか、プロジェクトのもの)の節を書き換える。
+7. エージェント定義(`.claude/agents/`)を変えたときは、Claude Code を再起動する。
+8. 選んだパターンの「確認」の `codex-agent.sh` のコマンドを流す。
 
 ## うまくいかないとき
 
