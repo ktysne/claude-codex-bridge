@@ -497,7 +497,7 @@ log_dir="$(to_slash "$home_dir")/.claude/codex-agent/logs"
 # --output-last-message の無い版の Codex で起動したことを、ログに残す目印の行。
 NO_LAST_MESSAGE_NOTE="codex-agent: note=no-output-last-message"
 
-# result= の行から、その実行のラッパーが返した終了コードを戻す。規則は下の finish の呼び出しと同じである。
+# 結果種別、元の Codex 終了コード、ラッパー終了コードの対応はここを正本とする。
 exit_code_of_result() {
   local n
   case "$1" in
@@ -590,15 +590,9 @@ wait_for_run() {
   report_file="$log_dir/$id.report"
   log_file="$log_dir/$id.log"
 
-  # 完了していれば元の実行の出力を出して終える。
-  # ラッパーは報告を改名してからログへ result= の行を書くため、ログが完了を示すなら報告も既にある。
-  # 報告が無いのは、報告を書かない版のラッパーの実行か、改名に失敗した場合である。
-  finish_if_done() {
+  # 報告を書かない旧実行と、報告の保存に失敗した実行の互換読み取り。
+  finish_from_legacy_log() {
     local last
-    if [ -f "$report_file" ]; then
-      cat "$report_file"
-      exit "$(exit_code_of_result "$(tail -n 1 "$report_file" | tr -d '\r')")"
-    fi
     last="$(tail -n 1 "$log_file" 2>/dev/null | tr -d '\r')"
     case "$last" in
       "codex-agent: result="*)
@@ -611,6 +605,15 @@ wait_for_run() {
         exit "$(exit_code_of_result "$last")"
         ;;
     esac
+  }
+
+  # .report は finish が改名して公開した報告だけを読み、.report.tmp は完了の根拠にしない。
+  finish_if_done() {
+    if [ -f "$report_file" ]; then
+      cat "$report_file"
+      exit "$(exit_code_of_result "$(tail -n 1 "$report_file" | tr -d '\r')")"
+    fi
+    finish_from_legacy_log
   }
 
   # 進行の目印としてログの最後の行を出す。出力の無い待ちが続くと、呼び出し側が止まったと判断しやすいためである。
@@ -1869,15 +1872,18 @@ end_newline() {
   return 0
 }
 
-# result 行を標準出力とログの末尾の両方へ出して終わる。
-# ログの最後の行を標準出力の最後の行と同じにし、ログだけで完了と結果を判定できるようにする。
-# 報告の写しはログへ result= の行を書く前に改名する。ログが完了を示すときに報告が揃っているようにするためである。
-# finish <result の値> <終了コード>
+# finish <結果種別> [元の Codex 終了コード]。終了コードの対応は exit_code_of_result に委ねる。
+# ログが完了を示すときに報告が揃うよう、報告の公開後にログへ result= の行を書く。
 finish() {
-  printf 'codex-agent: result=%s\n' "$1" | out
+  local result_line="codex-agent: result=$1" wrapper_status
+  if [ "$1" = failed ]; then
+    result_line="codex-agent: result=failed exit=$2"
+  fi
+  wrapper_status="$(exit_code_of_result "$result_line")"
+  printf '%s\n' "$result_line" | out
   mv -f "$report_tmp" "$report_file" 2>/dev/null || rm -f "$report_tmp" 2>/dev/null
-  printf 'codex-agent: result=%s\n' "$1" >>"$log_file"
-  exit "$2"
+  printf '%s\n' "$result_line" >>"$log_file"
+  exit "$wrapper_status"
 }
 
 # ログから先頭の run= の行と warning= と note= の行を除いた本文を出す。
@@ -2061,7 +2067,7 @@ if [ "$codex_status" -eq 0 ]; then
   if [ -n "$matched" ] && [[ "$stderr_body" != *' succeeded in '* ]]; then
     log_body | tail -n "$tail_lines" | out
     emit_evidence 'unavailable' "$matched" | out
-    finish unavailable 75
+    finish unavailable
   fi
 fi
 
@@ -2072,7 +2078,7 @@ if [ "$codex_status" -eq 0 ]; then
     # --output-last-message が無い版では、最終回答が流れる標準出力を報告の代わりに出す。
     { tail -n "$tail_lines" "$out_file"; end_newline "$out_file"; } | out
   fi
-  finish ok 0
+  finish ok
 fi
 
 # 失敗したときは原因を追えるようにする。ログの末尾だけを出す。
@@ -2101,7 +2107,7 @@ evidence="$(
 matched="$(printf '%s\n' "$evidence" | grep -iE 'usage limit|rate limit|too many requests|\b429\b' | head -n 3)"
 if [ -n "$matched" ]; then
   emit_evidence 'rate-limit' "$matched" | out
-  finish rate-limited 75
+  finish rate-limited
 fi
 
 # 利用上限のほかにも、呼び出し側では直せない GPT 側の事情で実行できないことがある。
@@ -2111,15 +2117,10 @@ fi
 matched="$(printf '%s\n' "$evidence" | grep -iE 'at capacity' | head -n 3)"
 if [ -n "$matched" ]; then
   emit_evidence 'unavailable' "$matched" | out
-  finish unavailable 75
+  finish unavailable
 fi
 
-# Codex 自身の 75 は、GPT 側が使えないことを示す 75 と区別できないため 1 に写像する。
-# 元の値は result 行に残す。
-if [ "$codex_status" -eq 75 ]; then
-  finish "failed exit=$codex_status" 1
-fi
-finish "failed exit=$codex_status" "$codex_status"
+finish failed "$codex_status"
 }
 
 # main の後ろにコードを置かない。この行までを読み終えてから実行が始まる。
