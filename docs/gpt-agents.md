@@ -523,6 +523,11 @@ JSON の項目は次のとおりである。
 | `invalid` | `bad-agent-name`、`bad-effort`、`bad-sandbox`、`bad-enabled`、`codex-home-unset`、`codex-home-missing`、`workdir-missing`、`project-override-rejected` | 2 |
 | `unreadable` | `front-matter-unreadable-user`、`front-matter-unreadable-project` | 2 |
 
+`codex` コマンドが PATH に無く、定義で GPT 側を止めている場合は、`codex-not-found` ではなく `codex-disabled` か `model-unset` を返す。
+それ以外の場合は、定義のほかの不備の有無によらず `codex-not-found` を返す。
+起動したときの標準エラーの理由行も同じ規則で決まる。
+利用側が、Codex を入れていない環境でも、定義で止めていることを見分けられるようにするためである。
+
 `--describe` が JSON を出せた場合の終了コードは、状態にかかわらず 0 である。
 引数に不備がある場合は終了コード 2 で、JSON を出さない。
 

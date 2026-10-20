@@ -1599,6 +1599,48 @@ t_describe_codex_not_found() {
   expect_no_codex_call
 }
 
+# codex が無い環境で、describe と起動の両方が同じ理由を返すことを確かめる。
+# expect_no_codex_reason <describe の reason> <起動の標準エラーに含まれる文字列>
+expect_no_codex_reason() {
+  run_describe "$AGENT"
+  expect_rc 0
+  expect_describe_json disabled "$1" 3
+  run_wrapper "$AGENT"
+  expect_exit3
+  grep -Fq -- "$2" "$root/err" || fail "標準エラーに理由が無い: [$2]"
+}
+
+t_no_codex_disabled_reason() {
+  if (PATH=/usr/bin:/bin command -v codex >/dev/null 2>&1); then
+    skip "/usr/bin か /bin に実物の codex がある"
+    return
+  fi
+  NO_FAKE_BIN=1
+  write_def "$(home_def)" "$DEFAULT_FM
+codex_enabled: false" "$DEFAULT_BODY"
+  expect_no_codex_reason codex-disabled "codex_enabled: false"
+}
+
+t_no_codex_model_unset_reason() {
+  if (PATH=/usr/bin:/bin command -v codex >/dev/null 2>&1); then
+    skip "/usr/bin か /bin に実物の codex がある"
+    return
+  fi
+  NO_FAKE_BIN=1
+  write_def "$(home_def)" 'codex_home: ~/.codex-test' "$DEFAULT_BODY"
+  expect_no_codex_reason model-unset "codex_model が未設定である"
+}
+
+t_no_codex_unreadable_keeps_not_found() {
+  if (PATH=/usr/bin:/bin command -v codex >/dev/null 2>&1); then
+    skip "/usr/bin か /bin に実物の codex がある"
+    return
+  fi
+  NO_FAKE_BIN=1
+  printf '%s\n' '---' 'codex_model: model-test' >"$(home_def)"
+  expect_no_codex_reason codex-not-found "codex コマンドが PATH に無い"
+}
+
 t_describe_unreadable_user_front_matter() {
   printf '%s\n' '---' 'codex_model: model-test' >"$(home_def)"
   run_describe "$AGENT"
@@ -3756,6 +3798,9 @@ run_case "--describe: codex_enabled false は disabled で返す" t_describe_dis
 run_case "--describe: model 未設定は disabled で返す" t_describe_model_unset
 run_case "--describe: 定義なしは disabled で返す" t_describe_definition_not_found
 run_case "--describe: codex が PATH に無い場合は disabled で返す" t_describe_codex_not_found
+run_case "codex が無くても、codex_enabled false は describe と起動で codex-disabled を返す" t_no_codex_disabled_reason
+run_case "codex が無くても、codex_model 未設定は describe と起動で model-unset を返す" t_no_codex_model_unset_reason
+run_case "codex が無く、定義が読めないときは describe と起動で codex-not-found のまま" t_no_codex_unreadable_keeps_not_found
 run_case "--describe: ホーム側フロントマターが閉じていない場合は unreadable で返す" t_describe_unreadable_user_front_matter
 run_case "--describe: プロジェクト側フロントマターが閉じていない場合は unreadable で返す" t_describe_unreadable_project_front_matter
 run_case "--describe: sandbox の不正値は invalid で返す" t_describe_bad_sandbox
