@@ -380,6 +380,73 @@ run_wrapper() {
   check_log_path "$out"
 }
 
+run_describe() {
+  local path="$root/bin:/usr/bin:/bin" out="$root/out"
+  [ "$NO_FAKE_BIN" = 1 ] && path="/usr/bin:/bin"
+  [ -z "$EXTRA_PATH" ] || path="$path:$EXTRA_PATH"
+  (
+    cd "$root/work" || exit 99
+    export USERPROFILE="$root/home" HOME="$root/home" PATH="$path" TMPDIR="$root/tmp"
+    if [ -n "$STDIN_FILE" ]; then
+      env ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} "$BASH_BIN" "$WRAPPER" --describe "$@" <"$STDIN_FILE" >"$out" 2>"$root/err"
+    elif [ "$STDIN_HERE_STRING" -eq 1 ]; then
+      env ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} "$BASH_BIN" "$WRAPPER" --describe "$@" <<<"$REQ" >"$out" 2>"$root/err"
+    else
+      env ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} "$BASH_BIN" "$WRAPPER" --describe "$@" </dev/null >"$out" 2>"$root/err"
+    fi
+  )
+  RC=$?
+}
+
+expect_describe_json() {
+  node -e '
+    const fs = require("fs");
+    const [file, status, reason, launchExit] = process.argv.slice(1);
+    const raw = fs.readFileSync(file, "utf8");
+    if (!raw.endsWith("\n") || raw.indexOf("\n") !== raw.length - 1 || raw.includes("\r")) {
+      throw new Error("標準出力が JSON 1 行ではない");
+    }
+    const value = JSON.parse(raw.slice(0, -1));
+    if (value.protocol !== 1) throw new Error("protocol が 1 ではない");
+    if (value.status !== status) throw new Error("status が期待と違う: " + value.status);
+    if (value.reason !== (reason === "null" ? null : reason)) throw new Error("reason が期待と違う: " + value.reason);
+    const expectedExit = launchExit === "null" ? null : Number(launchExit);
+    if (value.launch_exit !== expectedExit) throw new Error("launch_exit が期待と違う: " + value.launch_exit);
+  ' "$root/out" "$1" "$2" "$3" 2>"$root/node.err" || {
+    fail "JSON の形式または status が不正: $(cat "$root/node.err")"
+  }
+}
+
+expect_json_fields() {
+  node -e '
+    const fs = require("fs");
+    const [file, ...pairs] = process.argv.slice(1);
+    const value = JSON.parse(fs.readFileSync(file, "utf8").slice(0, -1));
+    const get = (path) => path.split(".").reduce((item, key) => item == null ? undefined : item[key], value);
+    for (let i = 0; i < pairs.length; i += 2) {
+      const actual = get(pairs[i]);
+      const expected = JSON.parse(pairs[i + 1]);
+      if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+        throw new Error(pairs[i] + " が期待と違う: " + JSON.stringify(actual));
+      }
+    }
+  ' "$root/out" "$@" 2>"$root/node.err" || {
+    fail "JSON 項目が期待と違う: $(cat "$root/node.err")"
+  }
+}
+
+expect_json_string() {
+  node -e '
+    const fs = require("fs");
+    const [file, key, expected] = process.argv.slice(1);
+    const value = JSON.parse(fs.readFileSync(file, "utf8").slice(0, -1));
+    const actual = key.split(".").reduce((item, part) => item == null ? undefined : item[part], value);
+    if (actual !== expected) throw new Error(key + " が期待と違う: " + JSON.stringify(actual));
+  ' "$root/out" "$1" "$2" 2>"$root/node.err" || {
+    fail "JSON 文字列が期待と違う: $(cat "$root/node.err")"
+  }
+}
+
 check_log_path() {
   local want line value
   want="$(norm_path "$root")"
@@ -1345,6 +1412,316 @@ codex_model: ""' "$DEFAULT_BODY"
   expect_exit3
 }
 
+t_describe_home_only() {
+  run_describe "$AGENT"
+  expect_rc 0
+  expect_describe_json ok null null
+  expect_json_fields \
+    reason null launch_exit null message null \
+    definition.project null definition.project_applied false \
+    model '"model-test"' model_source '"user"' \
+    effort '"low"' effort_source '"user"' \
+    sandbox '"workspace-write"' approval_policy '"never"'
+  expect_json_string agent "$AGENT"
+  expect_json_string definition.user "$(norm_path "$(home_def)")"
+  expect_json_string codex_home "$(norm_path "$root/home/.codex-test")"
+  expect_json_string workdir "$(norm_path "$root/work")"
+  expect_out_no_match "役割文の1行目"
+  expect_no_codex_call
+}
+
+t_describe_project_overrides() {
+  write_def "$(work_def)" 'codex_model: model-project
+codex_reasoning_effort: high' 'リポジトリの役割文'
+  run_describe "$AGENT"
+  expect_rc 0
+  expect_describe_json ok null null
+  expect_json_fields \
+    definition.project_applied true \
+    model '"model-project"' model_source '"project"' \
+    effort '"high"' effort_source '"project"'
+  expect_json_string definition.project "$(norm_path "$(work_def)")"
+  expect_out_no_match "リポジトリの役割文"
+  expect_no_codex_call
+}
+
+t_describe_project_override_rejected() {
+  write_def "$(work_def)" 'codex_sandbox: read-only'
+  run_describe "$AGENT"
+  expect_rc 0
+  expect_describe_json invalid project-override-rejected 2
+  grep -Fq "キー codex_sandbox が利用者側の実効値と一致しない: $(work_def)" "$root/out" \
+    || fail "JSON の message に起動経路と同じ理由が無い"
+  expect_json_fields definition.project_applied false
+  expect_no_codex_call
+}
+
+t_describe_disabled() {
+  write_def "$(home_def)" "$DEFAULT_FM
+codex_enabled: false" "$DEFAULT_BODY"
+  run_describe "$AGENT"
+  expect_rc 0
+  expect_describe_json disabled codex-disabled 3
+  expect_no_codex_call
+}
+
+t_describe_model_unset() {
+  write_def "$(home_def)" 'codex_home: ~/.codex-test
+codex_model: ""' "$DEFAULT_BODY"
+  run_describe "$AGENT"
+  expect_rc 0
+  expect_describe_json disabled model-unset 3
+  expect_json_fields model null model_source null
+  expect_json_string codex_home "$(norm_path "$root/home/.codex-test")"
+  expect_no_codex_call
+}
+
+t_describe_definition_not_found() {
+  rm -f "$(home_def)"
+  run_describe "$AGENT"
+  expect_rc 0
+  expect_describe_json disabled definition-not-found 3
+  expect_json_fields definition.user null
+  expect_no_codex_call
+}
+
+t_describe_codex_not_found() {
+  if (PATH=/usr/bin:/bin command -v codex >/dev/null 2>&1); then
+    skip "/usr/bin か /bin に実物の codex がある"
+    return
+  fi
+  NO_FAKE_BIN=1
+  run_describe "$AGENT"
+  expect_rc 0
+  expect_describe_json disabled codex-not-found 3
+  expect_no_codex_call
+}
+
+t_describe_unreadable_user_front_matter() {
+  printf '%s\n' '---' 'codex_model: model-test' >"$(home_def)"
+  run_describe "$AGENT"
+  expect_rc 0
+  expect_describe_json unreadable front-matter-unreadable-user 2
+  expect_no_codex_call
+}
+
+t_describe_unreadable_project_front_matter() {
+  printf '%s\n' '---' 'codex_model: model-project' >"$(work_def)"
+  run_describe "$AGENT"
+  expect_rc 0
+  expect_describe_json unreadable front-matter-unreadable-project 2
+  expect_no_codex_call
+}
+
+t_describe_bad_sandbox() {
+  write_def "$(home_def)" 'codex_home: ~/.codex-test
+codex_model: model-test
+codex_sandbox: danger-full-access' "$DEFAULT_BODY"
+  run_describe "$AGENT"
+  expect_rc 0
+  expect_describe_json invalid bad-sandbox 2
+  expect_no_codex_call
+}
+
+t_describe_bad_enabled() {
+  write_def "$(home_def)" "$DEFAULT_FM
+codex_enabled: yes" "$DEFAULT_BODY"
+  run_describe "$AGENT"
+  expect_rc 0
+  expect_describe_json invalid bad-enabled 2
+  expect_no_codex_call
+}
+
+t_describe_bad_effort() {
+  write_def "$(home_def)" 'codex_home: ~/.codex-test
+codex_model: model-test
+codex_reasoning_effort: extreme' "$DEFAULT_BODY"
+  run_describe "$AGENT"
+  expect_rc 0
+  expect_describe_json invalid bad-effort 2
+  expect_no_codex_call
+}
+
+t_describe_codex_home_unset() {
+  write_def "$(home_def)" 'codex_model: model-test' "$DEFAULT_BODY"
+  run_describe "$AGENT"
+  expect_rc 0
+  expect_describe_json invalid codex-home-unset 2
+  expect_no_codex_call
+}
+
+t_describe_codex_home_missing() {
+  write_def "$(home_def)" 'codex_home: ~/.codex-missing
+codex_model: model-test' "$DEFAULT_BODY"
+  run_describe "$AGENT"
+  expect_rc 0
+  expect_describe_json invalid codex-home-missing 2
+  expect_no_codex_call
+}
+
+t_describe_workdir_missing() {
+  run_describe "$AGENT" -C "$root/no-such-dir"
+  expect_rc 0
+  expect_describe_json invalid workdir-missing 2
+  expect_no_codex_call
+}
+
+t_describe_bad_agent_name() {
+  local bad_agent="../$AGENT"
+  run_describe "$bad_agent"
+  expect_rc 0
+  expect_describe_json invalid bad-agent-name 2
+  expect_json_string agent "$bad_agent"
+  expect_no_codex_call
+}
+
+t_describe_json_escapes_strings() {
+  local bad_agent=$'bad"\t\r\\name'
+  run_describe "$bad_agent"
+  expect_rc 0
+  expect_describe_json invalid bad-agent-name 2
+  node -e '
+    const fs = require("fs");
+    const raw = fs.readFileSync(process.argv[1], "utf8");
+    const value = JSON.parse(raw.slice(0, -1));
+    const expected = "bad" + String.fromCharCode(34, 9, 13, 92) + "name";
+    if (raw.includes("\t") || raw.includes("\r")) throw new Error("JSON に未エスケープの制御文字がある");
+    if (value.agent !== expected) throw new Error("エスケープ後の値が違う");
+  ' "$root/out" 2>"$root/node.err" || {
+    fail "JSON の文字列エスケープが不正: $(cat "$root/node.err")"
+  }
+  expect_no_codex_call
+}
+
+t_describe_default_values() {
+  write_def "$(home_def)" 'codex_home: ~/.codex-test
+codex_model: model-test' "$DEFAULT_BODY"
+  run_describe "$AGENT"
+  expect_rc 0
+  expect_describe_json ok null null
+  expect_json_fields effort '"medium"' effort_source '"default"' sandbox '"read-only"'
+  expect_no_codex_call
+}
+
+t_describe_has_no_side_effects() {
+  local before after
+  mkdir -p "$(logs_dir)"
+  printf 'preserve\n' >"$(logs_dir)/existing.log"
+  before="$(find "$(logs_dir)" -type f -print | LC_ALL=C sort)"
+  REQ="作業ディレクトリ: $root/no-such-prompt-workdir"
+  STDIN_HERE_STRING=1
+  run_describe "$AGENT"
+  expect_rc 0
+  expect_describe_json ok null null
+  expect_json_string workdir "$(norm_path "$root/work")"
+  after="$(find "$(logs_dir)" -type f -print | LC_ALL=C sort)"
+  expect_eq "照会前後のログ置き場" "$before" "$after"
+  expect_no_codex_call
+}
+
+t_describe_matches_launch() {
+  local workdir="$root/selected-work"
+  mkdir -p "$workdir"
+  write_def "$(work_def)" 'codex_model: model-project
+codex_reasoning_effort: medium'
+  run_describe "$AGENT" -C "$workdir" --effort high
+  expect_rc 0
+  expect_describe_json ok null null
+  expect_json_fields \
+    model '"model-project"' model_source '"project"' \
+    effort '"high"' effort_source '"option"' sandbox '"workspace-write"' \
+    approval_policy '"never"'
+  expect_json_string workdir "$(norm_path "$workdir")"
+  cp "$root/out" "$root/describe.json"
+
+  run_wrapper "$AGENT" -C "$workdir" --effort high
+  expect_rc 0
+  expect_arg_pair -m model-project
+  expect_arg_pair -c 'model_reasoning_effort="high"'
+  expect_arg_pair --sandbox workspace-write
+  expect_arg_pair -C "$(norm_path "$workdir")"
+  expect_arg_pair -c approval_policy=never
+
+  node -e '
+    const fs = require("fs");
+    const [jsonPath, callsPath] = process.argv.slice(1);
+    const description = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
+    const calls = fs.readFileSync(callsPath, "utf8");
+    const blocks = [...calls.matchAll(/^@@CALL ([^\n]+)\n([\s\S]*?)^@@END$/gm)];
+    const exec = blocks.find((block) => block[1] === "exec");
+    if (!exec) throw new Error("偽 codex の exec 呼び出しが無い");
+    const args = [...exec[2].matchAll(/^ARG (.*)$/gm)].map((match) => match[1]);
+    const after = (flag) => args[args.indexOf(flag) + 1];
+    const effortArg = args.find((arg) => arg.startsWith("model_reasoning_effort="));
+    const effort = effortArg && effortArg.match(/^model_reasoning_effort="(.*)"$/);
+    const home = exec[2].match(/^CODEX_HOME=(.*)$/m);
+    if (description.model !== after("-m")) throw new Error("model が起動引数と違う");
+    if (!effort || description.effort !== effort[1]) throw new Error("effort が起動引数と違う");
+    if (description.sandbox !== after("--sandbox")) throw new Error("sandbox が起動引数と違う");
+    if (description.workdir !== after("-C")) throw new Error("workdir が起動引数と違う");
+    if (!args.includes("approval_policy=never") || description.approval_policy !== "never") {
+      throw new Error("approval_policy が起動引数と違う");
+    }
+    if (!home || description.codex_home !== home[1]) throw new Error("CODEX_HOME が起動環境と違う");
+  ' "$root/describe.json" "$root/fake/calls.log" 2>"$root/node.err" || {
+    fail "照会と起動の実効設定が違う: $(cat "$root/node.err")"
+  }
+}
+
+t_describe_argument_errors() {
+  run_describe
+  expect_rc 2
+  expect_eq "エージェント名欠落時の標準出力" "" "$(cat "$root/out")"
+  expect_err_reason
+  run_describe "$AGENT" --bogus
+  expect_rc 2
+  expect_eq "不明なオプションの標準出力" "" "$(cat "$root/out")"
+  expect_err_reason
+  run_describe "$AGENT" -C
+  expect_rc 2
+  expect_eq "-C の値欠落時の標準出力" "" "$(cat "$root/out")"
+  expect_err_reason
+  run_describe "$AGENT" --effort
+  expect_rc 2
+  expect_eq "--effort の値欠落時の標準出力" "" "$(cat "$root/out")"
+  expect_err_reason
+  run_describe "$AGENT" --effort extreme
+  expect_rc 2
+  expect_eq "不正な --effort の標準出力" "" "$(cat "$root/out")"
+  expect_err_reason
+  expect_no_codex_call
+}
+
+t_describe_incompatible_args() {
+  run_describe "$AGENT" --wait cxa-run-1
+  expect_rc 2
+  expect_eq "--wait 併用時の標準出力" "" "$(cat "$root/out")"
+  run_describe "$AGENT" --header-of "$root/output"
+  expect_rc 2
+  expect_eq "--header-of 併用時の標準出力" "" "$(cat "$root/out")"
+  run_describe "$AGENT" --new-prompt "$AGENT"
+  expect_rc 2
+  expect_eq "--new-prompt 併用時の標準出力" "" "$(cat "$root/out")"
+  [ ! -d "$root/home/.claude/codex-agent/prompts" ] \
+    || fail "--new-prompt 併用時に依頼文の置き場が作られた"
+  run_describe "$AGENT" -h
+  expect_rc 2
+  expect_eq "-h 併用時の標準出力" "" "$(cat "$root/out")"
+  run_describe "$AGENT" --help
+  expect_rc 2
+  expect_eq "--help 併用時の標準出力" "" "$(cat "$root/out")"
+  run_wrapper -h --describe "$AGENT"
+  expect_rc 2
+  expect_eq "--describe より前の -h の標準出力" "" "$(cat "$root/out")"
+  run_wrapper --help --describe "$AGENT"
+  expect_rc 2
+  expect_eq "--describe より前の --help の標準出力" "" "$(cat "$root/out")"
+  run_describe "$AGENT" "$AGENT-other"
+  expect_rc 2
+  expect_eq "別のエージェント名併用時の標準出力" "" "$(cat "$root/out")"
+  expect_no_codex_call
+}
+
 t_lookup_work_first() {
   write_def "$(work_def)" 'codex_model: model-work
 codex_reasoning_effort: high' 'リポジトリの役割文'
@@ -2026,6 +2403,7 @@ t_help() {
   run_wrapper -h
   expect_rc 0
   grep -q '^用法: ' "$root/out" || fail "標準出力に用法が無い"
+  grep -Fq -- '--describe <agent-name>' "$root/out" || fail "用法に --describe が無い"
   grep -Fq -- '--new-prompt <agent-name>' "$root/out" || fail "用法に --new-prompt が無い"
   expect_no_codex_call
 }
@@ -2906,6 +3284,28 @@ run_case "終了コード 3: codex が PATH に無い" t_exit3_no_codex
 run_case "終了コード 3: codex_enabled: false" t_exit3_disabled
 run_case "終了コード 3: codex_model キーなし" t_exit3_no_model_key
 run_case "終了コード 3: codex_model が空" t_exit3_empty_model
+run_case "--describe: ホーム定義だけの実効値を JSON で返す" t_describe_home_only
+run_case "--describe: プロジェクト側の model と effort を適用する" t_describe_project_overrides
+run_case "--describe: 禁止されたプロジェクト側の変更は invalid で返す" t_describe_project_override_rejected
+run_case "--describe: codex_enabled false は disabled で返す" t_describe_disabled
+run_case "--describe: model 未設定は disabled で返す" t_describe_model_unset
+run_case "--describe: 定義なしは disabled で返す" t_describe_definition_not_found
+run_case "--describe: codex が PATH に無い場合は disabled で返す" t_describe_codex_not_found
+run_case "--describe: ホーム側フロントマターが閉じていない場合は unreadable で返す" t_describe_unreadable_user_front_matter
+run_case "--describe: プロジェクト側フロントマターが閉じていない場合は unreadable で返す" t_describe_unreadable_project_front_matter
+run_case "--describe: sandbox の不正値は invalid で返す" t_describe_bad_sandbox
+run_case "--describe: enabled の不正値は invalid で返す" t_describe_bad_enabled
+run_case "--describe: 定義の effort の不正値は invalid で返す" t_describe_bad_effort
+run_case "--describe: codex_home 未設定は invalid で返す" t_describe_codex_home_unset
+run_case "--describe: 存在しない codex_home は invalid で返す" t_describe_codex_home_missing
+run_case "--describe: 存在しない -C は invalid で返す" t_describe_workdir_missing
+run_case "--describe: 不正なエージェント名は invalid の JSON で返す" t_describe_bad_agent_name
+run_case "--describe: JSON 文字列の引用符、バックスラッシュ、制御文字をエスケープする" t_describe_json_escapes_strings
+run_case "--describe: effort と sandbox の既定値と出所を返す" t_describe_default_values
+run_case "--describe: 標準入力とログ置き場に副作用を起こさない" t_describe_has_no_side_effects
+run_case "--describe: JSON の実効値が偽 codex の起動引数と環境に一致する" t_describe_matches_launch
+run_case "--describe: 引数エラーは終了コード 2 で JSON を出さない" t_describe_argument_errors
+run_case "--describe: 排他的な入口や別名との併用は終了コード 2 である" t_describe_incompatible_args
 run_case "定義の探索: リポジトリ側のモデル、effort、役割文を重ねる" t_lookup_work_first
 run_case "定義の探索: カレントに無ければホームの定義を使う" t_lookup_home_fallback
 run_case "リポジトリ側定義: 異なる認証ホームを拒否する" t_repo_home_rejected

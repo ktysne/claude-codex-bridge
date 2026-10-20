@@ -483,6 +483,59 @@ PowerShell が無い環境と、ログの 1 行目に `run=` の行が無い実�
 カレントディレクトリを先に探すのは GPT 側の定義ファイル(`.claude/gpt-agents/<name>.md`)だけであり、無ければ `%USERPROFILE%\.claude\gpt-agents\` の定義を使う。
 ユーザ側の `~/.claude/tools/codex-agent.sh` が無ければ GPT 側が未導入として扱い、窓口の `impl-hard`、`impl-light`、`impl-standard` は再委譲を報告し、`codex-review` と `codex-subagent` は終了コードと出力の末尾を報告して停止する。
 
+## 実効設定を照会する
+
+Codex を起動せずに、起動時に選ばれる設定を JSON で確認できる。
+
+```bash
+bash tools/codex-agent.sh --describe <agent-name> [-C <workdir>] [--effort <level>]
+```
+
+標準出力には JSON を 1 行だけ出し、標準入力は読まない。
+ログ置き場の作成、古いログや依頼文ファイルの削除、実行 ID の採番、書き込み担当の目印の操作は行わない。
+`codex exec --help` を含む Codex コマンドも起動しない。
+
+JSON の項目は次のとおりである。
+値が決まらなかった項目には `null` を入れる。
+
+| 項目 | 内容 |
+|---|---|
+| `protocol` | 応答形式の版数。現在は整数 ` 1`である。 |
+| `status` | 照会結果。` ok`、` disabled`、` invalid`、` unreadable`のいずれかである。 |
+| `reason` | ` ok`では ` null`、ほかの状態では原因コードである。 |
+| `launch_exit` | 同じ条件で起動した場合の終了コード。` ok`では ` null`である。 |
+| `message` | 起動経路が標準エラーに出す日本語の理由。` ok`では ` null`である。 |
+| `agent` | 照会したエージェント名。 |
+| `definition` | ` user`と ` project`の定義ファイルのパス。ファイルが無ければ ` null`である。プロジェクト側の定義を適用したかは ` project_applied`で示す。 |
+| `model`、` model_source` | 起動に渡すモデル名と、その値の出所(` user`または ` project`)。 |
+| `effort`、` effort_source` | 起動に渡す推論 effort と、その値の出所(` user`、` project`、` default`、` option`)。 |
+| `sandbox` | 起動に渡すサンドボックス。 |
+| `approval_policy` | 起動時に固定する ` never`。 |
+| `codex_home` | 展開後の認証ホーム。 |
+| `workdir` | 起動時に ` -C`へ渡す作業ディレクトリ。 |
+
+状態、原因コード、起動経路の終了コードは次の対応になる。
+
+| `status` | ` reason` | ` launch_exit` |
+|---|---|---:|
+| `ok` | ` null` | ` null` |
+| `disabled` | ` definition-not-found`、` codex-not-found`、` codex-disabled`、` model-unset` | 3 |
+| `invalid` | ` bad-agent-name`、` bad-effort`、` bad-sandbox`、` bad-enabled`、` codex-home-unset`、` codex-home-missing`、` workdir-missing`、` project-override-rejected` | 2 |
+| `unreadable` | ` front-matter-unreadable-user`、` front-matter-unreadable-project` | 2 |
+
+`--describe` が JSON を出せた場合の終了コードは、状態にかかわらず 0 である。
+引数に不備がある場合は終了コード 2 で、JSON を出さない。
+
+利用側は、終了コード 0 に加えて、標準出力を JSON として読み取れ、`protocol` が整数 1 であることを確認する。
+この条件を満たさない応答は未対応として扱い、成功とみなさない。
+`--describe` に未対応の古い版は、`不明なオプションである: --describe` を標準エラーに出して終了コード 2 で終わる。
+未知の `status` を受け取った場合は、`launch_exit` の値から通常起動時のフォールバック可否を判断する。
+
+照会後に定義が変わることがあるため、起動側は起動のたびに定義を解決して検証し直す。
+プロジェクト側の定義はカレントディレクトリを基準に探し、`-C` で指定したディレクトリは探索基準にしない。
+標準入力の依頼文にある「作業ディレクトリ:」の指定は読まず、`workdir` にも反映しない。
+役割文と認証情報の内容は JSON に含めない。
+
 ## 再委譲の流れ
 
 窓口が再委譲を報告すると、メインセッションが Claude 側の実装用の定義へ委譲し直す。

@@ -5,6 +5,7 @@
 #
 # 用法:
 #   bash tools/codex-agent.sh <agent-name> [-C <workdir>] [--effort <level>] < prompt.txt
+#   bash tools/codex-agent.sh --describe <agent-name> [-C <workdir>] [--effort <level>]
 #   bash tools/codex-agent.sh --new-prompt <agent-name> ["<parent-directory>"]
 #   bash tools/codex-agent.sh --wait <実行 ID>
 #   bash tools/codex-agent.sh --header-of <出力ファイル>
@@ -92,6 +93,7 @@ main() {
 usage() {
   cat <<'USAGE'
 用法: bash tools/codex-agent.sh <agent-name> [-C <workdir>] [--effort <level>] < prompt.txt
+      bash tools/codex-agent.sh --describe <agent-name> [-C <workdir>] [--effort <level>]
       bash tools/codex-agent.sh --new-prompt <agent-name> ["<親ディレクトリ>"]
       bash tools/codex-agent.sh --wait <実行 ID>
       bash tools/codex-agent.sh --header-of <出力ファイル>
@@ -111,7 +113,7 @@ usage() {
                     ファイルが無い、読めない、その中に run= の行が無いときは
                     codex-agent: not-found header-of=<出力ファイル> を出す(2)
 
-依頼文は標準入力から読む(--new-prompt、--wait と --header-of では読まない)。
+依頼文は標準入力から読む(--describe、--new-prompt、--wait と --header-of では読まない)。
 
 標準出力は、監査行、依頼文から作業ディレクトリを採用した場合の workdir-from= 行または指定に関する warning= 行、通常ファイルから依頼文を読んだ場合の prompt-file= 行、run= の行、log= の行、最終報告、result= の行の順である。
 run= の行と log= の行は Codex の起動前に出す。
@@ -187,10 +189,11 @@ to_slash() {
 # Codex と Write ツールへ渡すパスをドライブ文字付きの Windows 形式へ揃える。
 # Git Bash の /d/... 形式のままだと解決できないためである。cygpath が無い環境では区切り文字の変換だけを行う。
 to_windows_path() {
-  local p
-  p="$(to_slash "$1")"
+  local p="" converted=""
+  p="$(to_slash "$1")" || return 1
   if command -v cygpath >/dev/null 2>&1; then
-    strip_long_path_prefix "$(cygpath -m "$p" 2>/dev/null || printf '%s' "$p")"
+    converted="$(cygpath -m "$p" 2>/dev/null || printf '%s' "$p")" || return 1
+    strip_long_path_prefix "$converted"
   else
     printf '%s' "$p"
   fi
@@ -283,6 +286,7 @@ strip_long_path_prefix() {
 
 agent_name=""
 workdir=""
+workdir_option=""
 effort_override=""
 wait_mode=0
 wait_run_id=""
@@ -291,9 +295,38 @@ header_of_file=""
 new_prompt_mode=0
 new_prompt_parent=""
 new_prompt_parent_set=0
+describe_mode=0
+
+has_describe_option() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --describe) return 0 ;;
+      -C|--effort|--wait|--header-of)
+        shift
+        [ "$#" -eq 0 ] || shift
+        ;;
+      --new-prompt)
+        shift
+        if [ "$#" -gt 0 ]; then
+          case "$1" in -*) ;; *) shift ;; esac
+        fi
+        if [ "$#" -gt 0 ]; then
+          case "$1" in --describe|--wait|--header-of|-C|--effort|--new-prompt|-h|--help) ;; *) shift ;; esac
+        fi
+        ;;
+      *) shift ;;
+    esac
+  done
+  return 1
+}
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --describe)
+      [ "$describe_mode" -eq 0 ] || die "--describe は 1 回だけ指定できる"
+      describe_mode=1
+      shift
+      ;;
     --new-prompt)
       [ $# -ge 2 ] || die "--new-prompt にはエージェント名が必要である"
       case "$2" in
@@ -306,7 +339,7 @@ while [ $# -gt 0 ]; do
       shift 2
       if [ $# -gt 0 ]; then
         case "$1" in
-          --wait|--header-of|-C|--effort|--new-prompt|-h|--help) ;;
+          --describe|--wait|--header-of|-C|--effort|--new-prompt|-h|--help) ;;
           *) new_prompt_parent="$1"; new_prompt_parent_set=1; shift ;;
         esac
       fi
@@ -325,7 +358,7 @@ while [ $# -gt 0 ]; do
       ;;
     -C)
       [ $# -ge 2 ] || die "-C には作業ディレクトリが必要である"
-      workdir="$2"
+      workdir_option="$2"
       shift 2
       ;;
     --effort)
@@ -335,6 +368,9 @@ while [ $# -gt 0 ]; do
       ;;
     -h|--help)
       [ "$new_prompt_mode" -eq 0 ] || die "--new-prompt はほかの入口と併用できない"
+      if [ "$describe_mode" -eq 1 ] || has_describe_option "$@"; then
+        die "--describe は -h、--help と併用できない"
+      fi
       usage
       exit 0
       ;;
@@ -350,8 +386,8 @@ while [ $# -gt 0 ]; do
 done
 
 if [ "$new_prompt_mode" -eq 1 ]; then
-  [ "$wait_mode" -eq 0 ] && [ "$header_of_mode" -eq 0 ] \
-    && [ -z "$workdir" ] && [ -z "$effort_override" ] \
+  [ "$wait_mode" -eq 0 ] && [ "$header_of_mode" -eq 0 ] && [ "$describe_mode" -eq 0 ] \
+    && [ -z "$workdir_option" ] && [ -z "$effort_override" ] \
     || die "--new-prompt は --wait、--header-of、-C、--effort、エージェント名の単独指定と併用できない"
   validate_agent_name "$agent_name"
   if [ "$new_prompt_parent_set" -eq 1 ]; then
@@ -369,11 +405,15 @@ if [ "$new_prompt_mode" -eq 1 ]; then
 fi
 
 if [ "$header_of_mode" -eq 1 ]; then
-  [ "$wait_mode" -eq 0 ] && [ -z "$agent_name" ] && [ -z "$workdir" ] && [ -z "$effort_override" ] \
+  [ "$wait_mode" -eq 0 ] && [ "$describe_mode" -eq 0 ] && [ -z "$agent_name" ] \
+    && [ -z "$workdir_option" ] && [ -z "$effort_override" ] \
     || die "--header-of は --wait、エージェント名、-C、--effort と併用できない"
 elif [ "$wait_mode" -eq 1 ]; then
-  [ -z "$agent_name" ] && [ -z "$workdir" ] && [ -z "$effort_override" ] \
+  [ "$describe_mode" -eq 0 ] && [ -z "$agent_name" ] \
+    && [ -z "$workdir_option" ] && [ -z "$effort_override" ] \
     || die "--wait はエージェント名、-C、--effort と併用できない"
+elif [ "$describe_mode" -eq 1 ]; then
+  [ -n "$agent_name" ] || { usage >&2; die "エージェント名が指定されていない"; }
 else
   [ -n "$agent_name" ] || { usage >&2; die "エージェント名が指定されていない"; }
 fi
@@ -396,7 +436,9 @@ print_header_of() {
 
 [ "$header_of_mode" -eq 0 ] || print_header_of "$header_of_file"
 
-validate_agent_name "$agent_name"
+if [ "$describe_mode" -eq 0 ]; then
+  validate_agent_name "$agent_name"
+fi
 
 [ -z "$effort_override" ] || validate_effort "$effort_override"
 
@@ -578,13 +620,6 @@ wait_for_run() {
 
 [ "$wait_mode" -eq 0 ] || wait_for_run "$wait_run_id"
 
-def_file="$(to_slash "$home_dir")/.claude/gpt-agents/$agent_name.md"
-repo_def_file="$PWD/.claude/gpt-agents/$agent_name.md"
-[ -f "$def_file" ] || die_missing "エージェント定義が見つからない: $agent_name (.claude/gpt-agents/$agent_name.md)"
-
-# codex 本体の有無も、定義の有無と同じ「GPT 側が未導入」として扱う。
-command -v codex >/dev/null 2>&1 || die_missing "codex コマンドが PATH に無い (docs/setup.md の導入手順を参照)"
-
 # フロントマターの閉じる区切りが無いと役割文を設定として読むため、両方の区切りを確かめる。
 read_front_matter() {
   sed 's/\r$//' "$1" | awk '
@@ -594,15 +629,13 @@ read_front_matter() {
     END { if (!closed) exit 1 }
   '
 }
-front_matter="$(read_front_matter "$def_file")" || die "フロントマターが読めない: $def_file"
-[ -n "$front_matter" ] || die "フロントマターが読めない: $def_file"
 
 # フロントマターから 1 キーの値を取り出し、行末の YAML コメント、前後の空白、引用符を除く。
 # コメントと見なすのは「空白 + #」以降だけである。値の内部の # を巻き込まないためである。
 fm_get() {
-  local raw
-  raw="$(printf '%s\n' "$1" | awk -v key="$2" 'index($0, key ":") == 1 { print substr($0, length(key) + 2); exit }')"
-  raw="$(printf '%s' "$raw" | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  local raw=""
+  raw="$(printf '%s\n' "$1" | awk -v key="$2" 'index($0, key ":") == 1 { print substr($0, length(key) + 2); exit }')" || return 1
+  raw="$(printf '%s' "$raw" | sed -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" || return 1
   case "$raw" in
     \"*\") raw="${raw#\"}"; raw="${raw%\"}" ;;
     \'*\') raw="${raw#\'}"; raw="${raw%\'}" ;;
@@ -611,8 +644,8 @@ fm_get() {
 }
 
 expand_codex_home() {
-  local path
-  path="$(to_slash "$1")"
+  local path=""
+  path="$(to_slash "$1")" || return 1
   case "$path" in
     "~") path="$home_dir" ;;
     "~/"*) path="$home_dir/${path#\~/}" ;;
@@ -623,8 +656,8 @@ expand_codex_home() {
 }
 
 normalize_codex_home() {
-  local path
-  path="$(expand_codex_home "$1")"
+  local path=""
+  path="$(expand_codex_home "$1")" || return 1
   while [[ "$path" == */ ]]; do path="${path%/}"; done
   printf '%s' "${path,,}"
 }
@@ -637,83 +670,382 @@ read_role_body() {
   ' | sed -e '/./,$!d'
 }
 
-codex_home="$(fm_get "$front_matter" codex_home)"
-codex_model="$(fm_get "$front_matter" codex_model)"
-codex_effort="$(fm_get "$front_matter" codex_reasoning_effort)"
-codex_sandbox="$(fm_get "$front_matter" codex_sandbox)"
-codex_enabled="$(fm_get "$front_matter" codex_enabled)"
-# キーが無いときだけ true を補う。値を書きかけた指定は不正として止める。
-# 他のキーと違い、既定が Codex を起動する側に倒れるためである。
-grep -q '^codex_enabled:' <<<"$front_matter" || codex_enabled="true"
-role_body="$(read_role_body "$def_file")"
+resolve_fail() {
+  resolve_status=""
+  resolve_reason=""
+  resolve_message=""
+  resolve_path=""
+  resolve_launch_exit=""
+  resolve_status="$1"
+  resolve_reason="$2"
+  resolve_message="$3"
+  [ "$#" -lt 4 ] || resolve_path="$4"
+  case "$resolve_status" in
+    disabled) resolve_launch_exit=3 ;;
+    invalid|unreadable) resolve_launch_exit=2 ;;
+  esac
+  return 1
+}
 
-# codex_home は認証とサンドボックス外の設定(MCP など)、codex_sandbox は書き込みの可否を決める。
-# 信頼していないリポジトリからこれらや GPT 側の有効化を変えさせない。
-if [ -f "$repo_def_file" ] && ! [ "$repo_def_file" -ef "$def_file" ]; then
-  repo_front_matter="$(read_front_matter "$repo_def_file")" || die "フロントマターが読めない: $repo_def_file"
-  while IFS= read -r line; do
-    [[ "$line" =~ ^[[:space:]]*(#.*)?$ ]] && continue
-    [[ "$line" =~ ^([^[:space:]:]+): ]] || die "フロントマターが読めない: $repo_def_file"
-    key="${BASH_REMATCH[1]}"
-    case "$key" in codex_model|codex_reasoning_effort) continue ;; esac
-    repo_value="$(fm_get "$line" "$key")"
-    user_value="$(fm_get "$front_matter" "$key")"
-    # GPT 側を止める向きは安全側なので、どちらかが false なら無効化として扱う。
-    if [ "$key" = codex_enabled ] && { [ "$repo_value" = false ] || [ "$codex_enabled" = false ]; }; then
-      codex_enabled="false"
-      continue
+load_agent_definition() {
+  resolve_status=""
+  resolve_reason=""
+  resolve_message=""
+  resolve_path=""
+  resolve_launch_exit=""
+  path_root=""
+  def_file=""
+  repo_def_file=""
+  definition_user=""
+  definition_project=""
+  front_matter=""
+  repo_front_matter=""
+  codex_home=""
+  codex_model=""
+  codex_effort=""
+  codex_sandbox=""
+  codex_enabled=""
+  role_body=""
+  repo_role_body=""
+  model_source=""
+  effort_source=""
+  project_applied=false
+  line=""
+  key=""
+  repo_value=""
+  user_value=""
+
+  case "$agent_name" in
+    */*|*\\*|.*)
+      resolve_fail invalid bad-agent-name "エージェント名に / \\ と先頭の . は使えない: $agent_name" "$agent_name"
+      return 1
+      ;;
+  esac
+
+  path_root="$(to_slash "$home_dir")"
+  def_file="$path_root/.claude/gpt-agents/$agent_name.md"
+  repo_def_file="$PWD/.claude/gpt-agents/$agent_name.md"
+  [ -f "$def_file" ] && definition_user="$def_file"
+  [ -f "$repo_def_file" ] && definition_project="$repo_def_file"
+  [ -n "$definition_user" ] || {
+    resolve_fail disabled definition-not-found "エージェント定義が見つからない: $agent_name (.claude/gpt-agents/$agent_name.md)" "$def_file"
+    return 1
+  }
+
+  check_agent_runtime command || return 1
+  front_matter="$(read_front_matter "$def_file")" || {
+    resolve_fail unreadable front-matter-unreadable-user "フロントマターが読めない: $def_file" "$def_file"
+    return 1
+  }
+  [ -n "$front_matter" ] || {
+    resolve_fail unreadable front-matter-unreadable-user "フロントマターが読めない: $def_file" "$def_file"
+    return 1
+  }
+
+  codex_home="$(fm_get "$front_matter" codex_home)" || {
+    resolve_fail unreadable front-matter-unreadable-user "フロントマターが読めない: $def_file" "$def_file"
+    return 1
+  }
+  codex_model="$(fm_get "$front_matter" codex_model)" || {
+    resolve_fail unreadable front-matter-unreadable-user "フロントマターが読めない: $def_file" "$def_file"
+    return 1
+  }
+  codex_effort="$(fm_get "$front_matter" codex_reasoning_effort)" || {
+    resolve_fail unreadable front-matter-unreadable-user "フロントマターが読めない: $def_file" "$def_file"
+    return 1
+  }
+  codex_sandbox="$(fm_get "$front_matter" codex_sandbox)" || {
+    resolve_fail unreadable front-matter-unreadable-user "フロントマターが読めない: $def_file" "$def_file"
+    return 1
+  }
+  codex_enabled="$(fm_get "$front_matter" codex_enabled)" || {
+    resolve_fail unreadable front-matter-unreadable-user "フロントマターが読めない: $def_file" "$def_file"
+    return 1
+  }
+  if ! grep -q '^codex_enabled:' <<<"$front_matter"; then
+    codex_enabled=true
+  fi
+  [ -n "$codex_model" ] && model_source=user
+  [ -n "$codex_effort" ] && effort_source=user
+  role_body="$(read_role_body "$def_file")" || {
+    resolve_fail unreadable front-matter-unreadable-user "フロントマターが読めない: $def_file" "$def_file"
+    return 1
+  }
+  if [ -n "$definition_project" ] && ! [ "$repo_def_file" -ef "$def_file" ]; then
+    repo_front_matter="$(read_front_matter "$repo_def_file")" || {
+      resolve_fail unreadable front-matter-unreadable-project "フロントマターが読めない: $repo_def_file" "$repo_def_file"
+      return 1
+    }
+    while IFS= read -r line; do
+      [[ "$line" =~ ^[[:space:]]*(#.*)?$ ]] && continue
+      [[ "$line" =~ ^([^[:space:]:]+): ]] || {
+        resolve_fail unreadable front-matter-unreadable-project "フロントマターが読めない: $repo_def_file" "$repo_def_file"
+        return 1
+      }
+      key="${BASH_REMATCH[1]}"
+      case "$key" in codex_model|codex_reasoning_effort) continue ;; esac
+      repo_value="$(fm_get "$line" "$key")" || {
+        resolve_fail unreadable front-matter-unreadable-project "フロントマターが読めない: $repo_def_file" "$repo_def_file"
+        return 1
+      }
+      user_value="$(fm_get "$front_matter" "$key")" || {
+        resolve_fail unreadable front-matter-unreadable-user "フロントマターが読めない: $def_file" "$def_file"
+        return 1
+      }
+      if [ "$key" = codex_enabled ] && { [ "$repo_value" = false ] || [ "$codex_enabled" = false ]; }; then
+        codex_enabled=false
+        continue
+      fi
+      case "$key" in
+        codex_home)
+          repo_value="$(normalize_codex_home "$repo_value")" || {
+            resolve_fail unreadable front-matter-unreadable-project "フロントマターが読めない: $repo_def_file" "$repo_def_file"
+            return 1
+          }
+          user_value="$(normalize_codex_home "$user_value")" || {
+            resolve_fail unreadable front-matter-unreadable-user "フロントマターが読めない: $def_file" "$def_file"
+            return 1
+          }
+          ;;
+        codex_sandbox) [ -n "$user_value" ] || user_value=read-only ;;
+        codex_enabled) user_value="$codex_enabled" ;;
+      esac
+      if [ "$repo_value" != "$user_value" ]; then
+        resolve_fail invalid project-override-rejected "キー $key が利用者側の実効値と一致しない: $repo_def_file (リポジトリ側の定義で変えられるのは codex_model と codex_reasoning_effort だけ)" "$repo_def_file"
+        return 1
+      fi
+    done <<<"$repo_front_matter"
+    project_applied=true
+    if grep -q '^codex_model:' <<<"$repo_front_matter"; then
+      codex_model="$(fm_get "$repo_front_matter" codex_model)" || {
+        resolve_fail unreadable front-matter-unreadable-project "フロントマターが読めない: $repo_def_file" "$repo_def_file"
+        return 1
+      }
+      model_source=""
+      [ -n "$codex_model" ] && model_source=project
     fi
-    case "$key" in
-      codex_home)
-        repo_value="$(normalize_codex_home "$repo_value")"
-        user_value="$(normalize_codex_home "$user_value")" ;;
-      codex_sandbox) [ -n "$user_value" ] || user_value="read-only" ;;
-      codex_enabled) user_value="$codex_enabled" ;;
+    if grep -q '^codex_reasoning_effort:' <<<"$repo_front_matter"; then
+      codex_effort="$(fm_get "$repo_front_matter" codex_reasoning_effort)" || {
+        resolve_fail unreadable front-matter-unreadable-project "フロントマターが読めない: $repo_def_file" "$repo_def_file"
+        return 1
+      }
+      effort_source=""
+      [ -n "$codex_effort" ] && effort_source=project
+    fi
+    repo_role_body="$(read_role_body "$repo_def_file")" || {
+      resolve_fail unreadable front-matter-unreadable-project "フロントマターが読めない: $repo_def_file" "$repo_def_file"
+      return 1
+    }
+    case "$repo_role_body" in *[![:space:]]*) role_body="$repo_role_body" ;; esac
+  fi
+
+  case "$codex_enabled" in
+    true) ;;
+    false)
+      resolve_fail disabled codex-disabled "GPT 側が無効化されている (codex_enabled: false): $def_file" "$def_file"
+      return 1
+      ;;
+    *)
+      resolve_fail invalid bad-enabled "codex_enabled の値が不正である: $codex_enabled (true または false)" "$def_file"
+      return 1
+      ;;
+  esac
+
+  [ -n "$codex_home" ] || {
+    resolve_fail invalid codex-home-unset "フロントマターに codex_home が無い: $def_file" "$def_file"
+    return 1
+  }
+  [ -n "$codex_model" ] || {
+    resolve_fail disabled model-unset "codex_model が未設定である(GPT 側を使わない): $def_file" "$def_file"
+    return 1
+  }
+  if [ -z "$codex_effort" ]; then
+    codex_effort=medium
+    effort_source=default
+  fi
+  [ -n "$codex_sandbox" ] || codex_sandbox=read-only
+
+  case "$codex_effort" in
+    low|medium|high|xhigh|max|ultra) ;;
+    *)
+      resolve_fail invalid bad-effort "effort の値が不正である: $codex_effort (low|medium|high|xhigh|max|ultra)" "$def_file"
+      return 1
+      ;;
+  esac
+  case "$codex_sandbox" in
+    read-only|workspace-write) ;;
+    *)
+      resolve_fail invalid bad-sandbox "codex_sandbox の値が不正である: $codex_sandbox (read-only または workspace-write)" "$def_file"
+      return 1
+      ;;
+  esac
+
+  if [ -n "$effort_override" ]; then
+    codex_effort="$effort_override"
+    effort_source=option
+  fi
+  return 0
+}
+
+check_agent_runtime() {
+  runtime_phase=""
+  expanded_codex_home=""
+  normalized_workdir=""
+  workdir_candidate=""
+  resolve_status=""
+  resolve_reason=""
+  resolve_message=""
+  resolve_path=""
+  resolve_launch_exit=""
+  runtime_phase="${1:-}"
+
+  if [ "$runtime_phase" = command ]; then
+    command -v codex >/dev/null 2>&1 || {
+      resolve_fail disabled codex-not-found "codex コマンドが PATH に無い (docs/setup.md の導入手順を参照)" "codex"
+      return 1
+    }
+    return 0
+  fi
+
+  expanded_codex_home="$(expand_codex_home "$codex_home")" || {
+    resolve_fail invalid codex-home-missing "codex_home が存在しない: $codex_home (docs/setup.md のログイン手順を参照)" "$codex_home"
+    return 1
+  }
+  codex_home="$expanded_codex_home"
+  [ -d "$codex_home" ] || {
+    resolve_fail invalid codex-home-missing "codex_home が存在しない: $codex_home (docs/setup.md のログイン手順を参照)" "$codex_home"
+    return 1
+  }
+
+  workdir_candidate="$workdir_option"
+  [ -n "$workdir_candidate" ] || workdir_candidate="$PWD"
+  normalized_workdir="$(to_windows_path "$workdir_candidate")" || {
+    resolve_fail invalid workdir-missing "作業ディレクトリが存在しない: $workdir_candidate" "$workdir_candidate"
+    return 1
+  }
+  workdir="$normalized_workdir"
+  [ -d "$workdir" ] || {
+    resolve_fail invalid workdir-missing "作業ディレクトリが存在しない: $workdir" "$workdir"
+    return 1
+  }
+  return 0
+}
+
+json_escape() {
+  json_value=""
+  json_bytes=""
+  json_byte=""
+  json_oct=""
+  json_hex=""
+  json_char=""
+  json_value="$1"
+  json_bytes="$(printf '%s' "$json_value" | LC_ALL=C od -An -v -t u1)" || return 1
+  for json_byte in $json_bytes; do
+    case "$json_byte" in
+      92) printf '\\\\' ;;
+      34) printf '\\"' ;;
+      10) printf '\\n' ;;
+      13) printf '\\r' ;;
+      9) printf '\\t' ;;
+      0|1|2|3|4|5|6|7|8|11|12|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31)
+        printf -v json_hex '%02x' "$json_byte"
+        printf '\\u00%s' "$json_hex"
+        ;;
+      *)
+        printf -v json_oct '%03o' "$json_byte"
+        printf -v json_char '%b' "\\$json_oct"
+        printf '%s' "$json_char"
+        ;;
     esac
-    [ "$repo_value" = "$user_value" ] || die "キー $key が利用者側の実効値と一致しない: $repo_def_file (リポジトリ側の定義で変えられるのは codex_model と codex_reasoning_effort だけ)"
-  done <<<"$repo_front_matter"
-  if grep -q '^codex_model:' <<<"$repo_front_matter"; then
-    codex_model="$(fm_get "$repo_front_matter" codex_model)"
+  done
+}
+
+json_quote() {
+  printf '"'
+  json_escape "$1"
+  printf '"'
+}
+
+json_nullable() {
+  if [ -n "$1" ]; then
+    json_quote "$1"
+  else
+    printf 'null'
   fi
-  if grep -q '^codex_reasoning_effort:' <<<"$repo_front_matter"; then
-    codex_effort="$(fm_get "$repo_front_matter" codex_reasoning_effort)"
+}
+
+print_describe_json() {
+  describe_status=""
+  describe_launch_exit=null
+  describe_status="${resolve_status:-ok}"
+  [ -z "$resolve_launch_exit" ] || describe_launch_exit="$resolve_launch_exit"
+
+  printf '{"protocol":1,"status":'
+  json_quote "$describe_status"
+  printf ',"reason":'
+  json_nullable "$resolve_reason"
+  printf ',"launch_exit":%s,"message":' "$describe_launch_exit"
+  json_nullable "$resolve_message"
+  printf ',"agent":'
+  json_quote "$agent_name"
+  printf ',"definition":{"user":'
+  json_nullable "${definition_user:+$(to_windows_path "$definition_user")}"
+  printf ',"project":'
+  json_nullable "${definition_project:+$(to_windows_path "$definition_project")}"
+  printf ',"project_applied":%s},"model":' "$project_applied"
+  json_nullable "$codex_model"
+  printf ',"model_source":'
+  json_nullable "$model_source"
+  printf ',"effort":'
+  json_nullable "$codex_effort"
+  printf ',"effort_source":'
+  json_nullable "$effort_source"
+  printf ',"sandbox":'
+  json_nullable "$codex_sandbox"
+  printf ',"approval_policy":"never","codex_home":'
+  json_nullable "$codex_home"
+  printf ',"workdir":'
+  json_nullable "$workdir"
+  printf '}\n'
+}
+
+if [ "$describe_mode" -eq 1 ]; then
+  describe_saved_status=""
+  describe_saved_reason=""
+  describe_saved_message=""
+  describe_saved_path=""
+  describe_saved_launch_exit=""
+  load_agent_definition || true
+  describe_saved_status="$resolve_status"
+  describe_saved_reason="$resolve_reason"
+  describe_saved_message="$resolve_message"
+  describe_saved_path="$resolve_path"
+  describe_saved_launch_exit="$resolve_launch_exit"
+  if [ -n "$codex_home" ]; then
+    check_agent_runtime paths || true
+    if [ -n "$describe_saved_status" ]; then
+      resolve_status="$describe_saved_status"
+      resolve_reason="$describe_saved_reason"
+      resolve_message="$describe_saved_message"
+      resolve_path="$describe_saved_path"
+      resolve_launch_exit="$describe_saved_launch_exit"
+    fi
+  elif [ -z "$resolve_status" ]; then
+    check_agent_runtime paths || true
   fi
-  repo_role_body="$(read_role_body "$repo_def_file")"
-  case "$repo_role_body" in *[![:space:]]*) role_body="$repo_role_body" ;; esac
+  print_describe_json
+  exit 0
 fi
 
-case "$codex_enabled" in
-  true) ;;
-  false) die_missing "GPT 側が無効化されている (codex_enabled: false): $def_file" ;;
-  *) die "codex_enabled の値が不正である: $codex_enabled (true または false)" ;;
-esac
-
-[ -n "$codex_home" ] || die "フロントマターに codex_home が無い: $def_file"
-# codex_model が無い、または空の定義は「GPT 側を使わない」設定として扱う。
-# 区分ごとに GPT 経路の有無を切り替える手段であり、codex_enabled(3 定義をまとめて止める切替)とは役割が異なる。
-# キー名の誤記もここで Claude 側へ倒れるため、呼び出し側は報告の冒頭に理由を書く。
-[ -n "$codex_model" ] || die_missing "codex_model が未設定である(GPT 側を使わない): $def_file"
-[ -n "$codex_effort" ] || codex_effort="medium"
-# 既定は安全側の read-only。書き込みが必要な定義だけが明示する。
-[ -n "$codex_sandbox" ] || codex_sandbox="read-only"
-
-validate_effort "$codex_effort"
-
-case "$codex_sandbox" in
-  read-only|workspace-write) ;;
-  *) die "codex_sandbox の値が不正である: $codex_sandbox (read-only または workspace-write)" ;;
-esac
-
-[ -z "$effort_override" ] || codex_effort="$effort_override"
-
-codex_home="$(expand_codex_home "$codex_home")"
-
-[ -d "$codex_home" ] || die "codex_home が存在しない: $codex_home (docs/setup.md のログイン手順を参照)"
-
-workdir_option="$workdir"
-[ -n "$workdir" ] || workdir="$PWD"
-workdir="$(to_windows_path "$workdir")"
-[ -d "$workdir" ] || die "作業ディレクトリが存在しない: $workdir"
+if ! load_agent_definition; then
+  if [ "$resolve_status" = disabled ]; then
+    die_missing "$resolve_message"
+  fi
+  die "$resolve_message"
+fi
+if ! check_agent_runtime paths; then
+  die "$resolve_message"
+fi
 
 # 依頼文は標準入力から読む。端末から起動されたときは待ち続けてしまうので先に止める。
 [ -t 0 ] && die "依頼文が標準入力から渡されていない"
