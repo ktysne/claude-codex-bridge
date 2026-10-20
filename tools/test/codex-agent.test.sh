@@ -398,6 +398,108 @@ run_describe() {
   RC=$?
 }
 
+prepare_copy_checkout() {
+  COPY_CHECKOUT="$root/copy-checkout"
+  mkdir -p "$COPY_CHECKOUT/tools" "$COPY_CHECKOUT/.claude/agents" "$COPY_CHECKOUT/.claude/gpt-agents"
+  cp "$repo_root/tools/codex-agent.sh" "$COPY_CHECKOUT/tools/codex-agent.sh"
+  cp "$repo_root/tools/codex-agent-hook.js" "$COPY_CHECKOUT/tools/codex-agent-hook.js"
+  cp "$repo_root"/.claude/agents/*.md "$COPY_CHECKOUT/.claude/agents/"
+  cp "$repo_root"/.claude/gpt-agents/*.md "$COPY_CHECKOUT/.claude/gpt-agents/"
+}
+
+deploy_all_copy_items() {
+  local claude_home="$1" source name
+  mkdir -p "$root/home/.claude/tools" "$root/home/.claude/gpt-agents" "$claude_home/agents"
+  cp "$COPY_CHECKOUT/tools/codex-agent.sh" "$root/home/.claude/tools/codex-agent.sh"
+  cp "$COPY_CHECKOUT/tools/codex-agent-hook.js" "$root/home/.claude/tools/codex-agent-hook.js"
+  for source in "$COPY_CHECKOUT/.claude/gpt-agents/"*.md; do
+    [ -f "$source" ] || continue
+    name="${source##*/}"
+    cp "$source" "$root/home/.claude/gpt-agents/$name"
+  done
+  for source in "$COPY_CHECKOUT/.claude/agents/"*.md; do
+    [ -f "$source" ] || continue
+    name="${source##*/}"
+    cp "$source" "$claude_home/agents/$name"
+  done
+}
+
+run_check_copies() {
+  local path="$root/bin:/usr/bin:/bin" out="$root/out"
+  [ -z "$GIT_BIN_DIR" ] || path="$path:$GIT_BIN_DIR"
+  [ -z "$EXTRA_PATH" ] || path="$path:$EXTRA_PATH"
+  (
+    cd "$COPY_CHECKOUT" || exit 99
+    export USERPROFILE="$root/home" HOME="$root/home" PATH="$path" TMPDIR="$root/tmp" GIT_CEILING_DIRECTORIES="$TEST_TMP"
+    unset CLAUDE_CONFIG_DIR
+    if [ -n "$STDIN_FILE" ]; then
+      env ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} "$BASH_BIN" tools/codex-agent.sh --check-copies "$@" <"$STDIN_FILE" >"$out" 2>"$root/err"
+    elif [ "$STDIN_HERE_STRING" -eq 1 ]; then
+      env ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} "$BASH_BIN" tools/codex-agent.sh --check-copies "$@" <<<"$REQ" >"$out" 2>"$root/err"
+    else
+      env ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} "$BASH_BIN" tools/codex-agent.sh --check-copies "$@" </dev/null >"$out" 2>"$root/err"
+    fi
+  )
+  RC=$?
+}
+
+expect_check_copies_json() {
+  node -e '
+    const fs = require("fs");
+    const raw = fs.readFileSync(process.argv[1], "utf8");
+    if (!raw.endsWith("\n") || raw.indexOf("\n") !== raw.length - 1 || raw.includes("\r")) {
+      throw new Error("標準出力が JSON 1 行ではない");
+    }
+    const value = JSON.parse(raw.slice(0, -1));
+    if (value.protocol !== 1 || value.scope !== "user-home") throw new Error("protocol または scope が不正");
+    if (!Array.isArray(value.items)) throw new Error("items が配列ではない");
+    if (JSON.stringify(value.order) !== JSON.stringify(["script", "gpt-agent", "claude-agent"])) throw new Error("order が不正");
+    if (JSON.stringify(value.after) !== JSON.stringify([
+      { id: "restart-claude-code", when: "claude-agent" },
+      { id: "review-role-section", when: "any" }
+    ])) throw new Error("after が不正");
+    const kindOrder = { script: 0, "gpt-agent": 1, "claude-agent": 2 };
+    const sorted = [...value.items].sort((left, right) =>
+      kindOrder[left.kind] - kindOrder[right.kind] || (left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
+    );
+    if (value.items.some((item, index) => item.id !== sorted[index].id)) throw new Error("items の並びが不正");
+    for (const item of value.items) {
+      for (const key of ["id", "kind", "name", "source", "target", "status", "reason", "source_sha256", "observed_sha256", "content", "requires"]) {
+        if (!(key in item)) throw new Error(key + " が無い: " + item.id);
+      }
+    }
+  ' "$root/out" 2>"$root/node.err" || fail "JSON の形式が不正: $(cat "$root/node.err")"
+}
+
+expect_copy_item_fields() {
+  node -e '
+    const fs = require("fs");
+    const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const item = value.items.find((candidate) => candidate.id === process.argv[2]);
+    if (!item) throw new Error("項目が無い: " + process.argv[2]);
+    const expected = JSON.parse(process.argv[3]);
+    for (const [key, wanted] of Object.entries(expected)) {
+      if (JSON.stringify(item[key]) !== JSON.stringify(wanted)) {
+        throw new Error(key + " が期待と違う: " + JSON.stringify(item[key]));
+      }
+    }
+  ' "$root/out" "$1" "$2" 2>"$root/node.err" || fail "項目 $1 が不正: $(cat "$root/node.err")"
+}
+
+expect_all_copy_items_status() {
+  node -e '
+    const fs = require("fs");
+    const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const expected = process.argv[2];
+    const bad = value.items.filter((item) => item.status !== expected || item.content !== null);
+    if (bad.length) throw new Error("一致しない項目: " + bad.map((item) => item.id + "=" + item.status).join(", "));
+  ' "$root/out" "$1" 2>"$root/node.err" || fail "全項目の状態が不正: $(cat "$root/node.err")"
+}
+
+copy_tree_snapshot() {
+  find "$1" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum 2>/dev/null
+}
+
 expect_describe_json() {
   node -e '
     const fs = require("fs");
@@ -3164,6 +3266,355 @@ t_shipped_plain_scalars() {
   done
 }
 
+t_check_copies_all_match_and_config_dir() {
+  local claude_home="$root/home/.claude" expected_target
+  prepare_copy_checkout
+  deploy_all_copy_items "$claude_home"
+  STDIN_HERE_STRING=1
+  run_check_copies
+  expect_rc 0
+  expect_check_copies_json
+  expect_all_copy_items_status match
+  expect_copy_item_fields script:codex-agent.sh '{"reason":null,"content":null}'
+  node -e '
+    const fs = require("fs");
+    const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    if (value.head !== null || value.dirty !== null) throw new Error("Git が無い checkout の head と dirty は null である");
+  ' "$root/out" 2>"$root/node.err" || fail "Git が無い checkout の値が不正: $(cat "$root/node.err")"
+
+  claude_home="$root/claude-config"
+  deploy_all_copy_items "$claude_home"
+  EXTRA_ENV=("CLAUDE_CONFIG_DIR=$claude_home")
+  run_check_copies
+  expect_rc 0
+  expect_check_copies_json
+  expect_all_copy_items_status match
+  expected_target="$(norm_path "$claude_home/agents/impl-hard.md")"
+  expect_copy_item_fields claude-agent:impl-hard.md "{\"target\":\"$expected_target\",\"status\":\"match\"}"
+  expect_no_codex_call
+}
+
+t_check_copies_stale_script_content() {
+  local target="$root/home/.claude/tools/codex-agent.sh"
+  prepare_copy_checkout
+  deploy_all_copy_items "$root/home/.claude"
+  printf '\n古い写し\n' >>"$target"
+  run_check_copies
+  expect_rc 0
+  expect_check_copies_json
+  node -e '
+    const fs = require("fs");
+    const crypto = require("crypto");
+    const data = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const source = fs.readFileSync(process.argv[2]);
+    const target = fs.readFileSync(process.argv[3]);
+    const item = data.items.find((candidate) => candidate.id === "script:codex-agent.sh");
+    const hash = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
+    if (item.status !== "stale" || item.reason !== "content-differs") throw new Error("script が stale ではない");
+    if (item.content !== source.toString("utf8").replace(/\r\n/g, "\n")) throw new Error("content が正本と一致しない");
+    if (item.source_sha256 !== hash(source) || item.observed_sha256 !== hash(target)) throw new Error("SHA-256 が不正");
+  ' "$root/out" "$COPY_CHECKOUT/tools/codex-agent.sh" "$target" 2>"$root/node.err" || {
+    fail "script の stale 情報が不正: $(cat "$root/node.err")"
+  }
+  expect_no_codex_call
+}
+
+t_check_copies_line_endings() {
+  local file
+  prepare_copy_checkout
+  deploy_all_copy_items "$root/home/.claude"
+  for file in "$root/home/.claude/tools/"* "$root/home/.claude/gpt-agents/"*.md "$root/home/.claude/agents/"*.md; do
+    [ -f "$file" ] || continue
+    sed 's/$/\r/' "$file" >"$file.crlf"
+    mv "$file.crlf" "$file"
+  done
+  run_check_copies
+  expect_rc 0
+  expect_check_copies_json
+  node -e '
+    const fs = require("fs");
+    const data = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    for (const item of data.items) {
+      if (item.id === "script:codex-agent.sh") {
+        if (item.status !== "stale" || item.reason !== "line-ending") throw new Error("codex-agent.sh の CR が stale と判定されない");
+      } else if (item.status !== "match" || item.content !== null) {
+        throw new Error(item.id + " の CRLF が match にならない");
+      }
+    }
+  ' "$root/out" 2>"$root/node.err" || fail "行末の照合が不正: $(cat "$root/node.err")"
+  expect_no_codex_call
+}
+
+write_custom_gpt_copy() {
+  local source="$COPY_CHECKOUT/.claude/gpt-agents/impl-hard.md"
+  local target="$root/home/.claude/gpt-agents/impl-hard.md"
+  local custom_home=$'codex_home: "D:\\\\custom" # "引用"\t\\\\ path'
+  local custom_model='codex_model: "local-model" # model を保持'
+  local custom_effort='codex_reasoning_effort: low # effort を保持'
+  local custom_enabled='codex_enabled: "false" # enabled を保持'
+  CUSTOM_GPT_HOME="$custom_home" CUSTOM_GPT_MODEL="$custom_model" \
+    CUSTOM_GPT_EFFORT="$custom_effort" CUSTOM_GPT_ENABLED="$custom_enabled" \
+    OMIT_GPT_MODEL="${OMIT_GPT_MODEL:-0}" OMIT_GPT_ENABLED="${OMIT_GPT_ENABLED:-0}" \
+    STALE_GPT_BODY="${STALE_GPT_BODY:-0}" awk '
+      NR == 1 { print; in_front = ($0 == "---"); next }
+      in_front && $0 == "---" { print; in_front = 0; next }
+      in_front {
+        if (/^codex_home:/) print ENVIRON["CUSTOM_GPT_HOME"]
+        else if (/^codex_model:/) {
+          if (ENVIRON["OMIT_GPT_MODEL"] != "1") print ENVIRON["CUSTOM_GPT_MODEL"]
+        }
+        else if (/^codex_reasoning_effort:/) print ENVIRON["CUSTOM_GPT_EFFORT"]
+        else if (/^codex_enabled:/) {
+          if (ENVIRON["OMIT_GPT_ENABLED"] != "1") print ENVIRON["CUSTOM_GPT_ENABLED"]
+        }
+        else print
+        next
+      }
+      ENVIRON["STALE_GPT_BODY"] == "1" && !changed && $0 != "" {
+        print "古い本文"
+        changed = 1
+        next
+      }
+      { print }
+    ' "$source" >"$target"
+}
+
+t_check_copies_gpt_key_carryover() {
+  prepare_copy_checkout
+  mkdir -p "$root/home/.claude/gpt-agents"
+
+  STALE_GPT_BODY=1 OMIT_GPT_MODEL=0 OMIT_GPT_ENABLED=0 write_custom_gpt_copy
+  run_check_copies
+  expect_rc 0
+  expect_check_copies_json
+  node -e '
+    const fs = require("fs");
+    const data = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const item = data.items.find((candidate) => candidate.id === "gpt-agent:impl-hard.md");
+    const lines = [
+      "codex_home: \"D:\\\\custom\" # \"引用\"\t\\\\ path",
+      "codex_model: \"local-model\" # model を保持",
+      "codex_reasoning_effort: low # effort を保持",
+      "codex_enabled: \"false\" # enabled を保持"
+    ];
+    if (item.status !== "stale" || item.reason !== "content-differs") throw new Error("本文の古さが stale にならない");
+    for (const line of lines) if (!item.content.includes(line)) throw new Error("引き継いだ行が無い: " + JSON.stringify(line));
+  ' "$root/out" 2>"$root/node.err" || fail "GPT 側のキーを引き継げない: $(cat "$root/node.err")"
+
+  STALE_GPT_BODY=0 OMIT_GPT_MODEL=0 OMIT_GPT_ENABLED=0 write_custom_gpt_copy
+  run_check_copies
+  expect_rc 0
+  expect_check_copies_json
+  expect_copy_item_fields gpt-agent:impl-hard.md '{"status":"match","reason":null,"content":null}'
+
+  OMIT_GPT_MODEL=1 OMIT_GPT_ENABLED=1 write_custom_gpt_copy
+  run_check_copies
+  expect_rc 0
+  expect_check_copies_json
+  node -e '
+    const fs = require("fs");
+    const data = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const item = data.items.find((candidate) => candidate.id === "gpt-agent:impl-hard.md");
+    const source = fs.readFileSync(process.argv[2], "utf8");
+    const sourceEnabled = source.match(/^codex_enabled:.*$/m)[0];
+    if (item.status !== "stale" || item.reason !== "content-differs") throw new Error("不足した設定が stale にならない");
+    if (/^codex_model:/m.test(item.content)) throw new Error("codex_model の削除を反映できない");
+    if (!item.content.includes(sourceEnabled)) throw new Error("codex_enabled の正本行を復元できない");
+  ' "$root/out" "$COPY_CHECKOUT/.claude/gpt-agents/impl-hard.md" 2>"$root/node.err" || {
+    fail "GPT 側のキーの有無の扱いが不正: $(cat "$root/node.err")"
+  }
+  expect_no_codex_call
+}
+
+write_custom_claude_copy() {
+  local source="$COPY_CHECKOUT/.claude/agents/impl-hard.md"
+  local target="$root/home/.claude/agents/impl-hard.md"
+  local with_nested="$1"
+  CUSTOM_CLAUDE_MODEL='model: "claude-local" # model を保持' \
+    CUSTOM_CLAUDE_EFFORT='effort: "high" # effort を保持' WITH_NESTED="$with_nested" awk '
+      NR == 1 { print; in_front = ($0 == "---"); next }
+      in_front && $0 == "---" { print; in_front = 0; next }
+      in_front && /^model:/ { print ENVIRON["CUSTOM_CLAUDE_MODEL"]; next }
+      in_front && /^effort:/ { print ENVIRON["CUSTOM_CLAUDE_EFFORT"]; next }
+      in_front && $0 == "hooks:" {
+        print
+        if (ENVIRON["WITH_NESTED"] == "1") print "  model: nested-hook-value"
+        next
+      }
+      { print }
+    ' "$source" >"$target"
+}
+
+t_check_copies_claude_key_carryover() {
+  prepare_copy_checkout
+  mkdir -p "$root/home/.claude/agents"
+  write_custom_claude_copy 1
+  run_check_copies
+  expect_rc 0
+  expect_check_copies_json
+  node -e '
+    const fs = require("fs");
+    const data = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const item = data.items.find((candidate) => candidate.id === "claude-agent:impl-hard.md");
+    if (item.status !== "stale" || item.reason !== "content-differs") throw new Error("hooks の追加行が stale にならない");
+    if (!item.content.includes("model: \"claude-local\" # model を保持")) throw new Error("model を引き継げない");
+    if (!item.content.includes("effort: \"high\" # effort を保持")) throw new Error("effort を引き継げない");
+    if (item.content.includes("nested-hook-value")) throw new Error("hooks 配下のキーを引き継いだ");
+  ' "$root/out" 2>"$root/node.err" || fail "Claude 側のキーを引き継げない: $(cat "$root/node.err")"
+
+  write_custom_claude_copy 0
+  run_check_copies
+  expect_rc 0
+  expect_check_copies_json
+  expect_copy_item_fields claude-agent:impl-hard.md '{"status":"match","reason":null,"content":null}'
+  expect_no_codex_call
+}
+
+t_check_copies_missing_and_requires() {
+  prepare_copy_checkout
+  mkdir -p "$root/home/.claude/agents" "$root/work/.claude/agents"
+  cp "$COPY_CHECKOUT/.claude/agents/codex-review.md" "$root/home/.claude/agents/codex-review.md"
+  cp "$COPY_CHECKOUT/.claude/agents/impl-hard.md" "$root/work/.claude/agents/impl-hard.md"
+  run_check_copies
+  expect_rc 0
+  expect_check_copies_json
+  expect_copy_item_fields claude-agent:codex-review.md '{"status":"match","requires":["script:codex-agent.sh","script:codex-agent-hook.js","gpt-agent:codex-review.md"]}'
+  expect_copy_item_fields gpt-agent:codex-review.md '{"status":"missing","reason":"required","observed_sha256":null,"requires":["script:codex-agent.sh"]}'
+  expect_copy_item_fields script:codex-agent.sh '{"status":"missing","reason":"required"}'
+  expect_copy_item_fields script:codex-agent-hook.js '{"status":"missing","reason":"required"}'
+  expect_copy_item_fields gpt-agent:impl-hard.md '{"status":"missing","reason":"required","requires":["script:codex-agent.sh"]}'
+  expect_copy_item_fields claude-agent:impl-hard.md '{"status":"missing","reason":"required","requires":["script:codex-agent.sh","script:codex-agent-hook.js","gpt-agent:impl-hard.md","claude-agent:impl-hard-claude.md"]}'
+  expect_copy_item_fields claude-agent:impl-hard-claude.md '{"status":"missing","reason":"required"}'
+  expect_copy_item_fields claude-agent:review-claude.md '{"status":"not-deployed","reason":null,"content":null}'
+  expect_copy_item_fields claude-agent:impl-light-claude.md '{"status":"not-deployed","reason":null,"content":null}'
+  expect_copy_item_fields claude-agent:impl-hard.md "{\"target\":\"$(norm_path "$root/home/.claude/agents/impl-hard.md")\"}"
+  node -e '
+    const fs = require("fs");
+    const data = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const item = data.items.find((candidate) => candidate.id === "gpt-agent:codex-review.md");
+    if (typeof item.content !== "string" || item.content.length === 0) throw new Error("missing の再配置内容が無い");
+    if (!/^[0-9a-f]{64}$/.test(item.source_sha256)) throw new Error("正本の SHA-256 が無い");
+  ' "$root/out" 2>"$root/node.err" || fail "missing 項目の内容が不正: $(cat "$root/node.err")"
+  expect_no_codex_call
+}
+
+t_check_copies_unreadable_front_matter() {
+  prepare_copy_checkout
+  mkdir -p "$root/home/.claude/agents"
+  printf '%s\n' '---' 'name: codex-review' '本文に閉じる区切りが無い' >"$root/home/.claude/agents/codex-review.md"
+  run_check_copies
+  expect_rc 0
+  expect_check_copies_json
+  expect_copy_item_fields claude-agent:codex-review.md '{"status":"unreadable","reason":"front-matter-unreadable","content":null,"requires":["script:codex-agent.sh","script:codex-agent-hook.js","gpt-agent:codex-review.md"]}'
+  node -e '
+    const fs = require("fs");
+    const data = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const item = data.items.find((candidate) => candidate.id === "claude-agent:codex-review.md");
+    if (!/^[0-9a-f]{64}$/.test(item.observed_sha256)) throw new Error("写しの SHA-256 が無い");
+  ' "$root/out" 2>"$root/node.err" || fail "読めない定義の SHA-256 が不正: $(cat "$root/node.err")"
+  expect_no_codex_call
+}
+
+t_check_copies_requires_checkout() {
+  prepare_copy_checkout
+  mkdir -p "$root/outside/tools"
+  cp "$COPY_CHECKOUT/tools/codex-agent.sh" "$root/outside/tools/codex-agent.sh"
+  COPY_CHECKOUT="$root/outside"
+  run_check_copies
+  expect_rc 2
+  expect_eq "checkout 外から実行した標準出力" "" "$(cat "$root/out")"
+  grep -q 'checkout' "$root/err" || fail "checkout から実行する旨が標準エラーに無い"
+  expect_no_codex_call
+}
+
+t_check_copies_argument_errors() {
+  prepare_copy_checkout
+  for args in \
+    "$AGENT" \
+    "--describe $AGENT" \
+    "--wait cxa-run-1" \
+    "--header-of $root/output" \
+    "--new-prompt $AGENT" \
+    "-C $root/work" \
+    "--effort low" \
+    "-h" \
+    "--help"; do
+    run_check_copies $args
+    expect_rc 2
+    expect_eq "併用時の標準出力($args)" "" "$(cat "$root/out")"
+  done
+  run_check_copies -h --check-copies
+  expect_rc 2
+  expect_eq "用法より前の併用時の標準出力" "" "$(cat "$root/out")"
+  run_check_copies --check-copies
+  expect_rc 2
+  expect_eq "重複時の標準出力" "" "$(cat "$root/out")"
+  expect_no_codex_call
+  [ ! -d "$root/home/.claude/codex-agent/prompts" ] || fail "--new-prompt の置き場が作られた"
+}
+
+t_check_copies_has_no_side_effects() {
+  local before_home before_checkout before_tmp after_home after_checkout after_tmp
+  prepare_copy_checkout
+  deploy_all_copy_items "$root/home/.claude"
+  mkdir -p "$root/home/.claude/codex-agent/logs"
+  printf 'preserve\n' >"$root/home/.claude/codex-agent/logs/existing.log"
+  before_home="$(copy_tree_snapshot "$root/home")"
+  before_checkout="$(copy_tree_snapshot "$COPY_CHECKOUT")"
+  before_tmp="$(copy_tree_snapshot "$root/tmp")"
+  REQ='check-copies は依頼文を読まない'
+  STDIN_HERE_STRING=1
+  run_check_copies
+  expect_rc 0
+  expect_check_copies_json
+  after_home="$(copy_tree_snapshot "$root/home")"
+  after_checkout="$(copy_tree_snapshot "$COPY_CHECKOUT")"
+  after_tmp="$(copy_tree_snapshot "$root/tmp")"
+  expect_eq "ホームのファイル一覧と内容" "$before_home" "$after_home"
+  expect_eq "checkout のファイル一覧と内容" "$before_checkout" "$after_checkout"
+  expect_eq "一時ディレクトリのファイル一覧と内容" "$before_tmp" "$after_tmp"
+  expect_no_codex_call
+}
+
+t_check_copies_head_and_dirty() {
+  local expected_head
+  if ! command -v git >/dev/null 2>&1; then
+    skip "git が無い"
+    return
+  fi
+  prepare_copy_checkout
+  deploy_all_copy_items "$root/home/.claude"
+  (
+    cd "$COPY_CHECKOUT" || exit 99
+    git init -q
+    git config user.name "Codex Test"
+    git config user.email "codex-test@example.invalid"
+    git add .claude tools
+    git -c user.name="Codex Test" -c user.email="codex-test@example.invalid" commit -qm initial
+    printf '対象外\n' >README.md
+  ) || { fail "偽 checkout の Git を準備できない"; return; }
+  expected_head="$(git -C "$COPY_CHECKOUT" rev-parse HEAD)"
+  run_check_copies
+  expect_rc 0
+  expect_check_copies_json
+  node -e '
+    const fs = require("fs");
+    const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    if (value.head !== process.argv[2] || value.dirty !== false) throw new Error("HEAD または clean 状態が不正");
+  ' "$root/out" "$expected_head" 2>"$root/node.err" || fail "clean checkout の値が不正: $(cat "$root/node.err")"
+
+  printf '\n// checkout の正本を変更\n' >>"$COPY_CHECKOUT/tools/codex-agent-hook.js"
+  run_check_copies
+  expect_rc 0
+  expect_check_copies_json
+  node -e '
+    const fs = require("fs");
+    const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    if (value.head !== process.argv[2] || value.dirty !== true) throw new Error("dirty 状態が不正");
+  ' "$root/out" "$expected_head" 2>"$root/node.err" || fail "対象ファイルの変更を dirty と判定できない: $(cat "$root/node.err")"
+  expect_no_codex_call
+}
+
 t_real_home_untouched() {
   local dir="$REAL_HOME/.claude/codex-agent/logs" found
   found="$(ls -A "$dir" 2>/dev/null | grep -F -- "$AGENT")"
@@ -3284,6 +3735,17 @@ run_case "終了コード 3: codex が PATH に無い" t_exit3_no_codex
 run_case "終了コード 3: codex_enabled: false" t_exit3_disabled
 run_case "終了コード 3: codex_model キーなし" t_exit3_no_model_key
 run_case "終了コード 3: codex_model が空" t_exit3_empty_model
+run_case "--check-copies: 全項目一致と CLAUDE_CONFIG_DIR の配置先" t_check_copies_all_match_and_config_dir
+run_case "--check-copies: script の stale 内容と SHA-256" t_check_copies_stale_script_content
+run_case "--check-copies: script の CRLF と定義の CRLF" t_check_copies_line_endings
+run_case "--check-copies: GPT 側のキーを引き継ぎ、キーの不在を保つ" t_check_copies_gpt_key_carryover
+run_case "--check-copies: Claude 側の model と effort を引き継ぎ hooks 配下を無視する" t_check_copies_claude_key_carryover
+run_case "--check-copies: missing、not-deployed、requires を判定する" t_check_copies_missing_and_requires
+run_case "--check-copies: 閉じていないフロントマターを unreadable にする" t_check_copies_unreadable_front_matter
+run_case "--check-copies: checkout 以外からの実行を拒否する" t_check_copies_requires_checkout
+run_case "--check-copies: 併用引数を拒否し JSON を出さない" t_check_copies_argument_errors
+run_case "--check-copies: 標準入力とファイルに副作用を起こさない" t_check_copies_has_no_side_effects
+run_case "--check-copies: HEAD と対象ファイルの dirty を返す" t_check_copies_head_and_dirty
 run_case "--describe: ホーム定義だけの実効値を JSON で返す" t_describe_home_only
 run_case "--describe: プロジェクト側の model と effort を適用する" t_describe_project_overrides
 run_case "--describe: 禁止されたプロジェクト側の変更は invalid で返す" t_describe_project_override_rejected
