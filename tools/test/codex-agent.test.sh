@@ -3494,7 +3494,10 @@ t_check_copies_missing_and_requires() {
     const item = data.items.find((candidate) => candidate.id === "gpt-agent:codex-review.md");
     if (typeof item.content !== "string" || item.content.length === 0) throw new Error("missing の再配置内容が無い");
     if (!/^[0-9a-f]{64}$/.test(item.source_sha256)) throw new Error("正本の SHA-256 が無い");
-  ' "$root/out" 2>"$root/node.err" || fail "missing 項目の内容が不正: $(cat "$root/node.err")"
+    const hard = data.items.find((candidate) => candidate.id === "gpt-agent:impl-hard.md");
+    const source = fs.readFileSync(process.argv[2], "utf8").replace(/\r\n/g, "\n");
+    if (hard.content !== source) throw new Error("写しの無い GPT 側定義の再配置内容が正本と違う");
+  ' "$root/out" "$COPY_CHECKOUT/.claude/gpt-agents/impl-hard.md" 2>"$root/node.err" || fail "missing 項目の内容が不正: $(cat "$root/node.err")"
   expect_no_codex_call
 }
 

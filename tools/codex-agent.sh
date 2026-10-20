@@ -1209,7 +1209,8 @@ copy_item_content_stream() {
       normalize_copy_stream <"$source"
       ;;
     *)
-      if [ -n "$copy" ] && [ "$copy" = "$source" ]; then
+      # 写しが無ければ引き継ぐ値も無い。merge を通すと第 1 群のキーが消え、GPT 側を使わない定義になるため。
+      if [ -z "$copy" ] || [ "$copy" = "$source" ]; then
         normalize_copy_stream <"$source"
       else
         merge_definition_content "$source" "$copy" "$kind" "${copy_item_final_lf[$index]}"
