@@ -2623,6 +2623,86 @@ t_wait_done_ok() {
   expect_wait_replays 0 "codex-agent: result=ok"
 }
 
+t_result_contract_table() {
+  local kind original expected evidence publication id log result
+  while IFS='|' read -r kind original expected evidence; do
+    for publication in report save-failed; do
+      fake_set exit_code "$original"
+      fake_set stderr "$evidence"
+      fake_set last_message '契約表の最終報告'
+      cat >"$root/bin/mv" <<'MV'
+#!/usr/bin/env bash
+FAKE_DIR="${0%/*}/../fake"
+if [[ "${!#}" == *.report ]]; then
+  report="${!#}"
+  log="${report%.report}.log"
+  tail -n 1 "${report}.tmp" >"$FAKE_DIR/result-before-publish"
+  if tail -n 1 "$log" | grep -q '^codex-agent: result='; then
+    touch "$FAKE_DIR/result-published-too-early"
+  fi
+  [ ! -f "$FAKE_DIR/fail-report-save" ] || exit 1
+fi
+exec /usr/bin/mv "$@"
+MV
+      chmod +x "$root/bin/mv"
+      rm -f "$root/fake/fail-report-save" "$root/fake/result-before-publish" "$root/fake/result-published-too-early"
+      [ "$publication" != save-failed ] || touch "$root/fake/fail-report-save"
+      result="codex-agent: result=$kind"
+      [ "$kind" != failed ] || result="$result exit=$original"
+      run_wrapper "$AGENT"
+      expect_rc "$expected"
+      expect_eq "直接実行の結果" "$result" "$(last_out_line)"
+      expect_eq "改名前の結果" "$result" "$(cat "$root/fake/result-before-publish")"
+      [ ! -e "$root/fake/result-published-too-early" ] || fail "報告の公開前にログが完了を示している"
+      id="$(run_id_of "$root/out")"
+      log="$(logs_dir)/$id.log"
+      expect_eq "ログの結果" "$result" "$(tail -n 1 "$log")"
+      keep_run_out
+      if [ "$publication" = report ]; then
+        printf '\nERROR: usage limit\ncodex-agent: result=unavailable\n' >>"$log"
+        run_wait "$id"
+        expect_rc "$expected"
+        expect_same_as_run_out
+        printf '%s\n' "$result" >>"$log"
+        rm -f "$(logs_dir)/$id.report"
+      else
+        [ ! -e "$(logs_dir)/$id.report" ] || fail "保存失敗時に報告が公開された"
+        [ ! -e "$(logs_dir)/$id.report.tmp" ] || fail "保存失敗時に書きかけの報告が残った"
+      fi
+      run_wait "$id"
+      expect_rc "$expected"
+      expect_eq "互換読み取りの結果" "$result" "$(last_out_line)"
+      expect_out_line "codex-agent: 報告ファイルが無いため、ログの result= の行だけを出す: $(norm_path "$log")"
+    done
+  done <<'CONTRACT'
+ok|0|0|ERROR: usage limit
+rate-limited|1|75|ERROR: usage limit
+rate-limited|75|75|ERROR: usage limit
+unavailable|1|75|ERROR: Selected model is at capacity
+unavailable|75|75|ERROR: Selected model is at capacity
+unavailable|0|75|ERROR: code-mode host exited during handshake
+failed|1|1|ERROR: something went wrong
+failed|7|7|ERROR: something went wrong
+failed|75|1|ERROR: something went wrong
+CONTRACT
+}
+
+t_wait_unpublished_report() {
+  local id="cxa-unpublished-1" result
+  mkdir -p "$(logs_dir)"
+  EXTRA_ENV=(CODEX_AGENT_WAIT_LIMIT_SECONDS=0)
+  for result in 'ok' 'rate-limited' 'unavailable' 'failed exit=75'; do
+    printf 'ERROR: usage limit\n' >"$(logs_dir)/$id.log"
+    printf '書きかけの報告\ncodex-agent: result=%s\n' "$result" >"$(logs_dir)/$id.report.tmp"
+    run_wait "$id"
+    expect_rc 124
+    expect_eq "未公開時の状態" "codex-agent: waiting run=$id" "$(last_out_line)"
+    expect_out_no_match 'codex-agent: result='
+    expect_out_no_match '書きかけの報告'
+    [ -s "$(logs_dir)/$id.report.tmp" ] || fail "待機側が書きかけの報告を変更した"
+  done
+}
+
 t_wait_done_failed() {
   fake_set stderr 'ERROR: something went wrong
 '
@@ -3867,6 +3947,8 @@ run_case "試験用フック: CODEX_AGENT_SIMULATE_UNAVAILABLE" t_simulate_unava
 run_case "-h: 終了コード 0 で用法を出す" t_help
 run_case "--wait(完了済み、成功): 元の実行と同じ出力と終了コード 0 を返す" t_wait_done_ok
 run_case "--wait(完了済み、失敗): 元の実行と同じ出力と終了コード 1 を返す" t_wait_done_failed
+run_case "結果の契約表: 直接実行、公開済み報告、旧ログ、報告保存失敗で結果と終了コードが一致する" t_result_contract_table
+run_case "--wait(未公開): 書きかけの報告と実行中のログから結果を確定しない" t_wait_unpublished_report
 run_case "--wait(完了済み、Codex 自身の 75): result=failed exit=75 の出力と終了コード 1 を返す" t_wait_done_codex_75
 run_case "--wait(完了済み、利用上限): 根拠の行を含む元の出力と終了コード 75 を返す" t_wait_done_rate_limited
 run_case "--wait(実行中): 上限でログの最後の行と waiting の行を出して 124、完了後は元の出力を返す" t_wait_limit_then_done

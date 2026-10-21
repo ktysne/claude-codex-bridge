@@ -483,6 +483,24 @@ PowerShell が無い環境と、ログの 1 行目に `run=` の行が無い実�
 カレントディレクトリを先に探すのは GPT 側の定義ファイル(`.claude/gpt-agents/<name>.md`)だけであり、無ければ `%USERPROFILE%\.claude\gpt-agents\` の定義を使う。
 ユーザ側の `~/.claude/tools/codex-agent.sh` が無ければ GPT 側が未導入として扱い、窓口の `impl-hard`、`impl-light`、`impl-standard` は再委譲を報告し、`codex-review` と `codex-subagent` は終了コードと出力の末尾を報告して停止する。
 
+### 結果種別を追加するときの変更と検証
+
+結果種別、元の Codex 終了コード、ラッパーの終了コードの対応の正本は、`tools/codex-agent.sh` の `exit_code_of_result` である。
+直接実行の `finish` と `--wait` は、どちらもこの関数で終了コードを決める。
+新しい結果種別を追加するときは、この関数と結果を判定する分岐を変更し、`finish` には結果種別だけを渡す。
+`failed` の場合は元の Codex 終了コードも渡すが、ラッパーの終了コードは渡さない。
+
+本体の終了コードを取得した後、stderr を別の上限で収集し、最終回答と警告を報告へ写してから `finish` で結果を確定する。
+`finish` は報告の一時ファイルへ結果を書き、`.report` へ改名して公開した後、ログへ同じ結果を書く。
+`--wait` は公開済みの報告を優先し、実行中のログの失敗を示す文言や `.report.tmp` から結果を判定しない。
+報告の無い旧実行と報告の保存に失敗した実行は、`finish_from_legacy_log` でログ末尾の結果だけを読む。
+警告だけを理由に結果種別を変更しない。
+
+検証では `tools/test/codex-agent.test.sh` の `t_result_contract_table` に結果と終了コードの組を追加し、`npm run test:codex-agent` を実行する。
+この表は直接実行、公開済み報告の再出力、旧ログの互換読み取り、報告の保存失敗に共通で使う。
+未公開の報告を読むことがないことと、stderr を子孫だけが保持する場合も収集を上限で打ち切り、本体の結果と別実行のプロセスを保つことも確認する。
+プロセス照合の fixture による検証と、実 OS 上のプロセスを使う検証は区別して報告する。
+
 ## 実効設定を照会する
 
 Codex を起動せずに、起動時に選ばれる設定を JSON で確認できる。
