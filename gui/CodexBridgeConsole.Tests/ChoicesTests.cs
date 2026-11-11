@@ -16,6 +16,7 @@ namespace CodexBridgeConsole.Tests
                 Assert.Equal(
                     new[]
                     {
+                        "claude-fable-5-2",
                         "claude-fable-5-1",
                         "claude-fable-5",
                         "claude-opus-5-5",
@@ -81,7 +82,7 @@ namespace CodexBridgeConsole.Tests
 
                 Choices choices = Choices.Load(directory.Path);
 
-                Assert.Equal("claude-fable-5-1", choices.ClaudeModels[0]);
+                Assert.Equal("claude-fable-5-2", choices.ClaudeModels[0]);
                 Assert.Equal("low", choices.GptEfforts[0]);
             }
         }
